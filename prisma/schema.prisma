@@ -1,0 +1,490 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Team {
+  id            String   @id @default(uuid())
+  name          String
+  teamType      String
+  parentTeamId  String?
+  leaderUserId  String?
+  specialtyTags Json?
+  notes         String?
+  status        String   @default("启用")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([teamType])
+  @@index([status])
+}
+
+model User {
+  id                   String   @id @default(uuid())
+  name                 String
+  teamId               String?
+  roleTitle            String?
+  userType             String   @default("内部")
+  isModeler            Boolean  @default(false)
+  weeklyCapacityStyles Int?
+  status               String   @default("启用")
+  contactInfo          String?
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([isModeler])
+  @@index([status])
+}
+
+model ModelerCapabilityTag {
+  id      String  @id @default(uuid())
+  userId  String
+  tagName String
+  tagType String
+  notes   String?
+
+  @@index([userId])
+  @@index([tagName])
+}
+
+model OutsourceVendor {
+  id             String   @id @default(uuid())
+  name           String
+  contactName    String?
+  contactInfo    String?
+  specialtyTags  Json?
+  stableCapacity Boolean  @default(false)
+  status         String   @default("启用")
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+}
+
+model Project {
+  id                String    @id @default(uuid())
+  projectCode       String?
+  projectName       String
+  ipName            String?
+  licensorName      String?
+  productType       String?
+  styleCount        Int?
+  projectLevel      String?
+  routeType         String?
+  needThreeView     Boolean?
+  plannedLaunchDate DateTime  @db.Date
+  projectStartDate  DateTime? @db.Date
+  projectTeamId     String?
+  projectOwnerId    String?
+  artOwnerId        String?
+  currentStage      String?
+  status            String    @default("进行中")
+  sourceImportId    String?
+  notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([projectName])
+  @@index([plannedLaunchDate])
+  @@index([projectTeamId])
+  @@index([status])
+}
+
+model TaskRule {
+  id                     String   @id @default(uuid())
+  taskNo                 Int
+  taskName               String
+  milestoneType          String
+  standardWorkdays       Int?
+  predecessorRule        Json?
+  routeCondition         String?
+  needThreeViewCondition Boolean?
+  startFinishRule        String?
+  isActive               Boolean  @default(true)
+  sourceVersion          String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([taskNo, sourceVersion])
+  @@index([milestoneType])
+  @@index([isActive])
+}
+
+model ProjectTask {
+  id                 String    @id @default(uuid())
+  projectId          String
+  taskRuleId         String?
+  taskNo             Int
+  taskName           String
+  milestoneType      String
+  ownerId            String?
+  collaboratorIds    Json?
+  plannedStartDate   DateTime? @db.Date
+  plannedFinishDate  DateTime? @db.Date
+  actualStartDate    DateTime? @db.Date
+  actualFinishDate   DateTime? @db.Date
+  expectedFinishDate DateTime? @db.Date
+  status             String    @default("未开始")
+  isBlocked          Boolean   @default(false)
+  blockReason        String?
+  progressNote       String?
+  lastUpdatedAt      DateTime?
+  lastUpdatedBy      String?
+  sourceImportId     String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([projectId, taskNo])
+  @@index([status])
+  @@index([milestoneType])
+  @@index([ownerId])
+}
+
+model ProgressUpdate {
+  id            String   @id @default(uuid())
+  projectId     String
+  projectTaskId String
+  updateType    String
+  oldValue      Json?
+  newValue      Json?
+  note          String?
+  updatedBy     String?
+  updatedByName String?
+  createdAt     DateTime @default(now())
+
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([createdAt])
+}
+
+model DataImport {
+  id             String   @id @default(uuid())
+  importType     String
+  sourceFileName String?
+  sourceFilePath String?
+  sheetName      String?
+  rowCount       Int?
+  importStatus   String
+  errorMessage   String?
+  importedBy     String?
+  importedAt     DateTime @default(now())
+  rawMetadata    Json?
+
+  @@index([importType])
+  @@index([importedAt])
+}
+
+model ScheduleRun {
+  id             String   @id @default(uuid())
+  runName        String?
+  runType        String
+  sourceImportId String?
+  scriptName     String
+  scriptVersion  String?
+  inputSnapshot  Json?
+  outputFilePath String?
+  runStatus      String
+  errorMessage   String?
+  calculatedAt   DateTime @default(now())
+  createdBy      String?
+
+  @@index([runType])
+  @@index([calculatedAt])
+  @@index([runStatus])
+}
+
+model ScheduleProjectResult {
+  id                         String    @id @default(uuid())
+  scheduleRunId              String
+  projectId                  String
+  plannedLaunchDate          DateTime  @db.Date
+  forecastLaunchDate         DateTime? @db.Date
+  delayDays                  Int?
+  riskLevel                  String    @default("正常")
+  currentStage               String?
+  currentTaskId              String?
+  currentTaskName            String?
+  riskMessage                String?
+  projectProgressPercent     Int?
+  blockedTaskCount           Int?
+  staleTaskCount             Int?
+  missingExpectedFinishCount Int?
+  rawResult                  Json?
+  createdAt                  DateTime  @default(now())
+
+  @@index([scheduleRunId, projectId])
+  @@index([projectId])
+  @@index([riskLevel])
+}
+
+model ScheduleTaskResult {
+  id                       String    @id @default(uuid())
+  scheduleRunId            String
+  projectId                String
+  projectTaskId            String
+  taskNo                   Int
+  taskName                 String
+  milestoneType            String
+  plannedStartDate         DateTime? @db.Date
+  plannedFinishDate        DateTime? @db.Date
+  forecastStartDate        DateTime? @db.Date
+  forecastFinishDate       DateTime? @db.Date
+  expectedFinishDate       DateTime? @db.Date
+  taskActionType           String?
+  displayStatus            String?
+  delayDays                Int?
+  remainingSafeDays        Int?
+  recoverableByDate        DateTime? @db.Date
+  isRecoverable            Boolean?
+  blockingPredecessorNames Json?
+  riskLevel                String    @default("正常")
+  riskMessage              String?
+  rawResult                Json?
+  createdAt                DateTime  @default(now())
+
+  @@index([scheduleRunId, projectTaskId])
+  @@index([projectId, taskNo])
+  @@index([milestoneType])
+  @@index([riskLevel])
+}
+
+model ModelingTask {
+  id                      String    @id @default(uuid())
+  projectId               String
+  projectTaskId           String
+  styleCode               String
+  styleName               String
+  isRequired              Boolean   @default(true)
+  originalArtStatus       String    @default("未过审")
+  originalArtApprovedDate DateTime? @db.Date
+  difficulty              String
+  estimatedWorkdays       Int
+  modelerId               String?
+  assignmentOwnerId       String?
+  isOutsourced            Boolean   @default(false)
+  outsourceVendorId       String?
+  stableOutsourceCapacity Boolean?
+  plannedStartDate        DateTime? @db.Date
+  plannedFinishDate       DateTime? @db.Date
+  actualStartDate         DateTime? @db.Date
+  actualFinishDate        DateTime? @db.Date
+  actualWorkdays          Int?
+  remainingWorkdays       Int?
+  status                  String    @default("未分配")
+  reviewRound             Int?
+  lastFeedbackAt          DateTime?
+  blockedSince            DateTime?
+  blockedDays             Int?
+  blockType               String?
+  affectsProjectSchedule  Boolean   @default(true)
+  lastUpdatedAt           DateTime?
+  lastUpdatedBy           String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([modelerId, status])
+  @@index([status])
+  @@index([isOutsourced])
+}
+
+model ModelingFeedback {
+  id               String    @id @default(uuid())
+  modelingTaskId   String
+  feedbackType     String
+  roundNo          Int
+  feedbackByUserId String?
+  feedbackByName   String?
+  feedbackAt       DateTime
+  content          String
+  severity         String    @default("普通")
+  attachmentUrl    String?
+  resolvedAt       DateTime?
+  resolvedBy       String?
+  status           String    @default("待处理")
+  createdAt        DateTime  @default(now())
+
+  @@index([modelingTaskId])
+  @@index([feedbackAt])
+  @@index([status])
+}
+
+model ProjectModelingProgress {
+  id                       String    @id @default(uuid())
+  projectId                String
+  projectTaskId            String
+  totalRequiredStyles      Int
+  approvedStyles           Int
+  inProgressStyles         Int
+  submittedStyles          Int
+  outsourcedStyles         Int
+  unassignedStyles         Int
+  progressPercent          Int
+  projectedAllApprovedDate DateTime? @db.Date
+  canWritebackProjectTask  Boolean   @default(false)
+  lastCalculatedAt         DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([projectTaskId])
+}
+
+model WorkTask {
+  id                   String    @id @default(uuid())
+  sourceType           String
+  projectId            String?
+  projectTaskId        String?
+  modelingTaskId       String?
+  scheduleTaskResultId String?
+  taskTitle            String
+  taskGroup            String
+  weekStartDate        DateTime? @db.Date
+  month                String?
+  ownerId              String?
+  priority             String?
+  expectedFinishDate   DateTime? @db.Date
+  forecastDeadline     DateTime? @db.Date
+  riskLevel            String    @default("正常")
+  riskMessage          String?
+  status               String    @default("待确认")
+  actionRequired       String?
+  createdFromRunId     String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([ownerId])
+  @@index([weekStartDate])
+  @@index([month])
+  @@index([status])
+}
+
+model TaskCard {
+  id                    String   @id @default(uuid())
+  cardType              String
+  entityType            String
+  entityId              String
+  projectId             String?
+  title                 String
+  subtitle              String?
+  visualStatus          String   @default("normal")
+  riskLevel             String   @default("正常")
+  laneType              String
+  laneKey               String
+  sortOrder             Int      @default(0)
+  draggable             Boolean  @default(true)
+  lockedReason          String?
+  lastRenderedFromRunId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([cardType, laneType, laneKey])
+  @@index([entityType, entityId])
+  @@index([projectId])
+}
+
+model ScheduleAdjustment {
+  id                 String   @id @default(uuid())
+  taskCardId         String
+  entityType         String
+  entityId           String
+  adjustmentType     String
+  changedField       String
+  fromValue          String?
+  toValue            String?
+  reason             String?
+  requiresSimulation Boolean  @default(false)
+  affectsFinance     Boolean?
+  affectsReview      Boolean?
+  status             String   @default("草稿")
+  createdBy          String?
+  createdByName      String?
+  createdAt          DateTime @default(now())
+
+  @@index([taskCardId])
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+model ScheduleSimulation {
+  id                    String    @id @default(uuid())
+  adjustmentId          String
+  baseScheduleRunId     String?
+  simulationRunId       String?
+  impactSummary         String?
+  impactedProjectIds    Json?
+  impactedTaskIds       Json?
+  oldForecastLaunchDate DateTime? @db.Date
+  newForecastLaunchDate DateTime? @db.Date
+  launchDateDeltaDays   Int?
+  riskLevelBefore       String?
+  riskLevelAfter        String?
+  rawSimulationResult   Json?
+  status                String    @default("待确认")
+  confirmedBy           String?
+  confirmedAt           DateTime?
+  createdAt             DateTime  @default(now())
+
+  @@index([adjustmentId])
+  @@index([status])
+}
+
+model TaskDragLog {
+  id            String   @id @default(uuid())
+  taskCardId    String
+  cardType      String
+  entityType    String
+  entityId      String
+  fromLaneType  String?
+  fromLaneKey   String?
+  fromSortOrder Int?
+  toLaneType    String?
+  toLaneKey     String?
+  toSortOrder   Int?
+  changedField  String?
+  fromValue     String?
+  toValue       String?
+  adjustmentId  String?
+  simulationId  String?
+  confirmed     Boolean  @default(false)
+  dragReason    String?
+  draggedBy     String?
+  draggedByName String?
+  createdAt     DateTime @default(now())
+
+  @@index([taskCardId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Alert {
+  id               String    @id @default(uuid())
+  alertType        String
+  severity         String
+  projectId        String?
+  projectTaskId    String?
+  modelingTaskId   String?
+  userId           String?
+  title            String
+  message          String
+  triggerRule      String?
+  triggerValue     Json?
+  status           String    @default("未处理")
+  ownerId          String?
+  resolvedAt       DateTime?
+  resolvedNote     String?
+  createdFromRunId String?
+  createdAt        DateTime  @default(now())
+
+  @@index([status, severity])
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([modelingTaskId])
+  @@index([userId])
+}
