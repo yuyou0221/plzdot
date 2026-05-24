@@ -55,6 +55,13 @@ staging
 https://github.com/yuyou0221/plzdot
 ```
 
+当前已提供云服务器：
+
+```text
+IP：101.133.16.14
+SSH 端口：22，已验证可连通
+```
+
 最低要求：
 
 - 仓库设为 private。
@@ -290,8 +297,6 @@ docs/staging测试上线检查清单.md
 
 继续部署前，需要补齐：
 
-- GitHub 仓库地址。
-- 云服务器 IP。
 - SSH 登录用户名。
 - 云服务器系统版本。
 - 是否已有域名。
