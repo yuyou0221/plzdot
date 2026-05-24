@@ -11,6 +11,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:import:actual": "tsx scripts/import-actual-schedule.ts",
+    "db:import:users": "tsx scripts/import-user-data-json.ts",
+    "db:import:modeling": "tsx scripts/import-modeling-data-json.ts",
     "db:local:init": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 init",
     "db:local:start": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 start",
     "db:local:stop": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 stop",
