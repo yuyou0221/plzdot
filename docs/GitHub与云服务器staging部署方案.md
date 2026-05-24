@@ -92,6 +92,47 @@ SSH 端口：22，已验证可连通
 ssh -i C:\Users\yuyou\.ssh\Plzdot.pem ecs-user@101.133.16.14
 ```
 
+实际验证结果：可用登录方式为 `ecs-user + Plzdot.pem + ecs-user 密码`。`root` 登录会提示应使用 `ecs-user`。
+
+## 当前 staging 部署状态
+
+当前 staging 已部署到云服务器：
+
+```text
+访问地址：http://101.133.16.14/
+服务器目录：/opt/project-management-platform
+Git 分支：staging
+PM2 应用名：project-management-staging
+应用端口：3100
+Nginx 入口：80 -> 127.0.0.1:3100
+数据库：服务器本机 PostgreSQL
+数据库名：project_management_platform_staging
+数据库用户：plzdot_staging
+```
+
+说明：
+
+- 服务器原本已有一个 Docker 容器占用 `127.0.0.1:3000`，名称为 `project-management-analysis`。
+- 当前没有停止该 Docker 容器，只把新 staging 应用放在 `3100`。
+- 已禁用旧的 Nginx `project-management-analysis` 公网入口，避免 IP 访问仍指向旧服务。
+- 当前通过 IP + HTTP 测试，因此服务器 `.env` 使用 `AUTH_COOKIE_SECURE=false`。
+- staging 管理员登录信息不写入 Git，服务器本地记录在 `/opt/project-management-platform/STAGING_LOGIN.txt`。
+
+已验证：
+
+```text
+npm ci
+npm run db:generate
+npm run db:migrate
+npm run build
+PM2 启动成功
+Nginx 转发成功
+/api/health 返回数据库连接正常
+未登录访问 /users 会跳转 /login
+管理员登录接口返回成功
+HTTP 登录 Cookie 不再带 Secure，可用于 IP 访问测试
+```
+
 最低要求：
 
 - 仓库设为 private。
@@ -254,6 +295,7 @@ git fetch origin
 git checkout staging
 git pull --ff-only origin staging
 npm ci
+npm run db:generate
 npm run db:migrate
 npm run build
 pm2 restart project-management-staging

@@ -6,6 +6,16 @@
 
 当前已经建立 `staging` 分支，用于内部测试上线，不直接把未验证内容推到 `main`。
 
+当前 staging 已部署：
+
+```text
+访问地址：http://101.133.16.14/
+服务器目录：/opt/project-management-platform
+PM2 应用名：project-management-staging
+应用端口：3100
+Nginx：80 -> 127.0.0.1:3100
+```
+
 关键提交记录：
 
 ```text
