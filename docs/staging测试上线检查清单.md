@@ -16,6 +16,16 @@ PM2 应用名：project-management-staging
 Nginx：80 -> 127.0.0.1:3100
 ```
 
+当前真实排期数据已导入：
+
+```text
+导入批次：actual-import-1779657649462
+项目数：44
+项目任务数：1323
+排期任务结果数：1323
+数据来源：.local/actual-run-20260525-v10/project-task-estimates-v5.json
+```
+
 关键提交记录：
 
 ```text
@@ -112,6 +122,7 @@ npm run db:import:actual -- .local\actual-run-20260525-v10\project-task-estimate
 5. 打开 `/modeling`，确认建模排期能加载。
 6. 打开 `/users`，确认用户数据能加载。
 7. 退出登录后，再访问 `/users`，应跳回 `/login`。
+8. 项目排期看板显示来源为“数据库”，项目数为 44。
 
 重点业务样本：
 

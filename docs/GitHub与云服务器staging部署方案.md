@@ -133,6 +133,36 @@ Nginx 转发成功
 HTTP 登录 Cookie 不再带 Secure，可用于 IP 访问测试
 ```
 
+## 当前真实数据导入状态
+
+2026-05-25 已将本地最新真实排期测算结果导入 staging：
+
+```text
+本地来源：.local/actual-run-20260525-v10/project-task-estimates-v5.json
+服务器路径：/opt/project-management-platform/.local/actual-run-20260525-v10/project-task-estimates-v5.json
+导入批次：actual-import-1779657649462
+项目数：44
+项目任务数：1323
+排期项目结果数：44
+排期任务结果数：1323
+未来任务数：690
+```
+
+导入前已备份服务器数据库：
+
+```text
+/opt/project-management-platform/.local/backups/before-real-data-import-20260525-052038.sql
+```
+
+当前 `/api/schedule/board` 已返回：
+
+```text
+sourceLabel：数据库
+看板项目数：44
+```
+
+注意：当前只导入了真实排期测算数据。用户数据、真实人员名单、真实建模款式数据还没有导入 staging，因此 `/users` 里仍主要是管理员和基础占位数据。
+
 最低要求：
 
 - 仓库设为 private。
