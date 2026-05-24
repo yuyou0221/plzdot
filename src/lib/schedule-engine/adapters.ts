@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { displayTaskStatus, milestoneByTaskNo } from "@/lib/schedule-domain";
 
 const legacyRequire = createRequire(
   path.join(process.cwd(), "legacy", "schedule-engine", "entry.cjs"),
@@ -359,25 +360,6 @@ function taskRiskMessage(row: LegacyTaskResult) {
   if (risk === "正常") return "";
   if (risk === "必然延期") return "该任务已造成明显延期风险，需要管理层关注。";
   return "该任务存在延期风险，需要项目负责人跟进。";
-}
-
-function displayTaskStatus(status?: string) {
-  if (!status) return "未开始";
-  if (status.includes("已完成")) return "已完成";
-  if (status.includes("进行")) return "正在推进";
-  if (status.includes("当前应开始")) return "现在该开始了";
-  if (status.includes("等待前置")) return "等前置任务完成";
-  if (status.includes("未开始")) return "还未开始";
-  return status;
-}
-
-function milestoneByTaskNo(taskNo: number) {
-  if (taskNo >= 1 && taskNo <= 6) return "原画里程碑";
-  if (taskNo >= 7 && taskNo <= 10) return "建模里程碑";
-  if ((taskNo >= 11 && taskNo <= 15) || taskNo === 17 || taskNo === 18) return "红蜡里程碑";
-  if (taskNo >= 21 && taskNo <= 27) return "产前里程碑";
-  if (taskNo === 30) return "大货里程碑";
-  return "平面里程碑";
 }
 
 function monthLabel(value?: string) {

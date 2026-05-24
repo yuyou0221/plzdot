@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
@@ -11,6 +12,9 @@ type CreateProjectRequest = {
 };
 
 export async function POST(request: Request) {
+  const auth = await requireApiRole(["admin", "manager"]);
+  if ("response" in auth) return auth.response;
+
   let payload: CreateProjectRequest;
 
   try {

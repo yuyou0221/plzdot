@@ -62,6 +62,13 @@ export type ModelerCapacity = {
   isVirtual: boolean;
 };
 
+export type OutsourceVendorOption = {
+  id: string;
+  name: string;
+  stableCapacity: boolean;
+  isVirtual: boolean;
+};
+
 export type ProjectModelingSummary = {
   projectId: string;
   projectName: string;
@@ -105,6 +112,38 @@ export type ModelingMilestoneOverview = {
   nextMonth: ModelingMilestoneCard[];
 };
 
+export type ModelingTaskUpdateRequest = {
+  modelerId?: string | null;
+  status?: ModelingTaskStatus;
+  isOutsourced?: boolean;
+  outsourceVendorId?: string | null;
+  plannedStartDate?: string | null;
+  plannedFinishDate?: string | null;
+  actualStartDate?: string | null;
+  actualFinishDate?: string | null;
+  remainingWorkdays?: number | null;
+  feedbackType?: string | null;
+  feedbackContent?: string | null;
+  blockType?: string | null;
+};
+
+export type ModelingWritebackDraft = {
+  projectId: string;
+  projectTaskId: string;
+  actualFinishDate: string;
+  requiredStyles: number;
+  approvedStyles: number;
+  message: string;
+};
+
+export type ModelingTaskUpdateResponse = {
+  ok: boolean;
+  message: string;
+  task?: ModelingTaskCard;
+  projectSummary?: ProjectModelingSummary;
+  writebackDraft?: ModelingWritebackDraft;
+};
+
 export type ModelingScheduleData = {
   sourceLabel: string;
   generatedAt: string;
@@ -112,6 +151,7 @@ export type ModelingScheduleData = {
   metrics: ModelingMetric[];
   tasks: ModelingTaskCard[];
   modelers: ModelerCapacity[];
+  vendors: OutsourceVendorOption[];
   projectSummaries: ProjectModelingSummary[];
   statusColumns: ModelingTaskStatus[];
 };

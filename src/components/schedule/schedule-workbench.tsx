@@ -23,6 +23,7 @@ import {
   Upload,
 } from "lucide-react";
 import clsx from "clsx";
+import { LogoutButton } from "@/components/auth/logout-button";
 import {
   type CalendarProject,
   type Metric,
@@ -31,10 +32,11 @@ import {
   type ProjectDetail,
   type RiskLevel,
   type ScheduleWorkbenchData,
+  type ScheduleTaskRow,
 } from "@/lib/sample-schedule";
 
 type MainView = "planning" | "forecast";
-type PlanningView = "milestone-plan" | "calendar" | "table" | "project-entry";
+type PlanningView = "milestone-plan" | "calendar" | "table" | "task-detail" | "project-entry";
 type ViewMode = "plan" | "forecast";
 type MonthPoint = { year: number; month: number };
 type CalendarMoveDraft = {
@@ -96,6 +98,7 @@ const planningViewLabel: Record<PlanningView, string> = {
   "milestone-plan": "里程碑看板（规划）",
   calendar: "上线日历",
   table: "表格视图",
+  "task-detail": "任务明细",
   "project-entry": "项目录入视图",
 };
 
@@ -148,6 +151,16 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
     });
   }, [calendarProjects, riskOnly, search]);
 
+  const visibleScheduleTaskRows = useMemo(() => {
+    return data.scheduleTasks.filter((task) => {
+      const keyword = search.trim();
+      const matchSearch = !keyword || task.projectName.includes(keyword) || task.taskName.includes(keyword);
+      const matchRisk = !riskOnly || task.riskLevel === "risk" || task.riskLevel === "delay";
+
+      return matchSearch && matchRisk;
+    });
+  }, [data.scheduleTasks, riskOnly, search]);
+
   const calendarDrafts = useMemo(() => {
     return Object.entries(calendarDateOverrides)
       .map(([projectId, toDate]): CalendarMoveDraft | null => {
@@ -170,13 +183,18 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
       .filter((item): item is CalendarMoveDraft => item !== null);
   }, [calendarDateOverrides, data.calendarProjects]);
   const movedCalendarProjectIds = useMemo(() => new Set(calendarDrafts.map((draft) => draft.projectId)), [calendarDrafts]);
+  const isTaskDetailView = mainView === "planning" && planningView === "task-detail";
   const isPlanningCalendarLikeView = mainView === "planning" && planningView !== "milestone-plan";
   const isMilestoneBoardView = mainView === "forecast" || (mainView === "planning" && planningView === "milestone-plan");
   const visibleProjectIds = useMemo(() => {
+    if (isTaskDetailView) {
+      return Array.from(new Set(visibleScheduleTaskRows.map((task) => task.projectId)));
+    }
+
     return isPlanningCalendarLikeView
       ? visibleCalendarProjects.map((project) => project.projectId)
       : visibleCards.map((card) => card.projectId);
-  }, [isPlanningCalendarLikeView, visibleCalendarProjects, visibleCards]);
+  }, [isPlanningCalendarLikeView, isTaskDetailView, visibleCalendarProjects, visibleCards, visibleScheduleTaskRows]);
   const activeProjectId =
     visibleProjectIds.length > 0 && !visibleProjectIds.includes(selectedProjectId) ? visibleProjectIds[0] : selectedProjectId;
   const selectedProject = data.projectDetails[activeProjectId] ?? fallbackDetail(activeProjectId, data.projectCards);
@@ -187,7 +205,11 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
         ? `${data.months[0]} - ${data.months[data.months.length - 1]}`
         : "暂无排期月份";
   const focusMonthLabel = data.initialMonth ? `初始定位：${data.initialMonth}` : "暂无初始定位";
-  const visibleProjectCount = isPlanningCalendarLikeView ? visibleCalendarProjects.length : visibleCards.length;
+  const visibleProjectCount = isTaskDetailView
+    ? visibleScheduleTaskRows.length
+    : isPlanningCalendarLikeView
+      ? visibleCalendarProjects.length
+      : visibleCards.length;
   const filterSummary = riskOnly ? "只看延期风险与必然延期" : "显示全部状态";
   const currentViewLabel = mainView === "forecast" ? "压力预测" : planningViewLabel[planningView];
 
@@ -207,6 +229,13 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">P0</span>
             </button>
             <button
+              onClick={() => router.push("/product-guide")}
+              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+            >
+              产品组工作指引
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
+            </button>
+            <button
               onClick={() => router.push("/modeling")}
               className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
             >
@@ -221,6 +250,7 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
             </button>
           </nav>
+          <LogoutButton />
         </aside>
 
         <main className="min-w-0 px-6 py-5 max-md:px-4">
@@ -323,6 +353,12 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
                       onClick={() => setPlanningView("table")}
                     />
                     <PlanningViewButton
+                      active={planningView === "task-detail"}
+                      icon={<ListFilter size={15} />}
+                      label="任务明细"
+                      onClick={() => setPlanningView("task-detail")}
+                    />
+                    <PlanningViewButton
                       active={planningView === "project-entry"}
                       icon={<FilePenLine size={15} />}
                       label="项目录入视图"
@@ -420,6 +456,13 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
                 onSelect={setSelectedProjectId}
                 onNotify={notifyOperation}
                 onSaved={handlePlanningTableSaved}
+              />
+            ) : planningView === "task-detail" ? (
+              <TaskDetailView
+                tasks={visibleScheduleTaskRows}
+                selectedProjectId={activeProjectId}
+                onSelect={setSelectedProjectId}
+                onNotify={notifyOperation}
               />
             ) : (
               <ProjectEntryView project={selectedProject} onNotify={notifyPlaceholder} />
@@ -1256,6 +1299,162 @@ function PlanningCardField({ label, value }: { label: string; value: string }) {
   );
 }
 
+type TaskDetailColumn = {
+  label: string;
+  value: (task: ScheduleTaskRow) => string | number | null;
+  className?: string;
+  render?: (task: ScheduleTaskRow) => ReactNode;
+};
+
+const taskDetailColumns: TaskDetailColumn[] = [
+  { label: "项目编号", value: (task) => task.projectCode },
+  { label: "项目名称", value: (task) => task.projectName, className: "min-w-44 font-semibold text-slate-900" },
+  { label: "项目阶段", value: (task) => task.projectStage },
+  { label: "计划出货日期", value: (task) => task.plannedLaunchDate },
+  { label: "当前测算出货日期", value: (task) => task.forecastLaunchDate },
+  { label: "出货偏差天数", value: (task) => task.launchDeltaDays },
+  { label: "任务ID", value: (task) => task.taskNo },
+  { label: "任务名称", value: (task) => task.taskName, className: "min-w-44 font-semibold text-slate-900" },
+  { label: "里程碑", value: (task) => task.milestoneType },
+  { label: "标准工期", value: (task) => task.durationDays },
+  { label: "任务状态", value: (task) => task.taskStatus, className: "min-w-32" },
+  { label: "是否当前应开始", value: (task) => task.shouldStartLabel },
+  { label: "缺少实际完成的前置任务", value: (task) => task.missingActualPredecessorIds, className: "min-w-44" },
+  { label: "实际开始日期", value: (task) => task.actualStartDate },
+  { label: "实际完成日期", value: (task) => task.actualFinishDate },
+  { label: "推进中任务预期完成时间", value: (task) => task.expectedFinishDate, className: "min-w-40" },
+  { label: "是否推断完成", value: (task) => task.inferredCompletedLabel },
+  { label: "推断完成参考日期", value: (task) => task.inferredCompletionDate, className: "min-w-36" },
+  { label: "正常节奏开始日", value: (task) => task.plannedStartDate, className: "min-w-36" },
+  { label: "正常节奏完成日", value: (task) => task.plannedFinishDate, className: "min-w-36" },
+  { label: "根据当前进度预测开始日", value: (task) => task.progressForecastStartDate, className: "min-w-44" },
+  { label: "根据当前进度预测完成日", value: (task) => task.progressForecastFinishDate, className: "min-w-44" },
+  { label: "当前测算开始日", value: (task) => task.calculatedStartDate, className: "min-w-36" },
+  { label: "当前测算完成日", value: (task) => task.calculatedFinishDate, className: "min-w-36" },
+  { label: "当前DDL日期", value: (task) => task.currentDdlDate, className: "min-w-32" },
+  { label: "原计划上线最晚开始日", value: (task) => task.originalLatestStartDate, className: "min-w-44" },
+  { label: "原计划上线最晚完成日", value: (task) => task.originalLatestFinishDate, className: "min-w-44" },
+  { label: "再次延期警告最晚开始日", value: (task) => task.latestStartDate, className: "min-w-48" },
+  { label: "再次延期警告最晚完成日", value: (task) => task.latestFinishDate, className: "min-w-48" },
+  { label: "安全缓冲天数", value: (task) => task.floatDays },
+  { label: "相对正常节奏偏差天数", value: (task) => task.planDeltaDays, className: "min-w-44" },
+  { label: "再次延期风险天数", value: (task) => task.deadlineRiskDays, className: "min-w-40" },
+  { label: "距离再次延期剩余天数", value: (task) => task.warningWindowDays, className: "min-w-44" },
+  { label: "影响状态", value: (task) => task.impactStatus },
+  {
+    label: "风险等级",
+    value: (task) => task.riskText || riskLabel[task.riskLevel],
+    render: (task) => (
+      <span className={clsx("rounded-full px-2 py-0.5 text-xs font-semibold", badgeClass[task.riskLevel])}>
+        {task.riskText || riskLabel[task.riskLevel]}
+      </span>
+    ),
+  },
+  { label: "是否阻塞出货", value: (task) => task.isBlockingLaunchLabel },
+];
+
+function TaskDetailView({
+  tasks,
+  selectedProjectId,
+  onSelect,
+  onNotify,
+}: {
+  tasks: ScheduleTaskRow[];
+  selectedProjectId: string;
+  onSelect: (projectId: string) => void;
+  onNotify: (message: string, tone?: "info" | "warning") => void;
+}) {
+  const riskCount = tasks.filter((task) => task.riskLevel === "risk" || task.riskLevel === "delay").length;
+  const blockingCount = tasks.filter((task) => task.isBlockingLaunchLabel === "是").length;
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 text-sm">
+        <div className="flex items-center gap-2 font-semibold">
+          <ListFilter size={16} />
+          任务明细
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-xs text-slate-500">
+            {tasks.length} 条任务 · {riskCount} 条风险 · {blockingCount} 条阻塞出货
+          </span>
+          <button
+            onClick={exportTaskDetails}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Download size={14} />
+            导出 Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-[72vh] overflow-auto">
+        <table className="w-full min-w-[3600px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold text-slate-500">
+            <tr>
+              {taskDetailColumns.map((column) => (
+                <th key={column.label} className={clsx("border-b border-slate-200 px-3 py-2", column.className)}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.length > 0 ? (
+              tasks.map((task) => (
+                <tr
+                  key={task.id}
+                  onClick={() => onSelect(task.projectId)}
+                  className={clsx(
+                    "cursor-pointer bg-white hover:bg-blue-50/60",
+                    selectedProjectId === task.projectId && "bg-blue-50",
+                  )}
+                >
+                  {taskDetailColumns.map((column) => (
+                    <td
+                      key={`${task.id}:${column.label}`}
+                      className={clsx("border-b border-slate-100 px-3 py-2 text-slate-700", column.className)}
+                    >
+                      {column.render ? column.render(task) : displayTaskDetailValue(column.value(task))}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={taskDetailColumns.length} className="px-3 py-10 text-center text-sm text-slate-400">
+                  暂无匹配任务
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
+  function exportTaskDetails() {
+    if (tasks.length === 0) {
+      onNotify("当前没有可导出的任务明细。", "warning");
+      return;
+    }
+
+    downloadPlanningTableCsv("项目任务明细.csv", [
+      taskDetailColumns.map((column) => column.label),
+      ...tasks.map((task) => taskDetailColumns.map((column) => column.value(task))),
+    ]);
+    onNotify(`已导出 ${tasks.length} 条任务明细，可直接用 Excel 打开。`);
+  }
+}
+
+function displayTaskDetailValue(value: string | number | null) {
+  if (value === null || value === "") {
+    return "—";
+  }
+
+  return value;
+}
+
 type PlanningTableDraft = {
   rowId: string;
   projectId?: string;
@@ -1762,7 +1961,7 @@ async function readProjectMutationResponse(response: Response): Promise<ProjectM
   }
 }
 
-function downloadPlanningTableCsv(filename: string, rows: string[][]) {
+function downloadPlanningTableCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1775,8 +1974,8 @@ function downloadPlanningTableCsv(filename: string, rows: string[][]) {
   URL.revokeObjectURL(url);
 }
 
-function csvCell(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
+function csvCell(value: string | number | null | undefined) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function ProjectEntryView({ project, onNotify }: { project: ProjectDetail; onNotify: (message: string) => void }) {

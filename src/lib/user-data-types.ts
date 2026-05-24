@@ -14,6 +14,10 @@ export type UserDataPerson = {
   teamName: string;
   roleTitle: string;
   userType: string;
+  loginName: string;
+  authRole: string;
+  authRoleLabel: string;
+  canLogin: boolean;
   isModeler: boolean;
   weeklyCapacityStyles?: number;
   status: string;

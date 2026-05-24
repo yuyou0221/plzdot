@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import { optionalNonNegativeInt, stringList } from "@/lib/user-data-mutation";
 
 export const runtime = "nodejs";
 
 export async function PATCH(request: Request, context: { params: Promise<{ userId: string }> }) {
+  const auth = await requireApiRole(["admin"]);
+  if ("response" in auth) return auth.response;
+
   const { userId } = await context.params;
   let payload: Record<string, unknown>;
 

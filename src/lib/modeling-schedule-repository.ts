@@ -10,6 +10,7 @@ import type {
   ModelingScheduleData,
   ModelingTaskCard,
   ModelingTaskStatus,
+  OutsourceVendorOption,
   ProjectModelingSummary,
 } from "@/lib/modeling-schedule-types";
 
@@ -110,6 +111,12 @@ type ScheduleTaskResultRow = {
   taskActionType: string | null;
   riskLevel: string;
   riskMessage: string | null;
+  rawResult: unknown;
+};
+
+type ModelingMilestoneCompletion = {
+  isCompleted: boolean;
+  completionDate: Date | null;
 };
 
 export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
@@ -220,6 +227,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
               taskActionType: true,
               riskLevel: true,
               riskMessage: true,
+              rawResult: true,
             },
           })
         : Promise.resolve([]),
@@ -228,11 +236,18 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     const projectById = new Map(projects.map((project) => [project.id, project]));
     const modelers = buildModelers(users, capabilityTags, realTasks);
     const vendorById = new Map(vendors.map((vendor) => [vendor.id, vendor]));
+    const vendorOptions = buildVendors(vendors);
+    const modelingCompletionByProjectId = buildModelingCompletionByProjectId(projects, milestoneRows);
     const tasks =
       realTasks.length > 0
-        ? buildRealTasks(realTasks, projectById, modelers, vendorById, feedbackRows)
-        : buildVirtualTasks(projects, modelers, vendors.length > 0 ? vendors[0].name : "待补充外包供应商");
-    const summaries = buildProjectSummaries(projects, tasks, progressRows, realTasks.length === 0);
+        ? buildRealTasks(realTasks, projectById, modelers, vendorById, feedbackRows, modelingCompletionByProjectId)
+        : buildVirtualTasks(
+            projects,
+            modelers,
+            vendors.length > 0 ? vendors[0].name : "待补充外包供应商",
+            modelingCompletionByProjectId,
+          );
+    const summaries = buildProjectSummaries(projects, tasks, progressRows, realTasks.length === 0, modelingCompletionByProjectId);
 
     return {
       sourceLabel: realTasks.length > 0 ? "数据库建模任务" : "数据库项目 + 虚拟款式任务",
@@ -241,6 +256,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
       metrics: buildMetrics(tasks, modelers),
       tasks,
       modelers,
+      vendors: vendorOptions,
       projectSummaries: summaries,
       statusColumns,
     };
@@ -248,6 +264,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     console.error("Failed to build modeling schedule data", error);
     const fallbackProjects = buildFallbackProjects();
     const tasks = buildVirtualTasks(fallbackProjects, defaultVirtualModelers, "待补充外包供应商");
+    const fallbackVendors = buildVendors([]);
 
     return {
       sourceLabel: "样例虚拟款式任务",
@@ -256,10 +273,31 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
       metrics: buildMetrics(tasks, defaultVirtualModelers),
       tasks,
       modelers: defaultVirtualModelers,
+      vendors: fallbackVendors,
       projectSummaries: buildProjectSummaries(fallbackProjects, tasks, [], true),
       statusColumns,
     };
   }
+}
+
+function buildVendors(vendors: Array<{ id: string; name: string; stableCapacity: boolean }>): OutsourceVendorOption[] {
+  if (vendors.length === 0) {
+    return [
+      {
+        id: "virtual-vendor",
+        name: "待补充外包供应商",
+        stableCapacity: true,
+        isVirtual: true,
+      },
+    ];
+  }
+
+  return vendors.map((vendor) => ({
+    id: vendor.id,
+    name: vendor.name,
+    stableCapacity: vendor.stableCapacity,
+    isVirtual: false,
+  }));
 }
 
 function buildModelers(
@@ -359,9 +397,9 @@ function buildMilestoneCard(project: ProjectRow, rows: ScheduleTaskResultRow[]):
   }
 
   const forecastFinish = maxDate(rows.map((row) => row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate));
+  const completion = modelingMilestoneCompletion(project, rows);
   const completedTaskCount = rows.filter(isCompletedScheduleTask).length;
-  const projectCompleted = isProjectPastModeling(project);
-  const isCompleted = projectCompleted || (rows.length > 0 && completedTaskCount === rows.length);
+  const isCompleted = completion.isCompleted;
   const unfinishedRows = isCompleted ? [] : rows.filter((row) => !isCompletedScheduleTask(row));
   const delayDays = forecastFinish ? Math.max(daysBetween(forecastFinish, plannedFinish), 0) : 0;
   const riskLevel = isCompleted ? "done" : groupMilestoneRisk(rows, delayDays);
@@ -385,16 +423,79 @@ function buildMilestoneCard(project: ProjectRow, rows: ScheduleTaskResultRow[]):
   };
 }
 
+function buildModelingCompletionByProjectId(projects: ProjectRow[], rows: ScheduleTaskResultRow[]) {
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const rowsByProjectId = new Map<string, ScheduleTaskResultRow[]>();
+  const completionByProjectId = new Map<string, ModelingMilestoneCompletion>();
+
+  for (const row of rows) {
+    const projectRows = rowsByProjectId.get(row.projectId) ?? [];
+    projectRows.push(row);
+    rowsByProjectId.set(row.projectId, projectRows);
+  }
+
+  for (const [projectId, projectRows] of rowsByProjectId) {
+    const project = projectById.get(projectId);
+
+    if (!project) {
+      continue;
+    }
+
+    const completion = modelingMilestoneCompletion(project, projectRows);
+
+    if (completion.isCompleted) {
+      completionByProjectId.set(projectId, completion);
+    }
+  }
+
+  return completionByProjectId;
+}
+
+function modelingMilestoneCompletion(project: ProjectRow, rows: ScheduleTaskResultRow[]): ModelingMilestoneCompletion {
+  const completedTaskCount = rows.filter(isCompletedScheduleTask).length;
+  const projectCompleted = isProjectPastModeling(project);
+  const isCompleted = projectCompleted || (rows.length > 0 && completedTaskCount === rows.length);
+
+  if (!isCompleted) {
+    return { isCompleted: false, completionDate: null };
+  }
+
+  return {
+    isCompleted: true,
+    completionDate:
+      maxDate(rows.map(completionDateForScheduleTask)) ??
+      maxDate(rows.map((row) => row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate)),
+  };
+}
+
 function isProjectPastModeling(project: ProjectRow) {
   const stageText = `${project.currentStage ?? ""} ${project.status ?? ""}`;
   return ["红蜡", "模具", "大货", "已完", "完结"].some((stage) => stageText.includes(stage));
 }
 
 function isCompletedScheduleTask(row: ScheduleTaskResultRow) {
+  const raw = rawTaskResult(row.rawResult);
+
+  if (dateFromRawValue(raw.actualFinishDate) || dateFromRawValue(raw.inferredCompletionDate) || raw.inferredCompleted === true) {
+    return true;
+  }
+
   return [row.displayStatus, row.taskActionType].some((value) => {
     if (!value) return false;
     return value.includes("已完成") || value.includes("已通过");
   });
+}
+
+function completionDateForScheduleTask(row: ScheduleTaskResultRow) {
+  const raw = rawTaskResult(row.rawResult);
+
+  return (
+    dateFromRawValue(raw.actualFinishDate) ??
+    dateFromRawValue(raw.inferredCompletionDate) ??
+    row.forecastFinishDate ??
+    row.expectedFinishDate ??
+    row.plannedFinishDate
+  );
 }
 
 function groupMilestoneRisk(rows: ScheduleTaskResultRow[], delayDays: number): ModelingMilestoneRiskLevel {
@@ -415,6 +516,7 @@ function buildRealTasks(
   modelers: ModelerCapacity[],
   vendorById: Map<string, { id: string; name: string; stableCapacity: boolean }>,
   feedbackRows: FeedbackRow[],
+  completedModelingByProjectId: Map<string, ModelingMilestoneCompletion>,
 ): ModelingTaskCard[] {
   const modelerById = new Map(modelers.map((modeler) => [modeler.id, modeler]));
   const latestFeedbackByTaskId = new Map<string, FeedbackRow>();
@@ -429,10 +531,16 @@ function buildRealTasks(
     const project = projectById.get(task.projectId);
     const modeler = task.modelerId ? modelerById.get(task.modelerId) : undefined;
     const vendor = task.outsourceVendorId ? vendorById.get(task.outsourceVendorId) : undefined;
-    const status = normalizeStatus(task.status, task.isOutsourced);
+    const completion = completedModelingByProjectId.get(task.projectId);
+    const isCompletedBySchedule = Boolean(completion);
+    const status = isCompletedBySchedule ? "已通过" : normalizeStatus(task.status, task.isOutsourced);
     const latestFeedback = latestFeedbackByTaskId.get(task.id);
-    const consumedWorkdays = task.actualWorkdays ?? consumedDays(task.actualStartDate ?? task.plannedStartDate, task.actualFinishDate);
-    const staleDays = daysSince(task.lastUpdatedAt);
+    const actualFinishDate = isCompletedBySchedule
+      ? task.actualFinishDate ?? completion?.completionDate ?? task.plannedFinishDate
+      : task.actualFinishDate;
+    const lastUpdatedAt = isCompletedBySchedule ? actualFinishDate ?? task.lastUpdatedAt : task.lastUpdatedAt;
+    const consumedWorkdays = task.actualWorkdays ?? consumedDays(task.actualStartDate ?? task.plannedStartDate, actualFinishDate);
+    const staleDays = isCompletedBySchedule ? 0 : daysSince(lastUpdatedAt);
 
     return {
       id: task.id,
@@ -446,7 +554,7 @@ function buildRealTasks(
       difficulty: task.difficulty || "常规",
       estimatedWorkdays: task.estimatedWorkdays || 7,
       consumedWorkdays,
-      originalArtStatus: task.originalArtStatus,
+      originalArtStatus: isCompletedBySchedule ? "原画已过审" : task.originalArtStatus,
       originalArtApprovedDate: formatDate(task.originalArtApprovedDate),
       modelerId: task.modelerId ?? undefined,
       modelerName: modeler?.name,
@@ -457,18 +565,20 @@ function buildRealTasks(
       plannedStartDate: formatDate(task.plannedStartDate),
       plannedFinishDate: formatDate(task.plannedFinishDate),
       actualStartDate: formatDate(task.actualStartDate),
-      actualFinishDate: formatDate(task.actualFinishDate),
+      actualFinishDate: formatDate(actualFinishDate),
       reviewRound: task.reviewRound ?? latestFeedback?.roundNo ?? 0,
-      lastFeedbackAt: formatDate(task.lastFeedbackAt ?? latestFeedback?.feedbackAt),
-      lastUpdatedAt: formatDate(task.lastUpdatedAt),
+      lastFeedbackAt: isCompletedBySchedule ? undefined : formatDate(task.lastFeedbackAt ?? latestFeedback?.feedbackAt),
+      lastUpdatedAt: formatDate(lastUpdatedAt),
       staleDays,
-      isStale: status === "建模中" && staleDays > 3,
-      blockedDays: task.blockedDays ?? (reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(task.lastFeedbackAt)) : 0),
-      blockType: task.blockType ?? (reviewBlockedStatuses.has(status) ? "送审 / 反馈" : undefined),
-      latestFeedback: latestFeedback?.content,
-      feedbackStatus: latestFeedback?.status,
+      isStale: !isCompletedBySchedule && status === "建模中" && staleDays > 3,
+      blockedDays: isCompletedBySchedule
+        ? 0
+        : (task.blockedDays ?? (reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(task.lastFeedbackAt)) : 0)),
+      blockType: isCompletedBySchedule ? undefined : (task.blockType ?? (reviewBlockedStatuses.has(status) ? "送审 / 反馈" : undefined)),
+      latestFeedback: isCompletedBySchedule ? undefined : latestFeedback?.content,
+      feedbackStatus: isCompletedBySchedule ? undefined : latestFeedback?.status,
       isVirtual: false,
-      canDragAssign: status === "未分配",
+      canDragAssign: !task.modelerId && !task.isOutsourced && status !== "已通过" && !isCompletedBySchedule,
     };
   });
 }
@@ -477,6 +587,7 @@ function buildVirtualTasks(
   projects: ProjectRow[],
   modelers: ModelerCapacity[],
   outsourceVendorName: string,
+  completedModelingByProjectId = new Map<string, ModelingMilestoneCompletion>(),
 ): ModelingTaskCard[] {
   const today = startOfDay(new Date());
   const taskRows: ModelingTaskCard[] = [];
@@ -486,19 +597,23 @@ function buildVirtualTasks(
     .forEach((project, projectIndex) => {
       const styleCount = Math.min(Math.max(project.styleCount ?? 0, 0), 24);
       const stage = project.currentStage ?? project.status;
+      const completion = completedModelingByProjectId.get(project.id);
+      const isCompletedBySchedule = Boolean(completion);
 
       for (let index = 1; index <= styleCount; index += 1) {
-        const status = virtualStatusForProject(stage, index);
+        const status = isCompletedBySchedule ? "已通过" : virtualStatusForProject(stage, index);
         const difficulty = virtualDifficulty(project.projectName, index);
         const estimatedWorkdays = estimatedWorkdaysForDifficulty(difficulty);
         const assignedModeler =
           status === "未分配" || status === "外包中"
             ? undefined
             : modelers[(projectIndex + index + (index % 2 === 0 ? 0 : 1)) % modelers.length];
-        const plannedStartDate = virtualPlannedStartDate(today, projectIndex, index, status);
-        const plannedFinishDate = addWorkdays(plannedStartDate, estimatedWorkdays);
+        const plannedStartDate = isCompletedBySchedule
+          ? addCalendarDays(completion?.completionDate ?? today, -estimatedWorkdays)
+          : virtualPlannedStartDate(today, projectIndex, index, status);
+        const plannedFinishDate = isCompletedBySchedule ? (completion?.completionDate ?? today) : addWorkdays(plannedStartDate, estimatedWorkdays);
         const actualFinishDate = status === "已通过" ? plannedFinishDate : undefined;
-        const lastUpdatedAt = virtualLastUpdatedAt(today, index, status);
+        const lastUpdatedAt = isCompletedBySchedule ? actualFinishDate : virtualLastUpdatedAt(today, index, status);
         const lastFeedbackAt = reviewBlockedStatuses.has(status) ? addCalendarDays(today, -Math.max(2, (index % 6) + 2)) : undefined;
         const consumedWorkdays =
           status === "未分配" ? 0 : consumedDays(plannedStartDate, actualFinishDate) || Math.min(estimatedWorkdays, index + 1);
@@ -515,9 +630,11 @@ function buildVirtualTasks(
           difficulty,
           estimatedWorkdays,
           consumedWorkdays,
-          originalArtStatus: stage === "原画" || stage === "企划立项" ? "原画未过审" : "原画已过审",
+          originalArtStatus: isCompletedBySchedule || !(stage === "原画" || stage === "企划立项") ? "原画已过审" : "原画未过审",
           originalArtApprovedDate:
-            stage === "原画" || stage === "企划立项" ? undefined : formatDate(addCalendarDays(plannedStartDate, -5)),
+            !isCompletedBySchedule && (stage === "原画" || stage === "企划立项")
+              ? undefined
+              : formatDate(addCalendarDays(plannedStartDate, -5)),
           modelerId: assignedModeler?.id,
           modelerName: assignedModeler?.name,
           isOutsourced: status === "外包中",
@@ -532,13 +649,13 @@ function buildVirtualTasks(
           lastFeedbackAt: formatDate(lastFeedbackAt),
           lastUpdatedAt: formatDate(lastUpdatedAt),
           staleDays: daysSince(lastUpdatedAt),
-          isStale: status === "建模中" && daysSince(lastUpdatedAt) > 3,
-          blockedDays: reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(lastFeedbackAt)) : 0,
-          blockType: reviewBlockedStatuses.has(status) ? (status === "等反馈" ? "等版权方反馈" : "送审中") : undefined,
-          latestFeedback: reviewBlockedStatuses.has(status) ? "虚拟反馈：待补充检修问题与版权方意见。" : undefined,
-          feedbackStatus: reviewBlockedStatuses.has(status) ? "待处理" : undefined,
+          isStale: !isCompletedBySchedule && status === "建模中" && daysSince(lastUpdatedAt) > 3,
+          blockedDays: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(lastFeedbackAt)) : 0,
+          blockType: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "等反馈" ? "等版权方反馈" : "送审中") : undefined,
+          latestFeedback: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? "虚拟反馈：待补充检修问题与版权方意见。" : undefined,
+          feedbackStatus: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? "待处理" : undefined,
           isVirtual: true,
-          canDragAssign: status === "未分配",
+          canDragAssign: status === "未分配" && !isCompletedBySchedule,
         });
       }
     });
@@ -560,13 +677,67 @@ function buildProjectSummaries(
     progressPercent: number;
   }>,
   isVirtual: boolean,
+  completedModelingByProjectId = new Map<string, ModelingMilestoneCompletion>(),
 ): ProjectModelingSummary[] {
   const progressByProjectId = new Map(progressRows.map((progress) => [progress.projectId, progress]));
 
   return projects
-    .filter((project) => (project.styleCount ?? 0) > 0 || tasks.some((task) => task.projectId === project.id))
+    .filter((project) => {
+      const hasModelingTasks = tasks.some((task) => task.projectId === project.id);
+
+      if (!isVirtual) {
+        return hasModelingTasks || progressByProjectId.has(project.id);
+      }
+
+      return (project.styleCount ?? 0) > 0 || hasModelingTasks;
+    })
     .map((project) => {
       const progress = progressByProjectId.get(project.id);
+      const projectTasks = tasks.filter((task) => task.projectId === project.id);
+      const isCompletedBySchedule = completedModelingByProjectId.has(project.id);
+
+      if (isCompletedBySchedule) {
+        const totalStyles = projectTasks.length || progress?.totalRequiredStyles || project.styleCount || 0;
+
+        return {
+          projectId: project.id,
+          projectName: project.projectName,
+          currentStage: project.currentStage ?? project.status,
+          plannedLaunchDate: formatDate(project.plannedLaunchDate) ?? "",
+          totalStyles,
+          approvedStyles: totalStyles,
+          inProgressStyles: 0,
+          submittedStyles: 0,
+          outsourcedStyles: 0,
+          unassignedStyles: 0,
+          progressPercent: 100,
+          isVirtual: isVirtual && projectTasks.length > 0,
+        };
+      }
+
+      if (projectTasks.length > 0) {
+        const totalStyles = projectTasks.length;
+        const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
+        const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中").length;
+        const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
+        const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
+        const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
+
+        return {
+          projectId: project.id,
+          projectName: project.projectName,
+          currentStage: project.currentStage ?? project.status,
+          plannedLaunchDate: formatDate(project.plannedLaunchDate) ?? "",
+          totalStyles,
+          approvedStyles,
+          inProgressStyles,
+          submittedStyles,
+          outsourcedStyles,
+          unassignedStyles,
+          progressPercent: totalStyles > 0 ? Math.round((approvedStyles / totalStyles) * 100) : 0,
+          isVirtual,
+        };
+      }
 
       if (progress && !isVirtual) {
         return {
@@ -585,13 +756,12 @@ function buildProjectSummaries(
         };
       }
 
-      const projectTasks = tasks.filter((task) => task.projectId === project.id);
       const totalStyles = projectTasks.length;
       const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
       const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中").length;
       const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
       const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
-      const unassignedStyles = projectTasks.filter((task) => task.status === "未分配").length;
+      const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
 
       return {
         projectId: project.id,
@@ -623,8 +793,8 @@ function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): M
     },
     {
       label: "未分配款式数",
-      value: tasks.filter((task) => task.status === "未分配").length,
-      helper: "可拖到建模师形成草稿",
+      value: tasks.filter((task) => !task.modelerId && !task.isOutsourced).length,
+      helper: "负责人待手动录入",
       tone: "warning",
     },
     {
@@ -746,6 +916,24 @@ function maxDate(values: Array<Date | null | undefined>) {
   }
 
   return dates.reduce((latest, date) => (date.getTime() > latest.getTime() ? date : latest), dates[0]);
+}
+
+function rawTaskResult(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function dateFromRawValue(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
 }
 
 function daysBetween(later: Date, earlier: Date) {

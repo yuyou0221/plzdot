@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
 import {
   type CalendarProject,
   milestones,
@@ -7,10 +8,9 @@ import {
   type ProjectDetail,
   type RiskLevel,
   type ScheduleWorkbenchData,
+  type ScheduleTaskRow,
   sampleScheduleData,
 } from "@/lib/sample-schedule";
-
-const milestoneSet = new Set<Milestone>(milestones);
 
 const riskMap: Record<string, RiskLevel> = {
   已完成: "done",
@@ -29,6 +29,7 @@ const riskMap: Record<string, RiskLevel> = {
 
 type ProjectRow = {
   id: string;
+  projectCode: string | null;
   projectName: string;
   plannedLaunchDate: Date;
   projectTeamId: string | null;
@@ -57,12 +58,18 @@ type TaskResultRow = {
   taskNo: number;
   taskName: string;
   milestoneType: string;
+  plannedStartDate: Date | null;
   plannedFinishDate: Date | null;
+  forecastStartDate: Date | null;
   forecastFinishDate: Date | null;
   expectedFinishDate: Date | null;
   taskActionType: string | null;
   displayStatus: string | null;
+  delayDays: number | null;
+  remainingSafeDays: number | null;
   riskLevel: string;
+  riskMessage: string | null;
+  blockingPredecessorNames: unknown;
   rawResult: unknown;
 };
 
@@ -122,6 +129,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
     const { months, initialMonth } = buildMonthTimeline(projectCards);
     const calendarMonths = buildPlanningCalendarMonths();
     const calendarProjects = buildCalendarProjects(projects, resultByProjectId);
+    const scheduleTasks = buildScheduleTaskRows(taskResults, projectById, resultByProjectId);
     const projectDetails: Record<string, ProjectDetail> = {};
 
     for (const project of projects) {
@@ -190,6 +198,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
       projectCards,
       calendarMonths,
       calendarProjects,
+      scheduleTasks,
       projectDetails,
     };
   } catch (error) {
@@ -321,6 +330,71 @@ function buildCalendarProjects(
       if (dateOrder !== 0) return dateOrder;
 
       return a.name.localeCompare(b.name, "zh-CN");
+    });
+}
+
+function buildScheduleTaskRows(
+  taskResults: TaskResultRow[],
+  projectById: Map<string, ProjectRow>,
+  resultByProjectId: Map<string, ProjectResultRow>,
+): ScheduleTaskRow[] {
+  return taskResults
+    .map((row): ScheduleTaskRow => {
+      const project = projectById.get(row.projectId);
+      const projectResult = resultByProjectId.get(row.projectId);
+      const raw = rawTaskResult(row.rawResult);
+      const riskLevel = toRiskLevel(row.riskLevel);
+
+      return {
+        id: row.id,
+        projectId: row.projectId,
+        projectCode: rawText(raw.projectId) || project?.projectCode || row.projectId,
+        projectName: project?.projectName ?? rawText(raw.projectName) ?? row.projectId,
+        projectStage: project?.currentStage ?? rawText(raw.projectStatus) ?? project?.status ?? "待补充",
+        plannedLaunchDate:
+          rawDateText(raw.plannedLaunchDate) ?? formatDate(projectResult?.plannedLaunchDate ?? project?.plannedLaunchDate),
+        forecastLaunchDate:
+          rawDateText(raw.projectedLaunchDate) ?? formatDate(projectResult?.forecastLaunchDate),
+        launchDeltaDays: rawNumber(raw.launchDeltaDays) ?? projectResult?.delayDays ?? null,
+        taskNo: row.taskNo,
+        taskName: row.taskName,
+        milestoneType: row.milestoneType || normalizeMilestone(row.milestoneType, row.taskNo) || "未分类",
+        durationDays: rawNumber(raw.durationDays),
+        taskStatus: row.displayStatus ?? rawText(raw.taskStatus) ?? "未开始",
+        shouldStartLabel: booleanLabel(rawBoolean(raw.autoStarted)),
+        missingActualPredecessorIds:
+          rawText(raw.missingActualPredecessorIds) ?? jsonText(row.blockingPredecessorNames) ?? "",
+        actualStartDate: rawDateText(raw.actualStartDate) ?? "",
+        actualFinishDate: rawDateText(raw.actualFinishDate) ?? "",
+        expectedFinishDate: rawDateText(raw.expectedFinishDate) ?? formatDate(row.expectedFinishDate, ""),
+        inferredCompletedLabel: booleanLabel(rawBoolean(raw.inferredCompleted)),
+        inferredCompletionDate: rawDateText(raw.inferredCompletionDate) ?? "",
+        plannedStartDate: rawDateText(raw.plannedStartDate) ?? formatDate(row.plannedStartDate, ""),
+        plannedFinishDate: rawDateText(raw.plannedFinishDate) ?? formatDate(row.plannedFinishDate, ""),
+        progressForecastStartDate: rawDateText(raw.forecastStartDate) ?? formatDate(row.forecastStartDate, ""),
+        progressForecastFinishDate: rawDateText(raw.forecastFinishDate) ?? formatDate(row.forecastFinishDate, ""),
+        calculatedStartDate: rawDateText(raw.calculatedStartDate) ?? formatDate(row.forecastStartDate, ""),
+        calculatedFinishDate: rawDateText(raw.calculatedFinishDate) ?? formatDate(row.forecastFinishDate, ""),
+        currentDdlDate: rawDateText(raw.currentDdlDate) ?? formatDate(row.forecastFinishDate, ""),
+        originalLatestStartDate: rawDateText(raw.originalLatestStartDate) ?? "",
+        originalLatestFinishDate: rawDateText(raw.originalLatestFinishDate) ?? "",
+        latestStartDate: rawDateText(raw.latestStartDate ?? raw.currentLatestStartDate) ?? "",
+        latestFinishDate: rawDateText(raw.latestFinishDate ?? raw.currentLatestFinishDate) ?? "",
+        floatDays: rawNumber(raw.floatDays),
+        planDeltaDays: rawNumber(raw.planDeltaDays) ?? row.delayDays ?? null,
+        deadlineRiskDays: rawNumber(raw.deadlineRiskDays),
+        warningWindowDays: rawNumber(raw.warningWindowDays) ?? row.remainingSafeDays ?? null,
+        impactStatus: rawText(raw.impactStatus) ?? "",
+        riskLevel,
+        riskText: row.riskLevel,
+        isBlockingLaunchLabel: booleanLabel(rawBoolean(raw.isBlockingLaunch)),
+      };
+    })
+    .sort((a, b) => {
+      const projectOrder = a.projectName.localeCompare(b.projectName, "zh-CN");
+      if (projectOrder !== 0) return projectOrder;
+
+      return a.taskNo - b.taskNo;
     });
 }
 
@@ -457,20 +531,11 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
 }
 
 function normalizeMilestone(value: string, taskNo: number): Milestone | null {
-  if (milestoneSet.has(value as Milestone)) {
-    return value as Milestone;
+  if (isKnownMilestone(value)) {
+    return value;
   }
 
   return milestoneByTaskNo(taskNo);
-}
-
-function milestoneByTaskNo(taskNo: number): Milestone {
-  if (taskNo >= 1 && taskNo <= 6) return "原画里程碑";
-  if (taskNo >= 7 && taskNo <= 10) return "建模里程碑";
-  if ((taskNo >= 11 && taskNo <= 15) || taskNo === 17 || taskNo === 18) return "红蜡里程碑";
-  if (taskNo >= 21 && taskNo <= 27) return "产前里程碑";
-  if (taskNo === 30) return "大货里程碑";
-  return "平面里程碑";
 }
 
 function groupRiskLevel(rows: TaskResultRow[]): RiskLevel {
@@ -549,6 +614,70 @@ function completionDateForRow(row: TaskResultRow) {
 
 function rawTaskResult(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function rawText(value: unknown) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text || null;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return null;
+}
+
+function rawNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function rawBoolean(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    if (value === "true" || value === "是") return true;
+    if (value === "false" || value === "否") return false;
+  }
+
+  return null;
+}
+
+function booleanLabel(value: boolean | null) {
+  return value ? "是" : "否";
+}
+
+function rawDateText(value: unknown) {
+  const date = dateFromRawValue(value);
+  return date ? formatDate(date, "") : null;
+}
+
+function jsonText(value: unknown) {
+  if (!value) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(String).join(",");
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return JSON.stringify(value);
 }
 
 function dateFromRawValue(value: unknown) {
@@ -752,15 +881,15 @@ function monthsBetween(start: MonthPoint, end: MonthPoint) {
   return months;
 }
 
-function formatDate(value: Date | string | null | undefined) {
+function formatDate(value: Date | string | null | undefined, fallback = "待测算") {
   if (!value) {
-    return "待测算";
+    return fallback;
   }
 
   const date = typeof value === "string" ? new Date(value) : value;
 
   if (Number.isNaN(date.getTime())) {
-    return "待测算";
+    return fallback;
   }
 
   return date.toISOString().slice(0, 10);

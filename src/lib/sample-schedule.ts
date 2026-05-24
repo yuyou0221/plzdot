@@ -1,12 +1,8 @@
+import { scheduleMilestones, type ScheduleMilestone } from "@/lib/schedule-domain";
+
 export type RiskLevel = "done" | "doneLate" | "normal" | "risk" | "delay";
 
-export type Milestone =
-  | "原画里程碑"
-  | "建模里程碑"
-  | "红蜡里程碑"
-  | "平面里程碑"
-  | "产前里程碑"
-  | "大货里程碑";
+export type Milestone = ScheduleMilestone;
 
 export type ProjectCard = {
   id: string;
@@ -32,6 +28,48 @@ export type CalendarProject = {
   owner: string;
   artOwner: string;
   riskLevel: RiskLevel;
+};
+
+export type ScheduleTaskRow = {
+  id: string;
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  projectStage: string;
+  plannedLaunchDate: string;
+  forecastLaunchDate: string;
+  launchDeltaDays: number | null;
+  taskNo: number;
+  taskName: string;
+  milestoneType: string;
+  durationDays: number | null;
+  taskStatus: string;
+  shouldStartLabel: string;
+  missingActualPredecessorIds: string;
+  actualStartDate: string;
+  actualFinishDate: string;
+  expectedFinishDate: string;
+  inferredCompletedLabel: string;
+  inferredCompletionDate: string;
+  plannedStartDate: string;
+  plannedFinishDate: string;
+  progressForecastStartDate: string;
+  progressForecastFinishDate: string;
+  calculatedStartDate: string;
+  calculatedFinishDate: string;
+  currentDdlDate: string;
+  originalLatestStartDate: string;
+  originalLatestFinishDate: string;
+  latestStartDate: string;
+  latestFinishDate: string;
+  floatDays: number | null;
+  planDeltaDays: number | null;
+  deadlineRiskDays: number | null;
+  warningWindowDays: number | null;
+  impactStatus: string;
+  riskLevel: RiskLevel;
+  riskText: string;
+  isBlockingLaunchLabel: string;
 };
 
 export type Metric = {
@@ -72,19 +110,13 @@ export type ScheduleWorkbenchData = {
   projectCards: ProjectCard[];
   calendarMonths: string[];
   calendarProjects: CalendarProject[];
+  scheduleTasks: ScheduleTaskRow[];
   projectDetails: Record<string, ProjectDetail>;
 };
 
 export const months = ["26年10月", "26年11月", "26年12月", "27年1月"];
 
-export const milestones: Milestone[] = [
-  "原画里程碑",
-  "建模里程碑",
-  "红蜡里程碑",
-  "平面里程碑",
-  "产前里程碑",
-  "大货里程碑",
-];
+export const milestones: Milestone[] = [...scheduleMilestones];
 
 export const projectCards: ProjectCard[] = [
   card("p-pink-rabbit", "粉红兔子X恋与制作人", "26年10月", "原画里程碑", "done"),
@@ -208,6 +240,7 @@ export const sampleScheduleData: ScheduleWorkbenchData = {
   projectCards,
   calendarMonths: ["26年3月", "26年4月", "26年5月", "26年6月", "26年7月", "26年8月", "26年9月", "26年10月", "26年11月", "26年12月", "27年1月", "27年2月"],
   calendarProjects: [],
+  scheduleTasks: [],
   projectDetails,
 };
 

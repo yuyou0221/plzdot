@@ -176,3 +176,67 @@ PATCH /api/users/vendors/:id
 2. 人员、团队、建模能力标签、外包供应商均写入现有 Prisma 表。
 3. 建模能力标签接口会将用户标记为建模师，并重写该用户的擅长 / 不擅长标签。
 ```
+
+## 登录与权限 API
+
+当前路由：
+
+```text
+POST /api/auth/login
+POST /api/auth/logout
+```
+
+当前行为：
+
+```text
+1. 登录成功后写入 httpOnly 会话 Cookie。
+2. 未登录访问页面会跳转到 /login。
+3. 未登录访问受保护 API 会返回 401。
+4. 角色分为 admin、manager、viewer。
+5. 用户数据维护接口仅 admin 可写。
+6. 项目排期、建模任务、产品组工作指引等业务写接口允许 admin / manager，viewer 只读。
+```
+
+## 产品组工作指引 API
+
+用途：产品组工作指引写入任务执行事实和建模款式清单。
+
+当前路由：
+
+```text
+PATCH /api/product-guide/tasks/:id
+POST /api/product-guide/modeling-tasks
+```
+
+当前行为：
+
+```text
+1. PATCH /api/product-guide/tasks/:id 支持 complete、expected-finish、submit-review、block、unblock。
+2. complete 写入 ProjectTask.actualFinishDate、status=已完成，并记录 ProgressUpdate。
+3. expected-finish 写入 ProjectTask.expectedFinishDate 和进度备注，并记录 ProgressUpdate。
+4. submit-review 写入 ProjectTask.status=已送审、送审备注，并记录 ProgressUpdate。
+5. block / unblock 写入 ProjectTask.isBlocked、blockReason 和进度备注，并记录 ProgressUpdate。
+6. POST /api/product-guide/modeling-tasks 写入真实 ModelingTask，并轻量更新 ProjectModelingProgress。
+7. 这些写入只记录执行事实，不直接重算预测；页面会提示需要重新测算。
+```
+
+## 建模排期 API
+
+用途：建模排期基础版的真实款式分配、外包、状态推进和反馈记录。
+
+当前路由：
+
+```text
+PATCH /api/modeling/tasks/:id
+```
+
+当前行为：
+
+```text
+1. 只保存真实 ModelingTask；虚拟款式会被拒绝，需先由产品组工作指引录入真实款式。
+2. 可保存 modelerId、isOutsourced、outsourceVendorId、plannedStartDate、plannedFinishDate、actualStartDate、actualFinishDate、remainingWorkdays、status。
+3. 可用 feedbackContent / feedbackType 记录 ModelingFeedback。
+4. 状态改为“已通过”时会写入实际完成日期和实际工作日。
+5. 每次保存会重算 ProjectModelingProgress。
+6. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
+```

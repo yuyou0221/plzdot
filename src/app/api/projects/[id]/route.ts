@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiRole } from "@/lib/auth/api";
 import { getProjectDetail } from "@/lib/schedule-repository";
 import { prisma } from "@/lib/db/prisma";
 
@@ -22,6 +23,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const auth = await requireApiRole(["admin", "manager"]);
+  if ("response" in auth) return auth.response;
+
   const { id } = await context.params;
   let payload: UpdateProjectRequest;
 
@@ -94,6 +98,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  const auth = await requireApiRole(["admin", "manager"]);
+  if ("response" in auth) return auth.response;
+
   const { id } = await context.params;
 
   try {

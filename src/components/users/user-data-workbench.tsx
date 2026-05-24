@@ -20,6 +20,8 @@ import {
   UsersRound,
 } from "lucide-react";
 import clsx from "clsx";
+import { LogoutButton } from "@/components/auth/logout-button";
+import { authRoleOptions, canManageUsers, type AuthUser } from "@/lib/auth/permissions";
 import type {
   UserDataMetric,
   UserDataPerson,
@@ -36,6 +38,9 @@ type PersonDraft = {
   teamId: string;
   roleTitle: string;
   userType: string;
+  loginName: string;
+  authRole: string;
+  password: string;
   isModeler: boolean;
   weeklyCapacityStyles: string;
   status: string;
@@ -90,8 +95,9 @@ const metricToneClass: Record<UserDataMetric["tone"], string> = {
   success: "border-emerald-200 bg-emerald-50/80",
 };
 
-export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
+export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkbenchData; currentUser: AuthUser }) {
   const router = useRouter();
+  const canManage = canManageUsers(currentUser);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState("全部团队");
@@ -142,12 +148,19 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
   async function savePerson(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!personDraft) return;
+    if (!canManage) {
+      notify("当前账号没有权限保存人员。", "warning");
+      return;
+    }
 
     const payload = {
       name: personDraft.name,
       teamId: personDraft.teamId,
       roleTitle: personDraft.roleTitle,
       userType: personDraft.userType,
+      loginName: personDraft.loginName,
+      authRole: personDraft.authRole,
+      password: personDraft.password,
       isModeler: personDraft.isModeler,
       weeklyCapacityStyles: nullableNumber(personDraft.weeklyCapacityStyles),
       status: personDraft.status,
@@ -170,6 +183,10 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
   async function saveTeam(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!teamDraft) return;
+    if (!canManage) {
+      notify("当前账号没有权限保存团队。", "warning");
+      return;
+    }
 
     await saveMutation({
       path: teamDraft.id ? `/api/users/teams/${teamDraft.id}` : "/api/users/teams",
@@ -181,6 +198,10 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
 
   async function saveCapabilities(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canManage) {
+      notify("当前账号没有权限保存建模能力。", "warning");
+      return;
+    }
     if (!capabilityDraft?.userId) {
       notify("请先选择人员。", "warning");
       return;
@@ -201,6 +222,10 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
   async function saveVendor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!vendorDraft) return;
+    if (!canManage) {
+      notify("当前账号没有权限保存外包供应商。", "warning");
+      return;
+    }
 
     await saveMutation({
       path: vendorDraft.id ? `/api/users/vendors/${vendorDraft.id}` : "/api/users/vendors",
@@ -255,6 +280,9 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
       teamId: data.teams.find((team) => team.name === "产品团队")?.id ?? "",
       roleTitle: "",
       userType: "内部",
+      loginName: "",
+      authRole: "viewer",
+      password: "",
       isModeler: false,
       weeklyCapacityStyles: "",
       status: "启用",
@@ -297,9 +325,11 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
           </div>
           <nav className="mt-5 grid gap-2">
             <SideNavButton label="项目排期" badge="P0" onClick={() => router.push("/")} />
+            <SideNavButton label="产品组工作指引" badge="P0" onClick={() => router.push("/product-guide")} />
             <SideNavButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
             <SideNavButton label="用户数据" badge="基础" active />
           </nav>
+          <LogoutButton />
         </aside>
 
         <main className="min-w-0 px-6 py-5 max-md:px-4">
@@ -313,25 +343,32 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
               <div className="mt-2 text-sm text-slate-500">
                 人员、团队、建模能力与外包供应商
               </div>
+              <div className="mt-1 text-xs font-medium text-slate-400">
+                当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole}
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
-              <ActionButton
-                icon={<Building2 size={16} />}
-                label="新增团队"
-                onClick={() => {
-                  setActiveTab("teams");
-                  setTeamDraft({
-                    name: "",
-                    teamType: "业务团队",
-                    parentTeamId: "",
-                    leaderUserId: "",
-                    status: "启用",
-                    notes: "",
-                  });
-                }}
-              />
-              <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
+              {canManage ? (
+                <>
+                  <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
+                  <ActionButton
+                    icon={<Building2 size={16} />}
+                    label="新增团队"
+                    onClick={() => {
+                      setActiveTab("teams");
+                      setTeamDraft({
+                        name: "",
+                        teamType: "业务团队",
+                        parentTeamId: "",
+                        leaderUserId: "",
+                        status: "启用",
+                        notes: "",
+                      });
+                    }}
+                  />
+                  <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
+                </>
+              ) : null}
             </div>
           </header>
 
@@ -419,17 +456,19 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                 缺少产能
               </button>
             </div>
-            <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
+            {canManage ? <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} /> : null}
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-left text-sm">
+            <table className="w-full min-w-[1120px] text-left text-sm">
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">姓名</th>
                   <th className="px-3 py-2">团队</th>
                   <th className="px-3 py-2">职位</th>
                   <th className="px-3 py-2">用户类型</th>
+                  <th className="px-3 py-2">登录名</th>
+                  <th className="px-3 py-2">权限</th>
                   <th className="px-3 py-2">建模师</th>
                   <th className="px-3 py-2">每周产能</th>
                   <th className="px-3 py-2">状态</th>
@@ -453,6 +492,10 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                     <td className="px-3 py-3">
                       <TypeBadge value={person.userType} />
                     </td>
+                    <td className="px-3 py-3 text-slate-600">{person.loginName || "-"}</td>
+                    <td className="px-3 py-3">
+                      <StatusBadge value={person.authRoleLabel} tone={person.authRole === "admin" ? "warning" : "neutral"} />
+                    </td>
                     <td className="px-3 py-3">
                       {person.isModeler ? <StatusBadge value="是" tone="success" /> : <StatusBadge value="否" tone="neutral" />}
                     </td>
@@ -471,23 +514,25 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                     </td>
                     <td className="max-w-[220px] truncate px-3 py-3 text-slate-500">{person.notes || "-"}</td>
                     <td className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setPersonDraft(personDraftFromPerson(person));
-                        }}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Edit3 size={14} />
-                        编辑
-                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPersonDraft(personDraftFromPerson(person));
+                          }}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={14} />
+                          编辑
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
                 {filteredPeople.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-12 text-center text-sm text-slate-400">
+                    <td colSpan={11} className="px-3 py-12 text-center text-sm text-slate-400">
                       暂无人员数据
                     </td>
                   </tr>
@@ -529,6 +574,8 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
 
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
           <DetailItem label="用户类型" value={selectedPerson.userType} />
+          <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} />
+          <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} />
           <DetailItem label="是否建模师" value={selectedPerson.isModeler ? "是" : "否"} />
           <DetailItem label="每周产能" value={selectedPerson.weeklyCapacityStyles ?? "未填写"} />
           <DetailItem label="团队" value={selectedPerson.teamName} />
@@ -551,8 +598,12 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <ActionButton icon={<Edit3 size={16} />} label="编辑人员" onClick={() => setPersonDraft(personDraftFromPerson(selectedPerson))} />
-          <ActionButton icon={<Tags size={16} />} label="编辑标签" onClick={() => openCapabilityEditor(selectedPerson)} />
+          {canManage ? (
+            <>
+              <ActionButton icon={<Edit3 size={16} />} label="编辑人员" onClick={() => setPersonDraft(personDraftFromPerson(selectedPerson))} />
+              <ActionButton icon={<Tags size={16} />} label="编辑标签" onClick={() => openCapabilityEditor(selectedPerson)} />
+            </>
+          ) : null}
         </div>
       </section>
     );
@@ -579,6 +630,20 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
             <option>内部</option>
             <option>外包</option>
           </SelectField>
+          <TextInput label="登录名" value={personDraft.loginName} onChange={(value) => setPersonDraft({ ...personDraft, loginName: value })} />
+          <SelectField label="权限角色" value={personDraft.authRole} onChange={(value) => setPersonDraft({ ...personDraft, authRole: value })}>
+            {authRoleOptions.map((role) => (
+              <option key={role.value} value={role.value}>
+                {role.label}
+              </option>
+            ))}
+          </SelectField>
+          <TextInput
+            label={personDraft.id ? "重置密码" : "初始密码"}
+            type="password"
+            value={personDraft.password}
+            onChange={(value) => setPersonDraft({ ...personDraft, password: value })}
+          />
           <ToggleField label="是否建模师" checked={personDraft.isModeler} onChange={(value) => setPersonDraft({ ...personDraft, isModeler: value })} />
           <TextInput
             label="每周建模产能"
@@ -607,20 +672,22 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
               <Building2 size={16} />
               团队结构
             </div>
-            <ActionButton
-              icon={<Plus size={16} />}
-              label="新增团队"
-              onClick={() =>
-                setTeamDraft({
-                  name: "",
-                  teamType: "业务团队",
-                  parentTeamId: "",
-                  leaderUserId: "",
-                  status: "启用",
-                  notes: "",
-                })
-              }
-            />
+            {canManage ? (
+              <ActionButton
+                icon={<Plus size={16} />}
+                label="新增团队"
+                onClick={() =>
+                  setTeamDraft({
+                    name: "",
+                    teamType: "业务团队",
+                    parentTeamId: "",
+                    leaderUserId: "",
+                    status: "启用",
+                    notes: "",
+                  })
+                }
+              />
+            ) : null}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
@@ -645,14 +712,16 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                       <StatusBadge value={team.status} tone={team.status === "停用" ? "neutral" : "success"} />
                     </td>
                     <td className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setTeamDraft(teamDraftFromTeam(team))}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Edit3 size={14} />
-                        编辑
-                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => setTeamDraft(teamDraftFromTeam(team))}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={14} />
+                          编辑
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -731,7 +800,7 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
               <Gauge size={16} />
               建模能力
             </div>
-            <ActionButton icon={<Tags size={16} />} label="新增标签" onClick={() => openCapabilityEditor()} />
+            {canManage ? <ActionButton icon={<Tags size={16} />} label="新增标签" onClick={() => openCapabilityEditor()} /> : null}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[860px] text-left text-sm">
@@ -765,14 +834,16 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                       {capabilityStateBadge(person)}
                     </td>
                     <td className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openCapabilityEditor(person)}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Edit3 size={14} />
-                        编辑标签
-                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => openCapabilityEditor(person)}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={14} />
+                          编辑标签
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -810,7 +881,7 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
           <DetailItem label="缺少擅长标签" value={missingTags.length} />
           <DetailItem label="总周产能" value={modelers.reduce((sum, person) => sum + (person.weeklyCapacityStyles ?? 0), 0)} />
         </div>
-        {missingCapacity.length > 0 ? (
+        {canManage && missingCapacity.length > 0 ? (
           <div className="mt-4 grid gap-2">
             {missingCapacity.slice(0, 5).map((person) => (
               <button
@@ -878,7 +949,7 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
               <PackageCheck size={16} />
               外包供应商
             </div>
-            <ActionButton icon={<Plus size={16} />} label="新增外包" onClick={openNewVendor} />
+            {canManage ? <ActionButton icon={<Plus size={16} />} label="新增外包" onClick={openNewVendor} /> : null}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[840px] text-left text-sm">
@@ -909,14 +980,16 @@ export function UserDataWorkbench({ data }: { data: UserDataWorkbenchData }) {
                     </td>
                     <td className="max-w-[220px] truncate px-3 py-3 text-slate-500">{vendor.notes || "-"}</td>
                     <td className="px-3 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setVendorDraft(vendorDraftFromVendor(vendor))}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Edit3 size={14} />
-                        编辑
-                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => setVendorDraft(vendorDraftFromVendor(vendor))}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={14} />
+                          编辑
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -1114,7 +1187,7 @@ function TextInput({
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
-  type?: "text" | "number";
+  type?: "text" | "number" | "password";
   min?: number;
 }) {
   return (
@@ -1305,6 +1378,9 @@ function personDraftFromPerson(person: UserDataPerson): PersonDraft {
     teamId: person.teamId ?? "",
     roleTitle: person.roleTitle === "未填写" ? "" : person.roleTitle,
     userType: person.userType,
+    loginName: person.loginName,
+    authRole: person.authRole,
+    password: "",
     isModeler: person.isModeler,
     weeklyCapacityStyles: person.weeklyCapacityStyles ? String(person.weeklyCapacityStyles) : "",
     status: person.status,

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import {
   normalizeBoolean,
@@ -11,6 +12,9 @@ import {
 export const runtime = "nodejs";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const auth = await requireApiRole(["admin"]);
+  if ("response" in auth) return auth.response;
+
   const { id } = await context.params;
   let payload: Record<string, unknown>;
 

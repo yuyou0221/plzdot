@@ -2,6 +2,7 @@ import "server-only";
 
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { authRoleLabels } from "@/lib/auth/permissions";
 import type {
   UserDataPerson,
   UserDataTeam,
@@ -45,6 +46,9 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
           teamId: true,
           roleTitle: true,
           userType: true,
+          loginName: true,
+          passwordHash: true,
+          authRole: true,
           isModeler: true,
           weeklyCapacityStyles: true,
           status: true,
@@ -89,6 +93,10 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
         teamName: user.teamId ? (teamNameById.get(user.teamId) ?? "未匹配团队") : "未分配",
         roleTitle: user.roleTitle ?? "未填写",
         userType: user.userType,
+        loginName: user.loginName ?? "",
+        authRole: user.authRole,
+        authRoleLabel: authRoleLabels[user.authRole] ?? user.authRole,
+        canLogin: Boolean(user.loginName && user.passwordHash),
         isModeler: user.isModeler,
         weeklyCapacityStyles: user.weeklyCapacityStyles ?? undefined,
         status: user.status,

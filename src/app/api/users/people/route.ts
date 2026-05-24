@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { requireApiRole } from "@/lib/auth/api";
+import { hashPassword, isValidPassword } from "@/lib/auth/password";
+import { normalizeAuthRole } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
 import {
   normalizeBoolean,
@@ -12,6 +15,9 @@ import {
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  const auth = await requireApiRole(["admin"]);
+  if ("response" in auth) return auth.response;
+
   let payload: Record<string, unknown>;
 
   try {
@@ -26,6 +32,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: "请填写姓名。" }, { status: 400 });
   }
 
+  const loginName = optionalText(payload.loginName);
+  const password = typeof payload.password === "string" ? payload.password : "";
+
+  if (loginName && !isValidPassword(password)) {
+    return NextResponse.json({ ok: false, message: "开通登录账号时，初始密码至少需要 8 位。" }, { status: 400 });
+  }
+
   try {
     const person = await prisma.user.create({
       data: {
@@ -33,6 +46,9 @@ export async function POST(request: Request) {
         teamId: optionalText(payload.teamId),
         roleTitle: optionalText(payload.roleTitle),
         userType: normalizeUserType(payload.userType),
+        loginName,
+        passwordHash: loginName ? hashPassword(password) : null,
+        authRole: normalizeAuthRole(payload.authRole),
         isModeler: normalizeBoolean(payload.isModeler),
         weeklyCapacityStyles: optionalNonNegativeInt(payload.weeklyCapacityStyles),
         status: normalizeStatus(payload.status),

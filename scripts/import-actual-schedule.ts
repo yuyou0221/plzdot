@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "../src/lib/db/prisma";
 import { persistScheduleAnalysis } from "../src/lib/schedule-engine/adapters";
+import { milestoneByTaskNo } from "../src/lib/schedule-domain";
 
 type ActualSchedulePayload = {
   generatedAt: string;
@@ -171,15 +172,6 @@ async function clearP0Data() {
   await prisma.projectTask.deleteMany();
   await prisma.project.deleteMany();
   await prisma.dataImport.deleteMany();
-}
-
-function milestoneByTaskNo(taskNo: number) {
-  if (taskNo >= 1 && taskNo <= 6) return "原画里程碑";
-  if (taskNo >= 7 && taskNo <= 10) return "建模里程碑";
-  if ((taskNo >= 11 && taskNo <= 15) || taskNo === 17 || taskNo === 18) return "红蜡里程碑";
-  if (taskNo >= 21 && taskNo <= 27) return "产前里程碑";
-  if (taskNo === 30) return "大货里程碑";
-  return "平面里程碑";
 }
 
 function toNullableNumber(value: unknown) {
