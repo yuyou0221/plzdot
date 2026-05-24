@@ -165,6 +165,7 @@ PM2 或 systemd
 DATABASE_URL
 AUTH_ENABLED=true
 NEXT_PUBLIC_AUTH_ENABLED=true
+AUTH_COOKIE_SECURE=false
 AUTH_SECRET
 INITIAL_ADMIN_LOGIN
 INITIAL_ADMIN_PASSWORD
@@ -176,6 +177,7 @@ INITIAL_ADMIN_PASSWORD
 - `INITIAL_ADMIN_PASSWORD` 必须是强密码。
 - `admin / admin123456` 只允许本地开发使用。
 - `.env` 不提交到 GitHub。
+- 当前 staging 先通过 IP + HTTP 访问，因此 `AUTH_COOKIE_SECURE=false`。后续绑定域名并启用 HTTPS 后，应改为 `true`。
 
 ## 第一次部署步骤
 

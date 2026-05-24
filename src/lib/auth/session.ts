@@ -61,8 +61,20 @@ export function sessionCookieOptions() {
     maxAge: SESSION_MAX_AGE_SECONDS,
     path: "/",
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureSessionCookie(),
   };
+}
+
+function shouldUseSecureSessionCookie() {
+  if (process.env.AUTH_COOKIE_SECURE === "true") {
+    return true;
+  }
+
+  if (process.env.AUTH_COOKIE_SECURE === "false") {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
 }
 
 function authSecret() {

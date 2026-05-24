@@ -53,6 +53,7 @@ staging 不是正式上线，而是少数人内部试用环境。
 DATABASE_URL
 AUTH_ENABLED=true
 NEXT_PUBLIC_AUTH_ENABLED=true
+AUTH_COOKIE_SECURE=false
 AUTH_SECRET
 INITIAL_ADMIN_LOGIN
 INITIAL_ADMIN_PASSWORD
@@ -63,6 +64,7 @@ INITIAL_ADMIN_PASSWORD
 - staging / production 不能使用本地默认 `AUTH_SECRET`。
 - staging / production 首次创建管理员前必须配置 `INITIAL_ADMIN_PASSWORD`。
 - 默认 `admin / admin123456` 只适合本地开发，不适合测试上线。
+- 当前通过 IP + HTTP 测试时，`AUTH_COOKIE_SECURE=false`；后续启用 HTTPS 后改为 `true`。
 
 ## 数据库初始化
 
