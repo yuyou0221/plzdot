@@ -901,15 +901,15 @@ function virtualLastUpdatedAt(today: Date, styleIndex: number, status: ModelingT
 }
 
 function consumedDays(startDate?: Date | null, finishDate?: Date | null) {
-  if (!startDate) {
+  if (!isValidDate(startDate)) {
     return 0;
   }
 
-  return workdaysBetween(startDate, finishDate ?? new Date());
+  return workdaysBetween(startDate, isValidDate(finishDate) ? finishDate : new Date());
 }
 
 function maxDate(values: Array<Date | null | undefined>) {
-  const dates = values.filter((date): date is Date => Boolean(date));
+  const dates = values.filter(isValidDate);
 
   if (dates.length === 0) {
     return null;
@@ -937,13 +937,19 @@ function dateFromRawValue(value: unknown) {
 }
 
 function daysBetween(later: Date, earlier: Date) {
+  if (!isValidDate(later) || !isValidDate(earlier)) {
+    return 0;
+  }
+
   return Math.round((startOfDay(later).getTime() - startOfDay(earlier).getTime()) / 86_400_000);
 }
 
 function dateToMonthPoint(date: Date) {
+  const safeDate = isValidDate(date) ? date : new Date();
+
   return {
-    year: date.getUTCFullYear(),
-    month: date.getUTCMonth() + 1,
+    year: safeDate.getUTCFullYear(),
+    month: safeDate.getUTCMonth() + 1,
   };
 }
 
@@ -970,7 +976,7 @@ function formatMonthLabel(monthPoint: { year: number; month: number }) {
 }
 
 function daysSince(date?: Date | null) {
-  if (!date) {
+  if (!isValidDate(date)) {
     return 0;
   }
 
@@ -981,6 +987,10 @@ function daysSince(date?: Date | null) {
 }
 
 function workdaysBetween(startDate: Date, finishDate: Date) {
+  if (!isValidDate(startDate) || !isValidDate(finishDate)) {
+    return 0;
+  }
+
   const start = startOfDay(startDate);
   const finish = startOfDay(finishDate);
 
@@ -1003,7 +1013,7 @@ function workdaysBetween(startDate: Date, finishDate: Date) {
 }
 
 function addWorkdays(date: Date, workdays: number) {
-  const result = new Date(date);
+  const result = new Date(isValidDate(date) ? date : new Date());
   let remaining = Math.max(1, workdays) - 1;
 
   while (remaining > 0) {
@@ -1018,17 +1028,25 @@ function addWorkdays(date: Date, workdays: number) {
 }
 
 function addCalendarDays(date: Date, days: number) {
-  const result = new Date(date);
+  const result = new Date(isValidDate(date) ? date : new Date());
   result.setUTCDate(result.getUTCDate() + days);
   return result;
 }
 
 function startOfDay(date: Date) {
+  if (!isValidDate(date)) {
+    return startOfDay(new Date());
+  }
+
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12));
 }
 
 function formatDate(date?: Date | null) {
-  return date ? date.toISOString().slice(0, 10) : undefined;
+  return isValidDate(date) ? date.toISOString().slice(0, 10) : undefined;
+}
+
+function isValidDate(date?: Date | null): date is Date {
+  return date instanceof Date && Number.isFinite(date.getTime());
 }
 
 function buildFallbackProjects(): ProjectRow[] {

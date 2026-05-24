@@ -338,10 +338,35 @@ function intValue(value: unknown) {
 }
 
 function dateValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return excelSerialDate(value);
+  }
+
   const raw = text(value);
 
   if (!raw) {
     return null;
+  }
+
+  const numericRaw = Number(raw);
+
+  if (Number.isFinite(numericRaw) && numericRaw >= 20_000 && numericRaw <= 60_000) {
+    return excelSerialDate(numericRaw);
+  }
+
+  const normalized = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+
+  if (normalized) {
+    return new Date(
+      Date.UTC(
+        Number(normalized[1]),
+        Number(normalized[2]) - 1,
+        Number(normalized[3]),
+        Number(normalized[4] ?? 12),
+        Number(normalized[5] ?? 0),
+        Number(normalized[6] ?? 0),
+      ),
+    );
   }
 
   const date = new Date(raw);
@@ -351,6 +376,14 @@ function dateValue(value: unknown) {
   }
 
   return date;
+}
+
+function excelSerialDate(value: number) {
+  const wholeDays = Math.trunc(value);
+  const fractionalDay = value - wholeDays;
+  const excelEpoch = Date.UTC(1899, 11, 30);
+  const milliseconds = Math.round(fractionalDay * 86_400_000);
+  return new Date(excelEpoch + wholeDays * 86_400_000 + milliseconds);
 }
 
 function normalizeModelingStatus(value: unknown, isOutsourced: boolean) {
