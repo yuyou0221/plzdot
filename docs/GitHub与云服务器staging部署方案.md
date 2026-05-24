@@ -49,10 +49,10 @@ staging
 
 ## GitHub 仓库建议
 
-建议创建一个私有仓库，例如：
+当前已使用 GitHub 仓库：
 
 ```text
-project-management-platform
+https://github.com/yuyou0221/plzdot
 ```
 
 最低要求：
@@ -62,10 +62,10 @@ project-management-platform
 - `main` 分支保护可以后续再做，第一阶段先不要增加太多流程。
 - 日常测试部署只推 `staging` 分支。
 
-本地连接远程仓库后执行：
+本地已连接远程仓库：
 
 ```powershell
-git remote add origin <GitHub 仓库地址>
+git remote add origin https://github.com/yuyou0221/plzdot.git
 git push -u origin staging
 ```
 
