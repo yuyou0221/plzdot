@@ -6,12 +6,15 @@
 
 当前已经建立 `staging` 分支，用于内部测试上线，不直接把未验证内容推到 `main`。
 
-当前基线：
+关键提交记录：
 
 ```text
 分支：staging
-提交：4158b05 chore: prepare p0 staging test
+功能准备：4158b05 chore: prepare p0 staging test
+测试清单：6d17ace docs: add staging test checklist
 ```
+
+最新提交以 `git log --oneline --decorate -3` 为准。
 
 这次 staging 覆盖的 P0 范围：
 
