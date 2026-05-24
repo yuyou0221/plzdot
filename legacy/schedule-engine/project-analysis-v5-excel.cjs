@@ -18,6 +18,7 @@ function parseArgs(argv) {
     projectName: '',
     today: '',
     plannedBufferDays: 0,
+    skipXlsxExport: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const key = argv[i];
@@ -32,6 +33,7 @@ function parseArgs(argv) {
     else if (key === '--scenario') args.scenario = String(next || 'A').trim().toUpperCase(), i++;
     else if (key === '--has-three-view') args.hasThreeView = !['false', '0', 'no'].includes(String(next || '').toLowerCase()), i++;
     else if (key === '--planned-buffer-days') args.plannedBufferDays = Number(next || 0), i++;
+    else if (key === '--skip-xlsx-export') args.skipXlsxExport = true;
     else throw new Error(`Unknown argument: ${key}`);
   }
   if (!Number.isFinite(args.plannedBufferDays) || args.plannedBufferDays < 0) {
@@ -923,7 +925,9 @@ function main() {
     'floatDays', 'planDeltaDays', 'deadlineRiskDays', 'warningWindowDays',
     'impactStatus', 'riskLevel', 'isBlockingLaunch',
   ]);
-  exportChineseWorkbook(args, jsonFile, xlsxFile);
+  if (!args.skipXlsxExport) {
+    exportChineseWorkbook(args, jsonFile, xlsxFile);
+  }
 
   const summary = {
     generatedAt: today,
@@ -933,7 +937,7 @@ function main() {
     behindPlanTasks: payload.futureRows.filter(r => r.planDeltaDays > 0).length,
     jsonFile,
     csvFile,
-    xlsxFile,
+    xlsxFile: args.skipXlsxExport ? null : xlsxFile,
     errors: payload.warnings.errors.length,
     unmatchedActualCount: payload.warnings.unmatchedActualCount,
   };

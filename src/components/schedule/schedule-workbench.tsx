@@ -1,6 +1,6 @@
 "use client";
 
-import type { DragEvent as ReactDragEvent, ReactNode } from "react";
+import type { ChangeEvent, DragEvent as ReactDragEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -115,6 +115,8 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
   const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [operationTone, setOperationTone] = useState<"info" | "warning">("info");
   const [isSavingCalendarDrafts, setIsSavingCalendarDrafts] = useState(false);
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const excelInputRef = useRef<HTMLInputElement | null>(null);
 
   const visibleCards = useMemo(() => {
     return data.projectCards.filter((card) => {
@@ -276,10 +278,18 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
+              <input
+                ref={excelInputRef}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={handleExcelImportSelected}
+              />
               <ActionButton
                 icon={<Upload size={16} />}
-                label="导入 Excel"
-                onClick={() => notifyPlaceholder("Excel 导入会在接入数据校验后开放。")}
+                label={isImportingExcel ? "导入中..." : "导入 Excel"}
+                onClick={() => excelInputRef.current?.click()}
+                disabled={isImportingExcel}
               />
               <ActionButton icon={<Database size={16} />} label="重新测算" onClick={handleAnalyze} />
               <ActionButton
@@ -609,6 +619,44 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
       setOperationMessage("保存接口暂时不可用，当前草稿仍保留在页面上。");
     } finally {
       setIsSavingCalendarDrafts(false);
+    }
+  }
+
+  async function handleExcelImportSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file || isImportingExcel) {
+      return;
+    }
+
+    setIsImportingExcel(true);
+    setOperationTone("info");
+    setOperationMessage(`正在导入 ${file.name}，会先运行排期内核再写入看板...`);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("today", new Date().toISOString().slice(0, 10));
+
+      const response = await fetch("/api/schedule/import-excel", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string };
+
+      setOperationTone(response.ok && result.ok ? "info" : "warning");
+      setOperationMessage(result.message ?? "Excel 导入接口已响应。");
+
+      if (response.ok && result.ok) {
+        setCalendarDateOverrides({});
+        router.refresh();
+      }
+    } catch {
+      setOperationTone("warning");
+      setOperationMessage("Excel 导入接口暂时不可用，请稍后重试。");
+    } finally {
+      setIsImportingExcel(false);
     }
   }
 
@@ -2109,11 +2157,25 @@ function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
   );
 }
 
-function ActionButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick?: () => void }) {
+function ActionButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       onClick={onClick}
-      className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+      disabled={disabled}
+      className={clsx(
+        "inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50",
+        disabled ? "cursor-not-allowed opacity-60" : "",
+      )}
     >
       {icon}
       {label}
