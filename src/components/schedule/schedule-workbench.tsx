@@ -280,34 +280,6 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <ImportPickerLabel
-                icon={<Upload size={16} />}
-                label={isImportingExcel ? "导入中..." : "选择 Excel"}
-                disabled={isImportingExcel}
-              >
-                <input
-                  type="file"
-                  accept=".xlsx"
-                  disabled={isImportingExcel}
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                  onChange={handleExcelImportSelected}
-                />
-              </ImportPickerLabel>
-              <ImportPickerLabel
-                icon={<FolderOpen size={16} />}
-                label="选择文件夹"
-                disabled={isImportingExcel}
-              >
-                <input
-                  type="file"
-                  accept=".xlsx"
-                  multiple
-                  disabled={isImportingExcel}
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                  onChange={handleExcelFolderSelected}
-                  {...{ webkitdirectory: "", directory: "" }}
-                />
-              </ImportPickerLabel>
               <ActionButton icon={<Database size={16} />} label="重新测算" onClick={handleAnalyze} />
               <ActionButton
                 icon={<Download size={16} />}
@@ -336,12 +308,58 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
             onDragLeave={handleExcelDragLeave}
             onDrop={handleExcelDrop}
             className={clsx(
-              "mt-3 rounded-lg border border-dashed px-3 py-2 text-sm",
-              isExcelDragActive ? "border-blue-400 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-500",
+              "mt-3 rounded-lg border p-3",
+              isExcelDragActive ? "border-blue-400 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-600",
             )}
           >
-            <span className="font-semibold text-slate-700">项目排期 Excel：</span>
-            可以点击上方选择，也可以把 .xlsx 拖到这里导入。选择文件夹时，建议只选放项目排期表的小文件夹。
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Upload size={16} />
+                  项目排期 Excel 导入
+                </div>
+                <p className="mt-1 text-xs text-slate-500">优先选择单个 .xlsx；也可以把文件拖到这个区域。选择文件夹时，建议只选放排期表的小文件夹。</p>
+              </div>
+              <div className="text-xs font-semibold text-slate-500">{isImportingExcel ? "正在导入..." : "等待选择文件"}</div>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <Upload size={14} />
+                  选择单个 Excel
+                </span>
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  disabled={isImportingExcel}
+                  className="block w-full rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-700 file:mr-3 file:border-0 file:bg-rose-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-rose-700 hover:file:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  onChange={handleExcelImportSelected}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <FolderOpen size={14} />
+                  选择文件夹
+                </span>
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  multiple
+                  disabled={isImportingExcel}
+                  className="block w-full rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-700 file:mr-3 file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  onChange={handleExcelFolderSelected}
+                  {...{ webkitdirectory: "", directory: "" }}
+                />
+              </label>
+            </div>
+            <div
+              className={clsx(
+                "mt-3 rounded-lg border border-dashed px-3 py-3 text-center text-sm",
+                isExcelDragActive ? "border-blue-400 bg-white text-blue-900" : "border-slate-200 bg-slate-50 text-slate-500",
+              )}
+            >
+              把 .xlsx 拖到这里也可以导入
+            </div>
           </section>
 
           {folderExcelCandidates.length > 0 ? (
@@ -2323,33 +2341,6 @@ function ActionButton({
       {icon}
       {label}
     </button>
-  );
-}
-
-function ImportPickerLabel({
-  icon,
-  label,
-  disabled,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <label
-      className={clsx(
-        "relative inline-flex h-9 items-center overflow-hidden rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50",
-        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
-      )}
-    >
-      {children}
-      <span className="pointer-events-none inline-flex items-center gap-2">
-        {icon}
-        {label}
-      </span>
-    </label>
   );
 }
 
