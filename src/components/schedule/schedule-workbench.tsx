@@ -13,6 +13,7 @@ import {
   Database,
   Download,
   FilePenLine,
+  FolderOpen,
   Gauge,
   ListFilter,
   Plus,
@@ -116,7 +117,9 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
   const [operationTone, setOperationTone] = useState<"info" | "warning">("info");
   const [isSavingCalendarDrafts, setIsSavingCalendarDrafts] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const [folderExcelCandidates, setFolderExcelCandidates] = useState<File[]>([]);
   const excelInputRef = useRef<HTMLInputElement | null>(null);
+  const excelFolderInputRef = useRef<HTMLInputElement | null>(null);
 
   const visibleCards = useMemo(() => {
     return data.projectCards.filter((card) => {
@@ -285,10 +288,25 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
                 className="hidden"
                 onChange={handleExcelImportSelected}
               />
+              <input
+                ref={excelFolderInputRef}
+                type="file"
+                accept=".xlsx"
+                multiple
+                className="hidden"
+                onChange={handleExcelFolderSelected}
+                {...{ webkitdirectory: "", directory: "" }}
+              />
               <ActionButton
                 icon={<Upload size={16} />}
-                label={isImportingExcel ? "导入中..." : "导入 Excel"}
+                label={isImportingExcel ? "导入中..." : "选择 Excel"}
                 onClick={() => excelInputRef.current?.click()}
+                disabled={isImportingExcel}
+              />
+              <ActionButton
+                icon={<FolderOpen size={16} />}
+                label="选择文件夹"
+                onClick={() => excelFolderInputRef.current?.click()}
                 disabled={isImportingExcel}
               />
               <ActionButton icon={<Database size={16} />} label="重新测算" onClick={handleAnalyze} />
@@ -311,6 +329,38 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
             >
               {operationMessage}
             </div>
+          ) : null}
+
+          {folderExcelCandidates.length > 0 ? (
+            <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-blue-950">选择要导入的 Excel</div>
+                  <div className="mt-1 text-xs text-blue-800">
+                    已从文件夹中识别到 {folderExcelCandidates.length} 个 .xlsx 文件，页面不会读取或上传其他文件。
+                  </div>
+                </div>
+                <button
+                  onClick={() => setFolderExcelCandidates([])}
+                  className="rounded-md px-2 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+                >
+                  收起
+                </button>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {folderExcelCandidates.map((file) => (
+                  <button
+                    key={`${localExcelFilePath(file)}-${file.lastModified}-${file.size}`}
+                    onClick={() => importScheduleExcel(file)}
+                    disabled={isImportingExcel}
+                    className="min-w-0 rounded-lg border border-blue-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <div className="truncate font-semibold text-slate-900">{file.name}</div>
+                    <div className="mt-1 truncate text-xs text-slate-500">{localExcelFilePath(file)}</div>
+                  </button>
+                ))}
+              </div>
+            </section>
           ) : null}
 
           <section className="mt-5 grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
@@ -626,7 +676,42 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
     const file = event.target.files?.[0];
     event.target.value = "";
 
-    if (!file || isImportingExcel) {
+    if (!file) {
+      return;
+    }
+
+    setFolderExcelCandidates([]);
+    await importScheduleExcel(file);
+  }
+
+  async function handleExcelFolderSelected(event: ChangeEvent<HTMLInputElement>) {
+    const files = excelFilesFromFileList(event.target.files);
+    event.target.value = "";
+
+    if (isImportingExcel) {
+      return;
+    }
+
+    if (files.length === 0) {
+      setFolderExcelCandidates([]);
+      setOperationTone("warning");
+      setOperationMessage("这个文件夹里没有找到可导入的 .xlsx 文件。请确认选择的是项目排期 Excel 所在文件夹。");
+      return;
+    }
+
+    if (files.length === 1) {
+      setFolderExcelCandidates([]);
+      await importScheduleExcel(files[0]);
+      return;
+    }
+
+    setFolderExcelCandidates(files);
+    setOperationTone("info");
+    setOperationMessage(`这个文件夹里找到 ${files.length} 个 Excel。请在下方点击你要导入的那一份。`);
+  }
+
+  async function importScheduleExcel(file: File) {
+    if (isImportingExcel) {
       return;
     }
 
@@ -650,6 +735,7 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
 
       if (response.ok && result.ok) {
         setCalendarDateOverrides({});
+        setFolderExcelCandidates([]);
         router.refresh();
       }
     } catch {
@@ -2283,6 +2369,24 @@ function MiniStat({ label, value }: { label: string; value: number }) {
       <div>{label}</div>
     </div>
   );
+}
+
+function excelFilesFromFileList(files: FileList | null) {
+  return Array.from(files ?? [])
+    .filter((file) => file.name.toLowerCase().endsWith(".xlsx") && !file.name.startsWith("~$"))
+    .sort((a, b) => {
+      const timeDiff = b.lastModified - a.lastModified;
+
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+
+      return localExcelFilePath(a).localeCompare(localExcelFilePath(b), "zh-Hans-CN");
+    });
+}
+
+function localExcelFilePath(file: File) {
+  return file.webkitRelativePath || file.name;
 }
 
 function buildCalendarCycleOptions(currentMonths: string[], projects: CalendarProject[]): CalendarCycleOption[] {
