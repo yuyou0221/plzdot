@@ -117,9 +117,8 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
   const [operationTone, setOperationTone] = useState<"info" | "warning">("info");
   const [isSavingCalendarDrafts, setIsSavingCalendarDrafts] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const [isExcelDragActive, setIsExcelDragActive] = useState(false);
   const [folderExcelCandidates, setFolderExcelCandidates] = useState<File[]>([]);
-  const excelInputRef = useRef<HTMLInputElement | null>(null);
-  const excelFolderInputRef = useRef<HTMLInputElement | null>(null);
 
   const visibleCards = useMemo(() => {
     return data.projectCards.filter((card) => {
@@ -281,34 +280,34 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <input
-                ref={excelInputRef}
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                onChange={handleExcelImportSelected}
-              />
-              <input
-                ref={excelFolderInputRef}
-                type="file"
-                accept=".xlsx"
-                multiple
-                className="hidden"
-                onChange={handleExcelFolderSelected}
-                {...{ webkitdirectory: "", directory: "" }}
-              />
-              <ActionButton
+              <ImportPickerLabel
                 icon={<Upload size={16} />}
                 label={isImportingExcel ? "导入中..." : "选择 Excel"}
-                onClick={() => excelInputRef.current?.click()}
                 disabled={isImportingExcel}
-              />
-              <ActionButton
+              >
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  disabled={isImportingExcel}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                  onChange={handleExcelImportSelected}
+                />
+              </ImportPickerLabel>
+              <ImportPickerLabel
                 icon={<FolderOpen size={16} />}
                 label="选择文件夹"
-                onClick={() => excelFolderInputRef.current?.click()}
                 disabled={isImportingExcel}
-              />
+              >
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  multiple
+                  disabled={isImportingExcel}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                  onChange={handleExcelFolderSelected}
+                  {...{ webkitdirectory: "", directory: "" }}
+                />
+              </ImportPickerLabel>
               <ActionButton icon={<Database size={16} />} label="重新测算" onClick={handleAnalyze} />
               <ActionButton
                 icon={<Download size={16} />}
@@ -330,6 +329,20 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
               {operationMessage}
             </div>
           ) : null}
+
+          <section
+            onDragOver={handleExcelDragOver}
+            onDragEnter={handleExcelDragEnter}
+            onDragLeave={handleExcelDragLeave}
+            onDrop={handleExcelDrop}
+            className={clsx(
+              "mt-3 rounded-lg border border-dashed px-3 py-2 text-sm",
+              isExcelDragActive ? "border-blue-400 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-500",
+            )}
+          >
+            <span className="font-semibold text-slate-700">项目排期 Excel：</span>
+            可以点击上方选择，也可以把 .xlsx 拖到这里导入。选择文件夹时，建议只选放项目排期表的小文件夹。
+          </section>
 
           {folderExcelCandidates.length > 0 ? (
             <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
@@ -708,6 +721,50 @@ export function ScheduleWorkbench({ data }: { data: ScheduleWorkbenchData }) {
     setFolderExcelCandidates(files);
     setOperationTone("info");
     setOperationMessage(`这个文件夹里找到 ${files.length} 个 Excel。请在下方点击你要导入的那一份。`);
+  }
+
+  function handleExcelDragOver(event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+  }
+
+  function handleExcelDragEnter(event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    if (!isImportingExcel) {
+      setIsExcelDragActive(true);
+    }
+  }
+
+  function handleExcelDragLeave(event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsExcelDragActive(false);
+  }
+
+  async function handleExcelDrop(event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsExcelDragActive(false);
+
+    if (isImportingExcel) {
+      return;
+    }
+
+    const files = excelFilesFromFileList(event.dataTransfer.files);
+
+    if (files.length === 0) {
+      setFolderExcelCandidates([]);
+      setOperationTone("warning");
+      setOperationMessage("拖入的内容里没有找到可导入的 .xlsx 文件。");
+      return;
+    }
+
+    if (files.length === 1) {
+      setFolderExcelCandidates([]);
+      await importScheduleExcel(files[0]);
+      return;
+    }
+
+    setFolderExcelCandidates(files);
+    setOperationTone("info");
+    setOperationMessage(`拖入的内容里找到 ${files.length} 个 Excel。请在下方点击你要导入的那一份。`);
   }
 
   async function importScheduleExcel(file: File) {
@@ -2266,6 +2323,33 @@ function ActionButton({
       {icon}
       {label}
     </button>
+  );
+}
+
+function ImportPickerLabel({
+  icon,
+  label,
+  disabled,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <label
+      className={clsx(
+        "relative inline-flex h-9 items-center overflow-hidden rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+      )}
+    >
+      {children}
+      <span className="pointer-events-none inline-flex items-center gap-2">
+        {icon}
+        {label}
+      </span>
+    </label>
   );
 }
 
