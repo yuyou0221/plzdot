@@ -20,10 +20,10 @@ import {
   Search,
   Table2,
   Trash2,
-  Upload,
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
+import { ScheduleProjectImportPanel } from "@/components/schedule/schedule-project-import-panel";
 import type { AuthUser } from "@/lib/auth/permissions";
 import {
   type CalendarProject,
@@ -250,13 +250,6 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               用户数据
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
             </button>
-            <button
-              onClick={() => router.push("/imports")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              数据导入
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">预览</span>
-            </button>
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>
@@ -306,25 +299,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
             </div>
           ) : null}
 
-          <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-slate-600">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <Upload size={16} />
-                  项目主数据导入
-                </div>
-                <p className="mt-1 text-xs text-slate-500">Excel 导入必须先生成预览并校验，确认后才会写入项目主数据。</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => router.push("/imports")}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white hover:bg-slate-800"
-              >
-                <Upload size={14} />
-                打开数据导入
-              </button>
-            </div>
-          </section>
+          <ScheduleProjectImportPanel currentUser={currentUser} />
 
           <section className="mt-5 grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
             {data.metrics.map((metric, index) => (
