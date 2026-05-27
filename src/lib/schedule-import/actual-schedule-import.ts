@@ -63,6 +63,12 @@ export async function importActualSchedulePayload(payloadPath: string): Promise<
   const runId = `actual-import-${Date.now()}`;
   const tasks = payload.rows.filter((row) => row.projectId && Number.isFinite(Number(row.taskId)));
 
+  if (payload.projects.length === 0 || tasks.length === 0) {
+    throw new Error(
+      `排期测算结果为空，已拒绝写入数据库。请确认上传的是完整项目排期源表，而不是项目主数据导入表或其他模板。项目数：${payload.projects.length}，任务数：${tasks.length}。`,
+    );
+  }
+
   await prisma.$transaction(async (tx) => {
     await clearScheduleData(tx);
 

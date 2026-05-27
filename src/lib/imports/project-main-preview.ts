@@ -382,6 +382,10 @@ function matchProject(
   if (identityMatches.length === 1) return { status: "matched", matchBy: "项目名称 + IP + 版权方", project: identityMatches[0] };
   if (identityMatches.length > 1) return { status: "conflict", matchBy: "项目名称 + IP + 版权方匹配到多个项目" };
 
+  const nameMatches = existingProjects.filter((project) => normalizeKey(project.projectName) === normalizeKey(candidate.projectName));
+  if (nameMatches.length === 1) return { status: "matched", matchBy: "项目名称唯一匹配", project: nameMatches[0] };
+  if (nameMatches.length > 1) return { status: "conflict", matchBy: "项目名称匹配到多个项目" };
+
   return { status: "new", matchBy: "未匹配，将新增" };
 }
 
