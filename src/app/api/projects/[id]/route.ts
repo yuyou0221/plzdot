@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { getProjectDetail } from "@/lib/schedule-repository";
 import { prisma } from "@/lib/db/prisma";
+import { affectedLaunchMonthKeys, normalizeProjectLaunchDatesForMonths } from "@/lib/planned-launch-normalization";
 
 export const runtime = "nodejs";
 
@@ -65,16 +66,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 
   try {
-    const project = await prisma.project.update({
-      where: { id },
-      data,
-      select: {
-        id: true,
-        projectName: true,
-        plannedLaunchDate: true,
-        routeType: true,
-        projectTeamId: true,
-      },
+    const project = await prisma.$transaction(async (tx) => {
+      const existingProject = plannedLaunchDate
+        ? await tx.project.findUnique({ where: { id }, select: { plannedLaunchDate: true } })
+        : null;
+      const updatedProject = await tx.project.update({
+        where: { id },
+        data,
+        select: { id: true },
+      });
+
+      await normalizeProjectLaunchDatesForMonths(
+        tx,
+        affectedLaunchMonthKeys(existingProject?.plannedLaunchDate, plannedLaunchDate),
+      );
+
+      return tx.project.findUniqueOrThrow({
+        where: { id: updatedProject.id },
+        select: {
+          id: true,
+          projectName: true,
+          plannedLaunchDate: true,
+          routeType: true,
+          projectTeamId: true,
+        },
+      });
     });
 
     return NextResponse.json({

@@ -3,6 +3,8 @@ import "server-only";
 import path from "node:path";
 import { prisma } from "@/lib/db/prisma";
 import { previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
+import { affectedLaunchMonthKeys, normalizeProjectLaunchDatesForMonths } from "@/lib/planned-launch-normalization";
+import { launchMonthKeyFromDate } from "@/lib/planned-launch-rules";
 
 type ProjectPreviewRow = ProjectMainImportPreview["rows"][number];
 
@@ -56,9 +58,22 @@ export async function applyProjectMainImport(
 
     let createdProjects = 0;
     let updatedProjects = 0;
+    const affectedMonths = new Set<string>();
 
     for (const row of preview.rows) {
+      if (row.plannedLaunchDate) {
+        affectedMonths.add(launchMonthKeyFromDate(dateOnly(row.plannedLaunchDate)));
+      }
+
       if (row.matchStatus === "matched" && row.matchedProjectId) {
+        const existingProject = await tx.project.findUnique({
+          where: { id: row.matchedProjectId },
+          select: { plannedLaunchDate: true },
+        });
+        for (const monthKey of affectedLaunchMonthKeys(existingProject?.plannedLaunchDate)) {
+          affectedMonths.add(monthKey);
+        }
+
         await tx.project.update({
           where: { id: row.matchedProjectId },
           data: projectUpdateData(row, importRecord.id),
@@ -76,6 +91,8 @@ export async function applyProjectMainImport(
         createdProjects += 1;
       }
     }
+
+    await normalizeProjectLaunchDatesForMonths(tx, affectedMonths);
 
     return {
       ok: true,

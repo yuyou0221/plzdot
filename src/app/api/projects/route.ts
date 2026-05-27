@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
+import { normalizeProjectLaunchDatesForMonths } from "@/lib/planned-launch-normalization";
+import { launchMonthKeyFromDate } from "@/lib/planned-launch-rules";
 
 export const runtime = "nodejs";
 
@@ -35,21 +37,30 @@ export async function POST(request: Request) {
   }
 
   try {
-    const project = await prisma.project.create({
-      data: {
-        projectName,
-        plannedLaunchDate,
-        routeType: normalizeOptionalText(payload.routeType),
-        projectTeamId: normalizeOptionalText(payload.projectTeamId),
-        status: "进行中",
-      },
-      select: {
-        id: true,
-        projectName: true,
-        plannedLaunchDate: true,
-        routeType: true,
-        projectTeamId: true,
-      },
+    const project = await prisma.$transaction(async (tx) => {
+      const createdProject = await tx.project.create({
+        data: {
+          projectName,
+          plannedLaunchDate,
+          routeType: normalizeOptionalText(payload.routeType),
+          projectTeamId: normalizeOptionalText(payload.projectTeamId),
+          status: "进行中",
+        },
+        select: { id: true },
+      });
+
+      await normalizeProjectLaunchDatesForMonths(tx, [launchMonthKeyFromDate(plannedLaunchDate)]);
+
+      return tx.project.findUniqueOrThrow({
+        where: { id: createdProject.id },
+        select: {
+          id: true,
+          projectName: true,
+          plannedLaunchDate: true,
+          routeType: true,
+          projectTeamId: true,
+        },
+      });
     });
 
     return NextResponse.json({

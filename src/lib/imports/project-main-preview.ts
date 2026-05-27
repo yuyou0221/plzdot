@@ -3,6 +3,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { prisma } from "@/lib/db/prisma";
+import { suggestedLaunchDateForMonthIndex } from "@/lib/planned-launch-rules";
 
 type ExtractedWorkbook = {
   workbook: string;
@@ -119,6 +120,7 @@ const PROJECT_LEVEL_FIELDS = ["项目等级"];
 const ROUTE_TYPE_FIELDS = ["路线", "红蜡路线or手板路线"];
 const NEED_THREE_VIEW_FIELDS = ["是否需要三视图"];
 const ANNUAL_PLAN_FIELDS = ["年度规划"];
+const LAUNCH_ORDER_FIELDS = ["上线顺序", "上线排序", "月内顺序", "上线序号"];
 const URGENCY_FIELDS = ["紧急程度"];
 const NOTES_FIELDS = ["备注"];
 const CALCULATED_IMPORT_FIELDS = [
@@ -146,8 +148,17 @@ export async function previewProjectMainImport(workbookPath: string, fileName: s
   const existingProjects = existingProjectResult.projects;
   const existingRefs = buildExistingRefs(existingProjects);
   const duplicateIndexes = duplicateIdentityIndexes(projectRecords);
+  const suggestedLaunchDateByIndex = buildSuggestedLaunchDateByIndex(projectRecords);
   const rows = projectRecords.map((record, index) =>
-    previewProjectRow(record, index, existingProjects, existingRefs, duplicateIndexes, existingProjectResult.canMatchExisting),
+    previewProjectRow(
+      record,
+      index,
+      existingProjects,
+      existingRefs,
+      duplicateIndexes,
+      existingProjectResult.canMatchExisting,
+      suggestedLaunchDateByIndex,
+    ),
   );
   const issueCounts = countIssues(rows);
 
@@ -254,6 +265,7 @@ function previewProjectRow(
   existingRefs: ReturnType<typeof buildExistingRefs>,
   duplicateIndexes: Set<number>,
   canMatchExisting: boolean,
+  suggestedLaunchDateByIndex: Map<number, string>,
 ): ProjectPreviewRow {
   const projectId = stringFieldAny(record, PROJECT_ID_FIELDS);
   const projectName = stringFieldAny(record, PROJECT_NAME_FIELDS);
@@ -261,8 +273,9 @@ function previewProjectRow(
   const licensorName = stringFieldAny(record, LICENSOR_FIELDS);
   const ipName = stringFieldAny(record, IP_FIELDS);
   const productType = stringFieldAny(record, PRODUCT_TYPE_FIELDS);
-  const plannedLaunchDate = plannedLaunchDateFromRecord(record);
-  const plannedLaunchMonth = monthFromDateString(plannedLaunchDate) || monthFromValue(fieldAny(record, PLANNED_LAUNCH_MONTH_FIELDS));
+  const plannedLaunchDate = plannedLaunchDateFromRecord(record, suggestedLaunchDateByIndex.get(index));
+  const plannedLaunchMonth =
+    monthFromDateString(plannedLaunchDate) || plannedLaunchMonthFromRecord(record);
   const projectStartDate = dateFromValue(fieldAny(record, PROJECT_START_DATE_FIELDS));
   const projectTeam = stringFieldAny(record, PROJECT_TEAM_FIELDS);
   const productOwner = stringFieldAny(record, PRODUCT_OWNER_FIELDS);
@@ -458,6 +471,7 @@ function isProjectRecordCandidate(record: Record<string, unknown>) {
     ...PRODUCT_TYPE_FIELDS,
     ...PLANNED_LAUNCH_DATE_FIELDS,
     ...PLANNED_LAUNCH_MONTH_FIELDS,
+    ...LAUNCH_ORDER_FIELDS,
     ...PROJECT_TEAM_FIELDS,
     ...STATUS_FIELDS,
   ];
@@ -534,14 +548,112 @@ function calculatedFieldsInRecord(record: Record<string, unknown>) {
   return Object.keys(record).filter((key) => blockedKeys.has(normalizeHeaderKey(key)) && !isBlankValue(record[key]));
 }
 
-function plannedLaunchDateFromRecord(record: Record<string, unknown>) {
-  const plannedDate = dateFromValue(fieldAny(record, PLANNED_LAUNCH_DATE_FIELDS));
+function plannedLaunchDateFromRecord(record: Record<string, unknown>, suggestedLaunchDate: string | undefined) {
+  const plannedDate = exactDateFromValue(fieldAny(record, PLANNED_LAUNCH_DATE_FIELDS));
   if (plannedDate) {
     return plannedDate;
   }
 
-  const plannedMonth = monthFromValue(fieldAny(record, PLANNED_LAUNCH_MONTH_FIELDS));
-  return plannedMonth ? `${plannedMonth}-01` : "";
+  return suggestedLaunchDate ?? "";
+}
+
+function buildSuggestedLaunchDateByIndex(records: Array<Record<string, unknown>>) {
+  const groups = new Map<string, Array<{ index: number; record: Record<string, unknown> }>>();
+
+  records.forEach((record, index) => {
+    if (exactDateFromValue(fieldAny(record, PLANNED_LAUNCH_DATE_FIELDS))) {
+      return;
+    }
+
+    const plannedMonth = plannedLaunchMonthFromRecord(record);
+    if (!plannedMonth) {
+      return;
+    }
+
+    groups.set(plannedMonth, [...(groups.get(plannedMonth) ?? []), { index, record }]);
+  });
+
+  const result = new Map<number, string>();
+
+  for (const [month, items] of groups.entries()) {
+    const orderedItems = items.sort((a, b) => compareLaunchOrder(a.record, b.record, a.index, b.index));
+
+    orderedItems.forEach((item, index) => {
+      result.set(item.index, suggestedLaunchDateForMonthIndex(month, index, orderedItems.length));
+    });
+  }
+
+  return result;
+}
+
+function plannedLaunchMonthFromRecord(record: Record<string, unknown>) {
+  return (
+    monthFromValue(fieldAny(record, PLANNED_LAUNCH_MONTH_FIELDS)) ||
+    monthFromValue(fieldAny(record, PLANNED_LAUNCH_DATE_FIELDS))
+  );
+}
+
+function compareLaunchOrder(a: Record<string, unknown>, b: Record<string, unknown>, aIndex: number, bIndex: number) {
+  const launchOrder = compareNullableNumber(numberFieldAny(a, LAUNCH_ORDER_FIELDS), numberFieldAny(b, LAUNCH_ORDER_FIELDS));
+  if (launchOrder !== 0) return launchOrder;
+
+  const projectCodeOrder = compareNullableNumber(
+    projectCodeSortValue(normalizeCode(fieldAny(a, PROJECT_CODE_FIELDS))),
+    projectCodeSortValue(normalizeCode(fieldAny(b, PROJECT_CODE_FIELDS))),
+  );
+  if (projectCodeOrder !== 0) return projectCodeOrder;
+
+  return aIndex - bIndex;
+}
+
+function compareNullableNumber(a: number | null, b: number | null) {
+  if (a !== null && b !== null && a !== b) return a - b;
+  if (a !== null && b === null) return -1;
+  if (a === null && b !== null) return 1;
+  return 0;
+}
+
+function projectCodeSortValue(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return null;
+  const number = Number(digits);
+  return Number.isFinite(number) ? number : null;
+}
+
+function exactDateFromValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatDate(value);
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const excelEpoch = Date.UTC(1899, 11, 30, 12);
+    return formatDate(new Date(excelEpoch + Math.round(value) * 24 * 60 * 60 * 1000));
+  }
+
+  const text = String(value).trim();
+  const dateMatch = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (dateMatch) {
+    return `${dateMatch[1]}-${String(Number(dateMatch[2])).padStart(2, "0")}-${String(Number(dateMatch[3])).padStart(2, "0")}`;
+  }
+
+  const shortDateMatch = text.match(/^(\d{2})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (shortDateMatch) {
+    return `${2000 + Number(shortDateMatch[1])}-${String(Number(shortDateMatch[2])).padStart(2, "0")}-${String(Number(shortDateMatch[3])).padStart(2, "0")}`;
+  }
+
+  const chineseMatch = text.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/);
+  if (chineseMatch) {
+    return `${chineseMatch[1]}-${String(Number(chineseMatch[2])).padStart(2, "0")}-${String(Number(chineseMatch[3])).padStart(2, "0")}`;
+  }
+
+  const shortChineseMatch = text.match(/^(\d{2})年(\d{1,2})月(\d{1,2})日?$/);
+  if (shortChineseMatch) {
+    return `${2000 + Number(shortChineseMatch[1])}-${String(Number(shortChineseMatch[2])).padStart(2, "0")}-${String(Number(shortChineseMatch[3])).padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) || !/\d{1,2}[-/]\d{1,2}/.test(text) ? "" : formatDate(parsed);
 }
 
 function isBlankValue(value: unknown) {

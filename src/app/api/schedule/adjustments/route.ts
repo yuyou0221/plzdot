@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
+import { normalizeProjectLaunchDatesForMonths } from "@/lib/planned-launch-normalization";
+import { launchMonthKeyFromDate } from "@/lib/planned-launch-rules";
 
 export const runtime = "nodejs";
 
@@ -82,7 +84,14 @@ export async function POST(request: Request) {
     }
 
     const savedAdjustments = await prisma.$transaction(async (tx) => {
-      const saved: SavedAdjustment[] = [];
+      const changedProjects: Array<{
+        projectId: string;
+        projectName: string;
+        fromDate: Date;
+        targetDate: Date;
+        reason?: string;
+      }> = [];
+      const affectedMonths = new Set<string>();
 
       for (const adjustment of normalizedAdjustments) {
         const project = projectById.get(adjustment.projectId);
@@ -108,19 +117,51 @@ export async function POST(request: Request) {
           data: { plannedLaunchDate: dateOnly(toValue) },
         });
 
-        const taskCardId = `calendar:${project.id}`;
-        const fromMonth = formatMonthLabel(dateToMonthPoint(project.plannedLaunchDate));
-        const toMonth = formatMonthLabel(dateToMonthPoint(targetDate));
+        affectedMonths.add(launchMonthKeyFromDate(project.plannedLaunchDate));
+        affectedMonths.add(launchMonthKeyFromDate(targetDate));
+        changedProjects.push({
+          projectId: project.id,
+          projectName: project.projectName,
+          fromDate: project.plannedLaunchDate,
+          targetDate,
+          reason: adjustment.reason,
+        });
+      }
+
+      await normalizeProjectLaunchDatesForMonths(tx, affectedMonths);
+
+      const saved: SavedAdjustment[] = [];
+
+      for (const changedProject of changedProjects) {
+        const updatedProject = await tx.project.findUnique({
+          where: { id: changedProject.projectId },
+          select: { plannedLaunchDate: true },
+        });
+
+        if (!updatedProject) {
+          continue;
+        }
+
+        const fromValue = formatDate(changedProject.fromDate);
+        const toValue = formatDate(updatedProject.plannedLaunchDate);
+
+        if (fromValue === toValue) {
+          continue;
+        }
+
+        const taskCardId = `calendar:${changedProject.projectId}`;
+        const fromMonth = formatMonthLabel(dateToMonthPoint(changedProject.fromDate));
+        const toMonth = formatMonthLabel(dateToMonthPoint(updatedProject.plannedLaunchDate));
         const createdAdjustment = await tx.scheduleAdjustment.create({
           data: {
             taskCardId,
             entityType: "Project",
-            entityId: project.id,
+            entityId: changedProject.projectId,
             adjustmentType: "上线日历调整",
             changedField: "plannedLaunchDate",
             fromValue,
             toValue,
-            reason: adjustment.reason ?? `${project.projectName} 计划上线从 ${fromValue} 调整到 ${toValue}`,
+            reason: changedProject.reason ?? `${changedProject.projectName} 计划上线从 ${fromValue} 调整到 ${toValue}`,
             requiresSimulation: true,
             affectsFinance: true,
             affectsReview: false,
@@ -134,7 +175,7 @@ export async function POST(request: Request) {
             taskCardId,
             cardType: "上线日历项目卡",
             entityType: "Project",
-            entityId: project.id,
+            entityId: changedProject.projectId,
             fromLaneType: "launchMonth",
             fromLaneKey: fromMonth,
             toLaneType: "launchMonth",
@@ -144,15 +185,15 @@ export async function POST(request: Request) {
             toValue,
             adjustmentId: createdAdjustment.id,
             confirmed: true,
-            dragReason: adjustment.reason ?? "上线日历拖拽调整",
+            dragReason: changedProject.reason ?? "上线日历拖拽调整",
             draggedByName: "项目排期页面",
           },
         });
 
         saved.push({
           adjustmentId: createdAdjustment.id,
-          projectId: project.id,
-          projectName: project.projectName,
+          projectId: changedProject.projectId,
+          projectName: changedProject.projectName,
           fromMonth,
           toMonth,
           fromValue,
