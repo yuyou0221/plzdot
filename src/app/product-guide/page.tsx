@@ -5,8 +5,8 @@ import { getProductGuideData } from "@/lib/product-guide-repository";
 export const dynamic = "force-dynamic";
 
 export default async function ProductGuidePage() {
-  await requireCurrentUser("/product-guide");
+  const currentUser = await requireCurrentUser("/product-guide");
   const data = await getProductGuideData();
 
-  return <ProductGuideWorkbench data={data} />;
+  return <ProductGuideWorkbench currentUser={currentUser} data={data} />;
 }

@@ -18,6 +18,32 @@ export type ProductGuideFilterOption = {
 
 export type ProductGuideDueBucket = "today" | "this-week" | "later" | "none";
 
+export type ProductGuideRecentUpdate = {
+  id: string;
+  updateType: string;
+  note?: string;
+  createdAt: string;
+  updatedByName?: string;
+  newValueSummary?: string;
+};
+
+export type ProductGuideStyleSummary = {
+  id: string;
+  projectId: string;
+  projectTaskId: string;
+  styleCode: string;
+  styleName: string;
+  isRequired: boolean;
+  originalArtStatus: string;
+  originalArtApprovedDate?: string;
+  difficulty: string;
+  estimatedWorkdays: number;
+  status: string;
+  plannedFinishDate?: string;
+  actualFinishDate?: string;
+  lastUpdatedAt?: string;
+};
+
 export type ProductGuideItemSource =
   | "schedule-task"
   | "project-task"
@@ -64,6 +90,7 @@ export type ProductGuideItem = {
   nextStep: string;
   relatedProjectProgress: string;
   riskCopy: string;
+  recentUpdates: ProductGuideRecentUpdate[];
 };
 
 export type ProductGuideMilestoneCard = {
@@ -97,4 +124,5 @@ export type ProductGuideData = {
     people: ProductGuideFilterOption[];
   };
   items: ProductGuideItem[];
+  styleSummaries: ProductGuideStyleSummary[];
 };

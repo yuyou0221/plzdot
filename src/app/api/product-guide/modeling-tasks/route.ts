@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import {
+  formatDate,
   optionalText,
+  parseDateOnly,
   parseNonNegativeInt,
   parsePositiveInt,
   requiredText,
@@ -55,7 +57,8 @@ export async function POST(request: Request) {
     const count = styleNames.length > 0 ? styleNames.length : styleCount ?? 0;
     const difficulty = optionalText(payload.difficulty) ?? "常规款";
     const estimatedWorkdays = parseNonNegativeInt(payload.estimatedWorkdays, 7) || 7;
-    const originalArtStatus = optionalText(payload.originalArtStatus) ?? "未过审";
+    const originalArtApprovedDate = parseDateOnly(payload.originalArtApprovedDate);
+    const originalArtStatus = originalArtApprovedDate ? "已过审" : optionalText(payload.originalArtStatus) ?? "未过审";
     const isRequired = typeof payload.isRequired === "boolean" ? payload.isRequired : true;
     const now = new Date();
 
@@ -79,6 +82,7 @@ export async function POST(request: Request) {
               styleName,
               isRequired,
               originalArtStatus,
+              originalArtApprovedDate,
               difficulty,
               estimatedWorkdays,
               status: "未分配",
@@ -135,6 +139,8 @@ export async function POST(request: Request) {
           newValue: {
             createdStyleCount: count,
             styleNames: tasks.map((task) => task.styleName),
+            originalArtStatus,
+            originalArtApprovedDate: originalArtApprovedDate ? formatDate(originalArtApprovedDate) : null,
           },
           note: optionalText(payload.note),
           updatedByName: operatorName,

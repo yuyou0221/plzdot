@@ -9,7 +9,8 @@ import {
   ListChecks,
   Palette,
 } from "lucide-react";
-import { LogoutButton } from "@/components/auth/logout-button";
+import { AccountPanel } from "@/components/auth/account-panel";
+import type { AuthUser } from "@/lib/auth/permissions";
 import type {
   ProjectAnalysisData,
   ProjectAnalysisMetric,
@@ -40,7 +41,7 @@ const metricClass: Record<ProjectAnalysisMetric["tone"], string> = {
   danger: "border-rose-200 bg-rose-50",
 };
 
-export function ProjectAnalysisPage({ data }: { data: ProjectAnalysisData }) {
+export function ProjectAnalysisPage({ currentUser, data }: { currentUser: AuthUser; data: ProjectAnalysisData }) {
   return (
     <div className="min-h-screen bg-[#f3f6f8] text-slate-950">
       <div className="grid min-h-screen grid-cols-[240px_minmax(0,1fr)] max-xl:grid-cols-1">
@@ -55,7 +56,7 @@ export function ProjectAnalysisPage({ data }: { data: ProjectAnalysisData }) {
             <NavLink href="/modeling" label="建模排期" badge="P0" />
             <NavLink href="/users" label="用户数据" badge="基础" />
           </nav>
-          <LogoutButton />
+          <AccountPanel currentUser={currentUser} />
         </aside>
 
         <main className="min-w-0 px-6 py-4 max-md:px-4">

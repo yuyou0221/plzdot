@@ -79,7 +79,6 @@ def excel_serial_to_date(value):
         return None
     if not math.isfinite(serial):
         return None
-    # Excel's 1900 date system, including the historical leap-year offset.
     date = datetime(1899, 12, 30) + timedelta(days=serial)
     return date.strftime("%Y-%m-%d")
 
@@ -87,8 +86,7 @@ def excel_serial_to_date(value):
 def looks_like_date_header(header):
     if header is None:
         return False
-    text = str(header)
-    return any(marker in text for marker in ["日期", "时间", "启动", "出货", "完成"])
+    return any(marker in str(header) for marker in ["日期", "时间", "开始", "完成", "通过", "过审", "更新"])
 
 
 def is_date_format(code):
@@ -209,8 +207,8 @@ def records_from_rows(rows):
         return []
     headers = [normalize_header(value) for value in rows[0]]
     records = []
-    for row in rows[1:]:
-        record = {}
+    for row_index, row in enumerate(rows[1:], start=2):
+        record = {"_rowNumber": row_index}
         has_value = False
         for index, header in enumerate(headers):
             if not header:
@@ -225,20 +223,18 @@ def records_from_rows(rows):
     return records
 
 
-def pick_project_sheets(sheet_names):
-    names = [
-        name
-        for name in sheet_names
-        if ("项目信息" in name or "项目" in name)
-        and "任务" not in name
-        and "进度" not in name
-    ]
-    return names or sheet_names[:1]
+def pick_sheet(sheet_names, candidates, fallback_index):
+    for name in sheet_names:
+        if any(candidate in name for candidate in candidates):
+            return name
+    if 0 <= fallback_index < len(sheet_names):
+        return sheet_names[fallback_index]
+    return None
 
 
 def main():
     if len(sys.argv) < 2:
-        raise SystemExit("Usage: extract_project_excel.py <workbook.xlsx>")
+        raise SystemExit("Usage: extract_modeling_excel.py <workbook.xlsx>")
 
     path = Path(sys.argv[1])
     if not path.exists():
@@ -248,27 +244,27 @@ def main():
         shared_strings = load_shared_strings(archive)
         date_style_indexes = load_date_style_indexes(archive)
         sheet_paths = load_sheet_paths(archive)
+        if not sheet_paths:
+            raise SystemExit("Workbook has no sheets")
+
         sheet_names = [name for name, _path in sheet_paths]
         rows_by_sheet = {
             name: read_sheet(archive, sheet_path, shared_strings, date_style_indexes)
             for name, sheet_path in sheet_paths
         }
 
-    project_records = []
-    for sheet_name in pick_project_sheets(sheet_names):
-        for item in records_from_rows(rows_by_sheet[sheet_name]):
-            item["_sourceSheet"] = sheet_name
-            project_records.append(item)
-
-    actual_sheet_name = next((name for name in sheet_names if "实际" in name or "进度" in name), None)
-    task_sheet_name = next((name for name in sheet_names if "任务规则" in name or "规则" in name), None)
+    style_sheet_name = pick_sheet(sheet_names, ["建模款式", "款式明细", "上传用款式明细"], 0)
+    feedback_sheet_name = pick_sheet(sheet_names, ["建模反馈", "反馈"], 1)
 
     payload = {
         "workbook": str(path),
         "sheets": sheet_names,
-        "projects": project_records,
-        "actuals": records_from_rows(rows_by_sheet[actual_sheet_name]) if actual_sheet_name else [],
-        "taskRules": records_from_rows(rows_by_sheet[task_sheet_name]) if task_sheet_name else [],
+        "styleSheet": style_sheet_name,
+        "feedbackSheet": feedback_sheet_name,
+        "styles": records_from_rows(rows_by_sheet.get(style_sheet_name, [])) if style_sheet_name else [],
+        "feedbacks": records_from_rows(rows_by_sheet.get(feedback_sheet_name, []))
+        if feedback_sheet_name and feedback_sheet_name != style_sheet_name
+        else [],
     }
     print(json.dumps(payload, ensure_ascii=False))
 

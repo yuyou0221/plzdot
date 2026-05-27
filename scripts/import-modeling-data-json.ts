@@ -388,11 +388,13 @@ function excelSerialDate(value: number) {
 
 function normalizeModelingStatus(value: unknown, isOutsourced: boolean) {
   const status = text(value);
-  const validStatuses = new Set(["未分配", "已排期", "建模中", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"]);
+  const validStatuses = new Set(["未分配", "已排期", "建模中", "修改中", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"]);
 
   if (status && validStatuses.has(status)) {
     return status;
   }
+
+  if (status?.includes("修改")) return "修改中";
 
   return isOutsourced ? "外包中" : "未分配";
 }

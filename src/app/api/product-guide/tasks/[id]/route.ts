@@ -5,7 +5,8 @@ import { formatDate, optionalText, parseDateOnly, requiredText, todayDateOnly } 
 
 export const runtime = "nodejs";
 
-type TaskAction = "complete" | "expected-finish" | "block" | "unblock" | "submit-review";
+type TaskAction = "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review";
+const allowedTaskStatuses = new Set(["未开始", "进行中", "已完成", "阻塞", "暂停", "取消", "送审中", "已送审"]);
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(["admin", "manager"]);
@@ -22,7 +23,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
   const action = optionalText(payload.action) as TaskAction | undefined;
 
-  if (!action || !["complete", "expected-finish", "block", "unblock", "submit-review"].includes(action)) {
+  if (!action || !["complete", "progress", "expected-finish", "block", "unblock", "submit-review"].includes(action)) {
     return NextResponse.json({ ok: false, message: "无法识别任务动作。" }, { status: 400 });
   }
 
@@ -60,6 +61,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           data: {
             status: "已完成",
             actualFinishDate,
+            isBlocked: false,
             progressNote: note ?? task.progressNote,
             lastUpdatedAt: now,
             lastUpdatedBy: operatorName,
@@ -75,10 +77,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             oldValue: {
               status: task.status,
               actualFinishDate: task.actualFinishDate ? formatDate(task.actualFinishDate) : null,
+              isBlocked: task.isBlocked,
             },
             newValue: {
               status: "已完成",
               actualFinishDate: formatDate(actualFinishDate),
+              isBlocked: false,
             },
             note,
             updatedByName: operatorName,
@@ -89,6 +93,54 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           id: updatedTask.id,
           taskName: updatedTask.taskName,
           message: "已记录完成时间。该项目需要重新测算，预测视图将在重新测算后更新。",
+        };
+      }
+
+      if (action === "progress") {
+        const status = optionalText(payload.status);
+
+        if (status && !allowedTaskStatuses.has(status)) {
+          throw new MutationError("任务状态不在允许范围内。", 400);
+        }
+
+        if (!status && !note) {
+          throw new MutationError("请填写任务状态或当前进度。", 400);
+        }
+
+        const nextStatus = status ?? task.status;
+        const updatedTask = await tx.projectTask.update({
+          where: { id: task.id },
+          data: {
+            status: nextStatus,
+            progressNote: note ?? task.progressNote,
+            lastUpdatedAt: now,
+            lastUpdatedBy: operatorName,
+          },
+          select: { id: true, taskName: true },
+        });
+
+        await tx.progressUpdate.create({
+          data: {
+            projectId: task.projectId,
+            projectTaskId: task.id,
+            updateType,
+            oldValue: {
+              status: task.status,
+              progressNote: task.progressNote,
+            },
+            newValue: {
+              status: nextStatus,
+              progressNote: note ?? task.progressNote,
+            },
+            note,
+            updatedByName: operatorName,
+          },
+        });
+
+        return {
+          id: updatedTask.id,
+          taskName: updatedTask.taskName,
+          message: "已记录任务进度。进行中任务超过 3 天未更新时会继续提醒。",
         };
       }
 
@@ -189,7 +241,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         const updatedTask = await tx.projectTask.update({
           where: { id: task.id },
           data: {
-            status: "已送审",
+            status: "送审中",
             progressNote,
             lastUpdatedAt: now,
             lastUpdatedBy: operatorName,
@@ -207,7 +259,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
               progressNote: task.progressNote,
             },
             newValue: {
-              status: "已送审",
+              status: "送审中",
               submittedAt: formatDate(submittedAt),
               reviewTarget,
               progressNote,
@@ -283,6 +335,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 function updateTypeForAction(action: TaskAction) {
   if (action === "complete") return "产品组标记任务完成";
+  if (action === "progress") return "产品组更新任务进度";
   if (action === "expected-finish") return "产品组更新预计完成日期";
   if (action === "block") return "产品组标记任务阻塞";
   if (action === "submit-review") return "产品组标记任务送审";

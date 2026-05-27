@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
+import { applyModelingImport, ModelingImportValidationError } from "@/lib/imports/modeling-import";
 import { applyProjectMainImport, ProjectMainImportValidationError } from "@/lib/imports/project-main-import";
 
 export const runtime = "nodejs";
@@ -15,8 +16,8 @@ export async function POST(request: Request) {
     const file = formData.get("file");
     const importType = optionalText(formData.get("importType")) ?? "project-main";
 
-    if (importType !== "project-main") {
-      return NextResponse.json({ ok: false, message: "当前只支持项目主数据导入。" }, { status: 400 });
+    if (importType !== "project-main" && importType !== "modeling") {
+      return NextResponse.json({ ok: false, message: "当前只支持项目主数据和建模款式导入。" }, { status: 400 });
     }
 
     if (!(file instanceof File)) {
@@ -27,30 +28,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: "当前只支持 .xlsx 格式。" }, { status: 400 });
     }
 
-    const importDir = path.join(process.cwd(), ".local", "imports", "project-main", timestampId());
+    const importDir = path.join(process.cwd(), ".local", "imports", importType, timestampId());
     await fs.mkdir(importDir, { recursive: true });
 
     const workbookPath = path.join(importDir, sanitizeFileName(file.name));
     await fs.writeFile(workbookPath, Buffer.from(await file.arrayBuffer()));
 
+    if (importType === "modeling") {
+      const result = await applyModelingImport(workbookPath, file.name, auth.user.name);
+
+      return NextResponse.json({
+        ok: true,
+        message: `导入完成：新增 ${result.createdTasks} 款，更新 ${result.updatedTasks} 款，写入 ${result.feedbackRows} 条反馈。`,
+        result,
+        outputDir: importDir,
+      });
+    }
+
     const result = await applyProjectMainImport(workbookPath, file.name, auth.user.name);
+    const message = `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目。需要重新测算排期。`;
 
     return NextResponse.json({
       ok: true,
-      message: `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目。需要重新测算排期。`,
+      message,
       result,
       outputDir: importDir,
     });
   } catch (error) {
-    const isValidationError = error instanceof ProjectMainImportValidationError;
+    const isValidationError = error instanceof ProjectMainImportValidationError || error instanceof ModelingImportValidationError;
 
     return NextResponse.json(
       {
         ok: false,
         message:
           error instanceof Error && error.message
-            ? `项目主数据导入失败：${error.message}`
-            : "项目主数据导入失败。",
+            ? `数据导入失败：${error.message}`
+            : "数据导入失败。",
       },
       { status: isValidationError ? 400 : 500 },
     );

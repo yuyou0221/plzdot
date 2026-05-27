@@ -15,7 +15,8 @@ import {
   UserRound,
 } from "lucide-react";
 import clsx from "clsx";
-import { LogoutButton } from "@/components/auth/logout-button";
+import { AccountPanel } from "@/components/auth/account-panel";
+import type { AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
   ProductGuideItem,
@@ -23,6 +24,7 @@ import type {
   ProductGuideMilestoneCard,
   ProductGuideMilestoneRiskLevel,
   ProductGuideRiskLevel,
+  ProductGuideStyleSummary,
 } from "@/lib/product-guide-types";
 
 type GroupPageKey = "milestones" | "week-guide";
@@ -36,9 +38,10 @@ type WeeklyGuideBucket = {
   items: ProductGuideItem[];
 };
 
-type GuideActionKind = "complete" | "expected-finish" | "block" | "submit-review" | "style-list";
+type GuideActionKind = "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review" | "style-list";
 
 type TaskActionForm = {
+  taskStatus: string;
   actualFinishDate: string;
   expectedFinishDate: string;
   submittedAt: string;
@@ -53,6 +56,7 @@ type StyleListForm = {
   difficulty: string;
   estimatedWorkdays: string;
   originalArtStatus: string;
+  originalArtApprovedDate: string;
   note: string;
 };
 
@@ -110,8 +114,9 @@ const milestoneCardClass: Record<ProductGuideMilestoneRiskLevel, string> = {
 
 const weeklyTaskGridClass =
   "grid-cols-[minmax(120px,0.95fr)_minmax(180px,1.45fr)_96px_minmax(170px,1.2fr)] max-xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]";
+const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂停", "取消"];
 
-export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
+export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all");
@@ -186,6 +191,11 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
     ? filteredItems.find((item) => item.id === selectedItemId) ??
       filteredItems.find((item) => item.projectId === selectedMilestoneCard.projectId)
     : filteredItems.find((item) => item.id === selectedItemId);
+  const activeDetailProjectId = selectedItem?.projectId ?? selectedMilestoneCard?.projectId;
+  const selectedStyleSummaries = useMemo(
+    () => data.styleSummaries.filter((style) => style.projectId === activeDetailProjectId),
+    [activeDetailProjectId, data.styleSummaries],
+  );
   const weeklyBuckets = useMemo(() => buildWeeklyBuckets(filteredItems), [filteredItems]);
   const hasDetailPanel = Boolean(selectedItem || selectedMilestoneCard);
   const filterSummary = [
@@ -238,7 +248,7 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
     chooseTeam(teamOptions[nextIndex].value);
   }
 
-  async function saveTaskAction(action: "complete" | "expected-finish" | "block" | "unblock" | "submit-review") {
+  async function saveTaskAction(action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") {
     if (!selectedItem?.taskId) {
       notify("当前指引没有关联项目任务，不能直接写入任务进度。", "warning");
       return;
@@ -251,6 +261,12 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
             actualFinishDate: taskForm.actualFinishDate,
             note: taskForm.note,
           }
+        : action === "progress"
+          ? {
+              action,
+              status: taskForm.taskStatus,
+              note: taskForm.note,
+            }
         : action === "expected-finish"
           ? {
               action,
@@ -304,6 +320,7 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
         difficulty: styleForm.difficulty,
         estimatedWorkdays: styleForm.estimatedWorkdays,
         originalArtStatus: styleForm.originalArtStatus,
+        originalArtApprovedDate: styleForm.originalArtApprovedDate,
         note: styleForm.note,
       },
       onSuccess: (result) => {
@@ -366,7 +383,7 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
             <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} />
             <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
-          <LogoutButton />
+          <AccountPanel currentUser={currentUser} />
         </aside>
 
         <main className="min-w-0 px-6 py-4 max-md:px-4">
@@ -560,6 +577,7 @@ export function ProductGuideWorkbench({ data }: { data: ProductGuideData }) {
               <DetailPanel
                 item={selectedItem}
                 milestoneCard={selectedItem ? undefined : selectedMilestoneCard}
+                styles={selectedStyleSummaries}
                 activeAction={activeAction}
                 setActiveAction={setActiveAction}
                 taskForm={taskForm}
@@ -905,6 +923,7 @@ function PageTabButton({
 function DetailPanel({
   item,
   milestoneCard,
+  styles,
   activeAction,
   setActiveAction,
   taskForm,
@@ -920,6 +939,7 @@ function DetailPanel({
 }: {
   item?: ProductGuideItem;
   milestoneCard?: ProductGuideMilestoneCard;
+  styles: ProductGuideStyleSummary[];
   activeAction: GuideActionKind | null;
   setActiveAction: (action: GuideActionKind | null) => void;
   taskForm: TaskActionForm;
@@ -927,7 +947,7 @@ function DetailPanel({
   styleForm: StyleListForm;
   setStyleForm: (form: StyleListForm) => void;
   saving: boolean;
-  onSaveTaskAction: (action: "complete" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
+  onSaveTaskAction: (action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
   onSaveStyleList: () => void;
   onOpenSchedule: () => void;
   onOpenModeling: () => void;
@@ -952,6 +972,7 @@ function DetailPanel({
               body="规划视图按项目排期计划月份展示；压力预测按最新测算预测月份展示。"
               emphasis
             />
+            <StyleSummaryBlock styles={styles} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <ActionButton icon={<BarChart3 size={16} />} label="项目分析" onClick={() => onOpenProjectAnalysis(milestoneCard.projectId)} />
@@ -1019,6 +1040,13 @@ function DetailPanel({
                 }}
               />
               <SmallActionButton
+                label="更新进度"
+                onClick={() => {
+                  setTaskForm(defaultTaskActionForm(item));
+                  setActiveAction("progress");
+                }}
+              />
+              <SmallActionButton
                 label="更新预计时间"
                 onClick={() => {
                   setTaskForm(defaultTaskActionForm(item));
@@ -1033,7 +1061,13 @@ function DetailPanel({
                 }}
               />
               {item.isBlocked ? (
-                <SmallActionButton label="解除阻塞" onClick={() => onSaveTaskAction("unblock")} />
+                <SmallActionButton
+                  label="解除阻塞"
+                  onClick={() => {
+                    setTaskForm(defaultTaskActionForm(item));
+                    setActiveAction("unblock");
+                  }}
+                />
               ) : (
                 <SmallActionButton
                   label="标记阻塞"
@@ -1071,6 +1105,15 @@ function DetailPanel({
               onSubmit={() => onSaveTaskAction("complete")}
             />
           ) : null}
+          {activeAction === "progress" ? (
+            <ProgressUpdateForm
+              form={taskForm}
+              setForm={setTaskForm}
+              saving={saving}
+              onCancel={() => setActiveAction(null)}
+              onSubmit={() => onSaveTaskAction("progress")}
+            />
+          ) : null}
           {activeAction === "expected-finish" ? (
             <ExpectedFinishForm
               form={taskForm}
@@ -1087,6 +1130,15 @@ function DetailPanel({
               saving={saving}
               onCancel={() => setActiveAction(null)}
               onSubmit={() => onSaveTaskAction("block")}
+            />
+          ) : null}
+          {activeAction === "unblock" ? (
+            <UnblockForm
+              form={taskForm}
+              setForm={setTaskForm}
+              saving={saving}
+              onCancel={() => setActiveAction(null)}
+              onSubmit={() => onSaveTaskAction("unblock")}
             />
           ) : null}
           {activeAction === "submit-review" ? (
@@ -1116,6 +1168,8 @@ function DetailPanel({
         <DetailBlock title="建议下一步" body={item.nextStep} emphasis />
         <DetailBlock title="相关项目进度" body={item.relatedProjectProgress} />
         <DetailBlock title="建模进度摘要" body={item.modelingSummary} />
+        <StyleSummaryBlock styles={styles} />
+        <RecentUpdatesBlock updates={item.recentUpdates} />
         <DetailBlock title="风险文案" body={item.riskCopy} />
         <DetailBlock title="后续链接" body="SOP / 知识库链接后续补充。" />
       </div>
@@ -1286,6 +1340,47 @@ function TaskCompleteForm({
   );
 }
 
+function ProgressUpdateForm({
+  form,
+  setForm,
+  saving,
+  onCancel,
+  onSubmit,
+}: {
+  form: TaskActionForm;
+  setForm: (form: TaskActionForm) => void;
+  saving: boolean;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="text-sm font-semibold text-slate-900">更新任务进度</div>
+      <label className="grid gap-1 text-xs font-medium text-slate-500">
+        任务状态
+        <select
+          value={form.taskStatus}
+          onChange={(event) => setForm({ ...form, taskStatus: event.target.value })}
+          className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+        >
+          {taskStatusOptions.map((status) => (
+            <option key={status} value={status}>
+              {status}
+            </option>
+          ))}
+        </select>
+      </label>
+      <LabeledTextarea
+        label="当前进度"
+        value={form.note}
+        placeholder="例如：已确认需求，等待版权方反馈；或已交给工厂打样"
+        onChange={(value) => setForm({ ...form, note: value })}
+      />
+      <FormActions saving={saving} submitLabel="保存进度" onCancel={onCancel} onSubmit={onSubmit} />
+    </div>
+  );
+}
+
 function ExpectedFinishForm({
   form,
   setForm,
@@ -1348,6 +1443,33 @@ function BlockForm({
         onChange={(value) => setForm({ ...form, note: value })}
       />
       <FormActions saving={saving} submitLabel="保存阻塞原因" onCancel={onCancel} onSubmit={onSubmit} />
+    </div>
+  );
+}
+
+function UnblockForm({
+  form,
+  setForm,
+  saving,
+  onCancel,
+  onSubmit,
+}: {
+  form: TaskActionForm;
+  setForm: (form: TaskActionForm) => void;
+  saving: boolean;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="text-sm font-semibold text-slate-900">解除任务阻塞</div>
+      <LabeledTextarea
+        label="解除说明"
+        value={form.note}
+        placeholder="建议说明卡点如何解除，以及下一步由谁推进"
+        onChange={(value) => setForm({ ...form, note: value })}
+      />
+      <FormActions saving={saving} submitLabel="保存解除记录" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
 }
@@ -1448,6 +1570,12 @@ function StyleListFormView({
           </select>
         </label>
       </div>
+      <LabeledInput
+        label="原画过审日期"
+        type="date"
+        value={form.originalArtApprovedDate}
+        onChange={(value) => setForm({ ...form, originalArtApprovedDate: value })}
+      />
       <LabeledTextarea
         label="备注"
         value={form.note}
@@ -1570,6 +1698,71 @@ function DetailBlock({ title, body, emphasis }: { title: string; body: string; e
     <div className={clsx("rounded-lg border px-3 py-2", emphasis ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-slate-50")}>
       <div className="text-xs font-medium text-slate-400">{title}</div>
       <div className={clsx("mt-1 text-sm leading-6", emphasis ? "font-semibold text-rose-900" : "text-slate-700")}>{body}</div>
+    </div>
+  );
+}
+
+function StyleSummaryBlock({ styles }: { styles: ProductGuideStyleSummary[] }) {
+  const visibleStyles = styles.slice(0, 8);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium text-slate-400">款式清单</div>
+        <div className="text-xs text-slate-400">{styles.length > 0 ? `${styles.length} 款` : "待录入"}</div>
+      </div>
+      {visibleStyles.length > 0 ? (
+        <div className="mt-2 grid gap-1.5">
+          {visibleStyles.map((style) => (
+            <div key={style.id} className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs">
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-slate-800">{style.styleName}</div>
+                <div className="mt-0.5 truncate text-slate-400">
+                  {style.styleCode} · {style.difficulty} · {style.estimatedWorkdays} 天
+                </div>
+              </div>
+              <span className="truncate text-slate-600">{style.status}</span>
+              <span className="truncate text-slate-500">
+                {style.originalArtApprovedDate ?? style.originalArtStatus}
+              </span>
+            </div>
+          ))}
+          {styles.length > visibleStyles.length ? (
+            <div className="text-xs text-slate-400">还有 {styles.length - visibleStyles.length} 款，可在建模排期中查看。</div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-xs text-slate-500">
+          该项目尚未录入真实款式。录入后会进入建模排期。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecentUpdatesBlock({ updates }: { updates: ProductGuideItem["recentUpdates"] }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="text-xs font-medium text-slate-400">最近更新记录</div>
+      {updates.length > 0 ? (
+        <div className="mt-2 grid gap-1.5">
+          {updates.map((update) => (
+            <div key={update.id} className="rounded-md bg-white px-2 py-1.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-800">{update.updateType}</span>
+                <span className="text-slate-400">{update.createdAt}</span>
+              </div>
+              <div className="mt-1 text-slate-500">
+                {[update.newValueSummary, update.note, update.updatedByName].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-xs text-slate-500">
+          暂无进度更新记录。
+        </div>
+      )}
     </div>
   );
 }
@@ -1729,6 +1922,7 @@ function canShowStyleListAction(item: ProductGuideItem) {
 
 function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
   return {
+    taskStatus: normalizeTaskStatus(item?.statusLabel),
     actualFinishDate: todayString(),
     expectedFinishDate: item?.forecastFinishDate ?? item?.plannedFinishDate ?? todayString(),
     submittedAt: todayString(),
@@ -1745,8 +1939,22 @@ function defaultStyleListForm(): StyleListForm {
     difficulty: "常规款",
     estimatedWorkdays: "7",
     originalArtStatus: "未过审",
+    originalArtApprovedDate: "",
     note: "",
   };
+}
+
+function normalizeTaskStatus(value?: string) {
+  const text = value ?? "";
+
+  if (text.includes("送审")) return "送审中";
+  if (text.includes("阻塞")) return "阻塞";
+  if (text.includes("暂停")) return "暂停";
+  if (text.includes("取消")) return "取消";
+  if (text.includes("进行")) return "进行中";
+  if (text.includes("未开始")) return "未开始";
+
+  return "进行中";
 }
 
 function todayString() {

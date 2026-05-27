@@ -31,6 +31,7 @@ type PreviewIssue = {
 
 type ProjectPreviewRow = {
   rowNumber: number;
+  projectId: string;
   projectName: string;
   projectCode: string;
   licensorName: string;
@@ -47,6 +48,9 @@ type ProjectPreviewRow = {
   productOwner: string;
   productArtist: string;
   status: string;
+  annualPlan: string;
+  urgency: string;
+  notes: string;
   matchStatus: "matched" | "new" | "conflict" | "invalid" | "unverified";
   matchBy: string;
   matchedProjectId?: string;
@@ -96,6 +100,44 @@ type CommandResult = {
   stdout: string;
   stderr: string;
 };
+
+const PROJECT_ID_FIELDS = ["项目ID", "项目 Id", "项目 ID", "项目id", "系统项目ID", "系统项目 ID"];
+const PROJECT_NAME_FIELDS = ["项目名称", "项目管理系统（统一）"];
+const PROJECT_CODE_FIELDS = ["项目编号", "项目编码", "业务项目编号"];
+const LICENSOR_FIELDS = ["版权方", "授权方"];
+const IP_FIELDS = ["IP", "IP名称", "IP 名称"];
+const PRODUCT_TYPE_FIELDS = ["产品类型"];
+const PLANNED_LAUNCH_DATE_FIELDS = ["计划上线日期", "预计上线日期", "计划上线", "预计上线时间", "预估出货日期"];
+const PLANNED_LAUNCH_MONTH_FIELDS = ["预计上线月份", "上线月份"];
+const PROJECT_START_DATE_FIELDS = ["启动日期", "项目启动日期"];
+const PROJECT_TEAM_FIELDS = ["项目组", "所属团队"];
+const PRODUCT_OWNER_FIELDS = ["产品研发", "项目管理"];
+const PRODUCT_ARTIST_FIELDS = ["产品研发美术", "产品美术"];
+const STATUS_FIELDS = ["项目状态", "当前阶段"];
+const STYLE_COUNT_FIELDS = ["预计款式数", "规格", "款式数"];
+const PROJECT_LEVEL_FIELDS = ["项目等级"];
+const ROUTE_TYPE_FIELDS = ["路线", "红蜡路线or手板路线"];
+const NEED_THREE_VIEW_FIELDS = ["是否需要三视图"];
+const ANNUAL_PLAN_FIELDS = ["年度规划"];
+const URGENCY_FIELDS = ["紧急程度"];
+const NOTES_FIELDS = ["备注"];
+const CALCULATED_IMPORT_FIELDS = [
+  "预测完成时间",
+  "预测完成日期",
+  "预测上线时间",
+  "预测上线日期",
+  "预测完成",
+  "风险等级",
+  "延期判断",
+  "延期天数",
+  "产能超载",
+  "里程碑状态",
+  "forecastFinishDate",
+  "forecastLaunchDate",
+  "riskLevel",
+  "delayDays",
+  "capacityOverload",
+];
 
 export async function previewProjectMainImport(workbookPath: string, fileName: string): Promise<ProjectMainImportPreview> {
   const workbook = await extractWorkbook(workbookPath);
@@ -213,24 +255,31 @@ function previewProjectRow(
   duplicateIndexes: Set<number>,
   canMatchExisting: boolean,
 ): ProjectPreviewRow {
-  const projectName = stringField(record, "项目名称") || stringField(record, "项目管理系统（统一）");
-  const projectCode = normalizeCode(field(record, "项目编号"));
-  const licensorName = stringField(record, "授权方");
-  const ipName = stringField(record, "IP");
-  const productType = stringField(record, "产品类型");
-  const plannedLaunchDate = dateFromValue(field(record, "预估出货日期"));
-  const plannedLaunchMonth = monthFromDateString(plannedLaunchDate) || monthFromValue(field(record, "预估出货日期"));
-  const projectStartDate = dateFromValue(field(record, "启动日期"));
-  const projectTeam = stringField(record, "所属团队");
-  const productOwner = stringField(record, "项目管理");
-  const productArtist = stringField(record, "产品美术");
-  const status = stringField(record, "当前阶段");
-  const styleCount = numberField(record, "规格");
-  const projectLevel = stringField(record, "项目等级");
-  const routeType = stringField(record, "红蜡路线or手板路线");
-  const needThreeView = booleanField(record, "是否需要三视图");
+  const projectId = stringFieldAny(record, PROJECT_ID_FIELDS);
+  const projectName = stringFieldAny(record, PROJECT_NAME_FIELDS);
+  const projectCode = normalizeCode(fieldAny(record, PROJECT_CODE_FIELDS));
+  const licensorName = stringFieldAny(record, LICENSOR_FIELDS);
+  const ipName = stringFieldAny(record, IP_FIELDS);
+  const productType = stringFieldAny(record, PRODUCT_TYPE_FIELDS);
+  const plannedLaunchDate = plannedLaunchDateFromRecord(record);
+  const plannedLaunchMonth = monthFromDateString(plannedLaunchDate) || monthFromValue(fieldAny(record, PLANNED_LAUNCH_MONTH_FIELDS));
+  const projectStartDate = dateFromValue(fieldAny(record, PROJECT_START_DATE_FIELDS));
+  const projectTeam = stringFieldAny(record, PROJECT_TEAM_FIELDS);
+  const productOwner = stringFieldAny(record, PRODUCT_OWNER_FIELDS);
+  const productArtist = stringFieldAny(record, PRODUCT_ARTIST_FIELDS);
+  const status = stringFieldAny(record, STATUS_FIELDS);
+  const styleCount = numberFieldAny(record, STYLE_COUNT_FIELDS);
+  const projectLevel = stringFieldAny(record, PROJECT_LEVEL_FIELDS);
+  const routeType = stringFieldAny(record, ROUTE_TYPE_FIELDS);
+  const needThreeView = booleanFieldAny(record, NEED_THREE_VIEW_FIELDS);
+  const annualPlan = stringFieldAny(record, ANNUAL_PLAN_FIELDS);
+  const urgency = stringFieldAny(record, URGENCY_FIELDS);
+  const notes = stringFieldAny(record, NOTES_FIELDS);
   const issues: PreviewIssue[] = [];
 
+  for (const blockedField of calculatedFieldsInRecord(record)) {
+    issues.push({ severity: "error", message: `Excel 包含计算字段「${blockedField}」，项目主数据导入不允许写入。` });
+  }
   if (!projectName) {
     issues.push({ severity: "error", message: "项目名称为空，无法导入。" });
   }
@@ -252,15 +301,18 @@ function previewProjectRow(
     }
   }
   if (!plannedLaunchMonth) {
-    issues.push({ severity: "warning", message: "没有识别到计划上线月份 / 预估出货日期。" });
+    issues.push({ severity: "warning", message: "没有识别到预计上线月份 / 计划上线日期。" });
   }
 
   const match = canMatchExisting
-    ? matchProject({ projectCode, projectName, licensorName, ipName }, existingProjects)
+    ? matchProject({ projectId, projectName, licensorName, ipName }, existingProjects)
     : { status: "unverified" as const, matchBy: "数据库不可用，暂不能匹配现有项目", project: undefined };
 
   if (match.status === "new" && !plannedLaunchDate) {
     issues.push({ severity: "error", message: "新增项目缺少计划上线日期，无法创建。" });
+  }
+  if (match.status === "conflict" && projectId) {
+    issues.push({ severity: "error", message: "项目ID没有匹配到现有项目；请修正项目ID，或删除项目ID后按项目名称 + 版权方 + IP 创建新项目。" });
   }
   if (!existingRefs.licensors.has(normalizeKey(licensorName)) && licensorName) {
     issues.push({ severity: "info", message: `将新增版权方：${licensorName}` });
@@ -279,6 +331,7 @@ function previewProjectRow(
 
   return {
     rowNumber: index + 2,
+    projectId,
     projectName,
     projectCode,
     licensorName,
@@ -295,8 +348,11 @@ function previewProjectRow(
     productOwner,
     productArtist,
     status,
+    annualPlan,
+    urgency,
+    notes,
     matchStatus: hasError ? "invalid" : match.status,
-    matchBy: hasError ? "必填字段缺失" : match.matchBy,
+    matchBy: hasError ? "校验错误" : match.matchBy,
     matchedProjectId: match.project?.id,
     matchedProjectName: match.project?.projectName,
     issues,
@@ -304,13 +360,17 @@ function previewProjectRow(
 }
 
 function matchProject(
-  candidate: { projectCode: string; projectName: string; licensorName: string; ipName: string },
+  candidate: { projectId: string; projectName: string; licensorName: string; ipName: string },
   existingProjects: ExistingProject[],
 ): { status: "matched" | "new" | "conflict"; matchBy: string; project?: ExistingProject } {
-  if (candidate.projectCode) {
-    const matches = existingProjects.filter((project) => normalizeCode(project.projectCode) === candidate.projectCode);
-    if (matches.length === 1) return { status: "matched", matchBy: "业务项目编号", project: matches[0] };
-    if (matches.length > 1) return { status: "conflict", matchBy: "业务项目编号匹配到多个项目" };
+  if (candidate.projectId) {
+    const matches = existingProjects.filter((project) => normalizeKey(project.id) === normalizeKey(candidate.projectId));
+    if (matches.length === 1) return { status: "matched", matchBy: "项目ID", project: matches[0] };
+    return { status: "conflict", matchBy: "项目ID未匹配到现有项目" };
+  }
+
+  if (!candidate.projectName || !candidate.licensorName || !candidate.ipName) {
+    return { status: "new", matchBy: "缺少完整身份字段，无法匹配现有项目" };
   }
 
   const identityMatches = existingProjects.filter(
@@ -321,16 +381,6 @@ function matchProject(
   );
   if (identityMatches.length === 1) return { status: "matched", matchBy: "项目名称 + IP + 版权方", project: identityMatches[0] };
   if (identityMatches.length > 1) return { status: "conflict", matchBy: "项目名称 + IP + 版权方匹配到多个项目" };
-
-  const nameIpMatches = existingProjects.filter(
-    (project) => normalizeKey(project.projectName) === normalizeKey(candidate.projectName) && normalizeKey(project.ipName) === normalizeKey(candidate.ipName),
-  );
-  if (nameIpMatches.length === 1) return { status: "matched", matchBy: "项目名称 + IP", project: nameIpMatches[0] };
-  if (nameIpMatches.length > 1) return { status: "conflict", matchBy: "项目名称 + IP 匹配到多个项目" };
-
-  const nameMatches = existingProjects.filter((project) => normalizeKey(project.projectName) === normalizeKey(candidate.projectName));
-  if (nameMatches.length === 1) return { status: "matched", matchBy: "项目名称", project: nameMatches[0] };
-  if (nameMatches.length > 1) return { status: "conflict", matchBy: "项目名称匹配到多个项目" };
 
   return { status: "new", matchBy: "未匹配，将新增" };
 }
@@ -382,8 +432,11 @@ function duplicateIdentityIndexes(records: Array<Record<string, unknown>>) {
   const indexes = new Map<string, number[]>();
 
   records.forEach((record, index) => {
-    const projectName = stringField(record, "项目名称") || stringField(record, "项目管理系统（统一）");
-    const key = [projectName, stringField(record, "授权方"), stringField(record, "IP")].map(normalizeKey).join("|");
+    const projectId = stringFieldAny(record, PROJECT_ID_FIELDS);
+    const projectName = stringFieldAny(record, PROJECT_NAME_FIELDS);
+    const licensorName = stringFieldAny(record, LICENSOR_FIELDS);
+    const ipName = stringFieldAny(record, IP_FIELDS);
+    const key = projectId ? `id:${normalizeKey(projectId)}` : [projectName, licensorName, ipName].map(normalizeKey).join("|");
     if (!key.replace(/\|/g, "")) return;
     indexes.set(key, [...(indexes.get(key) ?? []), index]);
   });
@@ -393,13 +446,16 @@ function duplicateIdentityIndexes(records: Array<Record<string, unknown>>) {
 
 function isProjectRecordCandidate(record: Record<string, unknown>) {
   const meaningfulKeys = [
-    "项目名称",
-    "项目管理系统（统一）",
-    "项目编号",
-    "授权方",
-    "IP",
-    "产品类型",
-    "预估出货日期",
+    ...PROJECT_ID_FIELDS,
+    ...PROJECT_NAME_FIELDS,
+    ...PROJECT_CODE_FIELDS,
+    ...LICENSOR_FIELDS,
+    ...IP_FIELDS,
+    ...PRODUCT_TYPE_FIELDS,
+    ...PLANNED_LAUNCH_DATE_FIELDS,
+    ...PLANNED_LAUNCH_MONTH_FIELDS,
+    ...PROJECT_TEAM_FIELDS,
+    ...STATUS_FIELDS,
   ];
 
   return meaningfulKeys.some((key) => stringField(record, key));
@@ -421,27 +477,44 @@ function field(record: Record<string, unknown>, key: string) {
   return record[key];
 }
 
+function fieldAny(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = field(record, key);
+    if (!isBlankValue(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 function stringField(record: Record<string, unknown>, key: string) {
   const value = field(record, key);
 
-  if (value === null || value === undefined) {
+  if (isBlankValue(value)) {
     return "";
   }
 
   return String(value).trim();
 }
 
-function numberField(record: Record<string, unknown>, key: string) {
-  const value = field(record, key);
-  if (value === null || value === undefined || value === "") return null;
+function stringFieldAny(record: Record<string, unknown>, keys: string[]) {
+  const value = fieldAny(record, keys);
+
+  return isBlankValue(value) ? "" : String(value).trim();
+}
+
+function numberFieldAny(record: Record<string, unknown>, keys: string[]) {
+  const value = fieldAny(record, keys);
+  if (isBlankValue(value)) return null;
   const number = Number(String(value).trim());
 
   return Number.isFinite(number) ? number : null;
 }
 
-function booleanField(record: Record<string, unknown>, key: string) {
-  const value = field(record, key);
-  if (value === null || value === undefined || value === "") return null;
+function booleanFieldAny(record: Record<string, unknown>, keys: string[]) {
+  const value = fieldAny(record, keys);
+  if (isBlankValue(value)) return null;
   if (typeof value === "boolean") return value;
 
   const text = String(value).trim().toLowerCase();
@@ -449,6 +522,33 @@ function booleanField(record: Record<string, unknown>, key: string) {
   if (["否", "no", "n", "false", "0", "不需要"].includes(text)) return false;
 
   return null;
+}
+
+function calculatedFieldsInRecord(record: Record<string, unknown>) {
+  const blockedKeys = new Set(CALCULATED_IMPORT_FIELDS.map(normalizeHeaderKey));
+
+  return Object.keys(record).filter((key) => blockedKeys.has(normalizeHeaderKey(key)) && !isBlankValue(record[key]));
+}
+
+function plannedLaunchDateFromRecord(record: Record<string, unknown>) {
+  const plannedDate = dateFromValue(fieldAny(record, PLANNED_LAUNCH_DATE_FIELDS));
+  if (plannedDate) {
+    return plannedDate;
+  }
+
+  const plannedMonth = monthFromValue(fieldAny(record, PLANNED_LAUNCH_MONTH_FIELDS));
+  return plannedMonth ? `${plannedMonth}-01` : "";
+}
+
+function isBlankValue(value: unknown) {
+  return value === null || value === undefined || String(value).trim() === "";
+}
+
+function normalizeHeaderKey(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
 }
 
 function normalizeCode(value: unknown) {
@@ -481,9 +581,19 @@ function monthFromValue(value: unknown) {
     return `${dateMatch[1]}-${String(Number(dateMatch[2])).padStart(2, "0")}`;
   }
 
+  const shortDateMatch = text.match(/^(\d{2})[-/](\d{1,2})(?:[-/]\d{1,2})?/);
+  if (shortDateMatch) {
+    return `${2000 + Number(shortDateMatch[1])}-${String(Number(shortDateMatch[2])).padStart(2, "0")}`;
+  }
+
   const chineseMatch = text.match(/^(\d{4})年(\d{1,2})月/);
   if (chineseMatch) {
     return `${chineseMatch[1]}-${String(Number(chineseMatch[2])).padStart(2, "0")}`;
+  }
+
+  const shortChineseMatch = text.match(/^(\d{2})年(\d{1,2})月/);
+  if (shortChineseMatch) {
+    return `${2000 + Number(shortChineseMatch[1])}-${String(Number(shortChineseMatch[2])).padStart(2, "0")}`;
   }
 
   return "";
@@ -511,9 +621,19 @@ function dateFromValue(value: unknown) {
     return `${dateMatch[1]}-${String(Number(dateMatch[2])).padStart(2, "0")}-${String(Number(dateMatch[3] ?? 1)).padStart(2, "0")}`;
   }
 
+  const shortDateMatch = text.match(/^(\d{2})[-/](\d{1,2})(?:[-/](\d{1,2}))?/);
+  if (shortDateMatch) {
+    return `${2000 + Number(shortDateMatch[1])}-${String(Number(shortDateMatch[2])).padStart(2, "0")}-${String(Number(shortDateMatch[3] ?? 1)).padStart(2, "0")}`;
+  }
+
   const chineseMatch = text.match(/^(\d{4})年(\d{1,2})月(?:(\d{1,2})日?)?/);
   if (chineseMatch) {
     return `${chineseMatch[1]}-${String(Number(chineseMatch[2])).padStart(2, "0")}-${String(Number(chineseMatch[3] ?? 1)).padStart(2, "0")}`;
+  }
+
+  const shortChineseMatch = text.match(/^(\d{2})年(\d{1,2})月(?:(\d{1,2})日?)?/);
+  if (shortChineseMatch) {
+    return `${2000 + Number(shortChineseMatch[1])}-${String(Number(shortChineseMatch[2])).padStart(2, "0")}-${String(Number(shortChineseMatch[3] ?? 1)).padStart(2, "0")}`;
   }
 
   const parsed = new Date(text);

@@ -12,7 +12,12 @@ export type UserDataPerson = {
   name: string;
   teamId?: string;
   teamName: string;
+  departmentTeamId?: string;
+  departmentTeamName: string;
+  projectGroupTeamId?: string;
+  projectGroupTeamName: string;
   roleTitle: string;
+  businessRoles: string[];
   userType: string;
   loginName: string;
   authRole: string;
@@ -20,6 +25,8 @@ export type UserDataPerson = {
   canLogin: boolean;
   isModeler: boolean;
   weeklyCapacityStyles?: number;
+  weeklyAvailableWorkdays?: number;
+  isSchedulable: boolean;
   status: string;
   notes: string;
   specialtyTags: string[];
@@ -42,10 +49,23 @@ export type UserDataTeam = {
 export type UserDataVendor = {
   id: string;
   name: string;
+  vendorType: string;
   contactName: string;
   contactInfo: string;
   specialtyTags: string[];
   stableCapacity: boolean;
+  status: string;
+  notes: string;
+};
+
+export type UserAvailabilityBlock = {
+  id: string;
+  userId: string;
+  userName: string;
+  blockType: string;
+  startDate: string;
+  endDate: string;
+  workdayCount?: number;
   status: string;
   notes: string;
 };
@@ -57,4 +77,5 @@ export type UserDataWorkbenchData = {
   people: UserDataPerson[];
   teams: UserDataTeam[];
   vendors: UserDataVendor[];
+  availabilityBlocks: UserAvailabilityBlock[];
 };

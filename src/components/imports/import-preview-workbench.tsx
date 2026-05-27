@@ -4,15 +4,19 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Database, FileSpreadsheet, Info, RefreshCw, Search, Upload } from "lucide-react";
 import clsx from "clsx";
-import { LogoutButton } from "@/components/auth/logout-button";
+import { AccountPanel } from "@/components/auth/account-panel";
+import type { AuthUser } from "@/lib/auth/permissions";
 
 type PreviewIssue = {
   severity: "error" | "warning" | "info";
   message: string;
 };
 
+type ImportType = "project-main" | "modeling";
+
 type ProjectPreviewRow = {
   rowNumber: number;
+  projectId: string;
   projectName: string;
   projectCode: string;
   licensorName: string;
@@ -23,13 +27,17 @@ type ProjectPreviewRow = {
   productOwner: string;
   productArtist: string;
   status: string;
+  annualPlan: string;
+  urgency: string;
+  notes: string;
   matchStatus: "matched" | "new" | "conflict" | "invalid" | "unverified";
   matchBy: string;
   matchedProjectName?: string;
   issues: PreviewIssue[];
 };
 
-type ImportPreview = {
+type ProjectImportPreview = {
+  importType: "project-main";
   importTypeLabel: string;
   fileName: string;
   sheets: string[];
@@ -66,6 +74,70 @@ type ImportPreview = {
   rows: ProjectPreviewRow[];
 };
 
+type ModelingStylePreviewRow = {
+  rowNumber: number;
+  styleId: string;
+  projectName: string;
+  styleName: string;
+  styleSequence: string;
+  status: string;
+  modelerName: string;
+  vendorName: string;
+  estimatedWorkdays: number | null;
+  plannedStartDate: string;
+  internalApprovedDate: string;
+  copyrightApprovedDate: string;
+  lastUpdatedAt: string;
+  note: string;
+  matchStatus: "matched" | "new" | "conflict" | "invalid";
+  matchBy: string;
+  issues: PreviewIssue[];
+};
+
+type ModelingFeedbackPreviewRow = {
+  rowNumber: number;
+  projectName: string;
+  styleName: string;
+  feedbackDate: string;
+  feedbackSource: string;
+  feedbackType: string;
+  feedbackContent: string;
+  processStatus: string;
+  matchStatus: "matched" | "conflict" | "invalid";
+  matchBy: string;
+  issues: PreviewIssue[];
+};
+
+type ModelingImportPreview = {
+  importType: "modeling";
+  importTypeLabel: string;
+  fileName: string;
+  sheets: string[];
+  parsed: {
+    styleRows: number;
+    feedbackRows: number;
+  };
+  summary: {
+    totalRows: number;
+    styleRows: number;
+    feedbackRows: number;
+    matchedRows: number;
+    newRows: number;
+    conflictRows: number;
+    invalidRows: number;
+    errorCount: number;
+    warningCount: number;
+    infoCount: number;
+    requiresRecalculation: boolean;
+  };
+  globalIssues: PreviewIssue[];
+  rows: ModelingStylePreviewRow[];
+  feedbackRows: ModelingFeedbackPreviewRow[];
+};
+
+type ImportPreview = ProjectImportPreview | ModelingImportPreview;
+type ProjectMonthBucket = ProjectImportPreview["monthBuckets"][number];
+
 type PreviewResponse = {
   ok: boolean;
   message: string;
@@ -77,8 +149,11 @@ type ApplyResponse = {
   message: string;
   result?: {
     importId: string;
-    createdProjects: number;
-    updatedProjects: number;
+    createdProjects?: number;
+    updatedProjects?: number;
+    createdTasks?: number;
+    updatedTasks?: number;
+    feedbackRows?: number;
     rowCount: number;
     requiresRecalculation: boolean;
   };
@@ -90,11 +165,6 @@ type AnalyzeResponse = {
   scheduleRunId?: string;
   projectCount?: number;
   futureTaskCount?: number;
-};
-
-type CurrentUser = {
-  name: string;
-  authRole: string;
 };
 
 const matchStatusLabel: Record<ProjectPreviewRow["matchStatus"], string> = {
@@ -119,14 +189,21 @@ const issueToneClass: Record<PreviewIssue["severity"], string> = {
   info: "bg-slate-100 text-slate-600",
 };
 
-const bucketClass: Record<ImportPreview["monthBuckets"][number]["level"], string> = {
+const bucketClass: Record<ProjectMonthBucket["level"], string> = {
   ok: "border-emerald-200 bg-emerald-50 text-emerald-900",
   warning: "border-amber-200 bg-amber-50 text-amber-900",
   error: "border-red-200 bg-red-50 text-red-900",
 };
 
-export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUser }) {
+export function ImportPreviewWorkbench({
+  currentUser,
+  initialImportType = "project-main",
+}: {
+  currentUser: AuthUser;
+  initialImportType?: ImportType;
+}) {
   const router = useRouter();
+  const [importType, setImportType] = useState<ImportType>(initialImportType);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -144,15 +221,22 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
     preview.summary.errorCount === 0 &&
     preview.summary.invalidRows === 0 &&
     preview.summary.conflictRows === 0 &&
-    preview.summary.unverifiedRows === 0;
+    (!("unverifiedRows" in preview.summary) || preview.summary.unverifiedRows === 0);
+  const projectPreview = preview?.importType === "project-main" ? preview : null;
+  const modelingPreview = preview?.importType === "modeling" ? preview : null;
 
   const filteredRows = useMemo(() => {
     const keyword = search.trim();
+
+    if (preview?.importType !== "project-main") {
+      return [];
+    }
 
     return (preview?.rows ?? []).filter((row) => {
       const matchFilter = rowFilter === "all" || row.matchStatus === rowFilter;
       const matchSearch =
         !keyword ||
+        row.projectId.includes(keyword) ||
         row.projectName.includes(keyword) ||
         row.projectCode.includes(keyword) ||
         row.licensorName.includes(keyword) ||
@@ -160,7 +244,27 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
 
       return matchFilter && matchSearch;
     });
-  }, [preview?.rows, rowFilter, search]);
+  }, [preview, rowFilter, search]);
+
+  const filteredModelingRows = useMemo(() => {
+    const keyword = search.trim();
+
+    if (preview?.importType !== "modeling") {
+      return [];
+    }
+
+    return preview.rows.filter((row) => {
+      const matchFilter = rowFilter === "all" || row.matchStatus === rowFilter;
+      const matchSearch =
+        !keyword ||
+        row.projectName.includes(keyword) ||
+        row.styleName.includes(keyword) ||
+        row.modelerName.includes(keyword) ||
+        row.vendorName.includes(keyword);
+
+      return matchFilter && matchSearch;
+    });
+  }, [preview, rowFilter, search]);
 
   async function generatePreview() {
     if (!file) {
@@ -175,7 +279,7 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
     setAnalyzeResult(null);
 
     const formData = new FormData();
-    formData.set("importType", "project-main");
+    formData.set("importType", importType);
     formData.set("file", file);
 
     try {
@@ -221,12 +325,12 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
 
     setIsApplying(true);
     setTone("info");
-    setMessage("正在写入项目主数据。");
+    setMessage(importType === "modeling" ? "正在写入建模款式。" : "正在写入项目主数据。");
     setApplyResult(null);
     setAnalyzeResult(null);
 
     const formData = new FormData();
-    formData.set("importType", "project-main");
+    formData.set("importType", importType);
     formData.set("file", file);
 
     try {
@@ -314,7 +418,7 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
               <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">预览</span>
             </button>
           </nav>
-          <LogoutButton />
+          <AccountPanel currentUser={currentUser} />
         </aside>
 
         <main className="min-w-0 px-6 py-5 max-md:px-4">
@@ -325,7 +429,7 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                 只读预览 · 不写入数据库
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-tight">数据导入预览</h1>
-              <div className="mt-2 text-sm text-slate-500">当前支持：项目主数据 Excel</div>
+              <div className="mt-2 text-sm text-slate-500">当前支持：项目主数据 Excel、建模款式 Excel</div>
             </div>
           </header>
 
@@ -337,11 +441,18 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                 </label>
                 <select
                   id="import-type"
-                  value="project-main"
-                  disabled
-                  className="mt-2 block h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600"
+                  value={importType}
+                  onChange={(event) => {
+                    setImportType(event.target.value as ImportType);
+                    setPreview(null);
+                    setApplyResult(null);
+                    setAnalyzeResult(null);
+                    setMessage(null);
+                  }}
+                  className="mt-2 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-rose-300"
                 >
                   <option value="project-main">项目主数据导入</option>
+                  <option value="modeling">建模款式导入</option>
                 </select>
               </div>
               <div className="min-w-0">
@@ -417,21 +528,27 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
             {applyResult ? (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                 <span>
-                  已写入数据库：新增 {applyResult.createdProjects} 个项目，更新 {applyResult.updatedProjects} 个项目。
-                  {analyzeResult
-                    ? ` 已完成排期重算：${analyzeResult.projectCount ?? "-"} 个项目，${analyzeResult.futureTaskCount ?? "-"} 条未来任务。`
-                    : " 下一步需要重新测算排期。"}
+                  {preview?.importType === "modeling"
+                    ? `已写入数据库：新增 ${applyResult.createdTasks ?? 0} 款，更新 ${applyResult.updatedTasks ?? 0} 款，反馈 ${applyResult.feedbackRows ?? 0} 条。`
+                    : `已写入数据库：新增 ${applyResult.createdProjects ?? 0} 个项目，更新 ${applyResult.updatedProjects ?? 0} 个项目。`}
+                  {applyResult.requiresRecalculation
+                    ? analyzeResult
+                      ? ` 已完成排期重算：${analyzeResult.projectCount ?? "-"} 个项目，${analyzeResult.futureTaskCount ?? "-"} 条未来任务。`
+                      : " 下一步需要重新测算排期。"
+                    : ""}
                 </span>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={runScheduleAnalysis}
-                    disabled={isAnalyzing || !!analyzeResult}
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-emerald-200"
-                  >
-                    <RefreshCw size={14} className={clsx(isAnalyzing && "animate-spin")} />
-                    {isAnalyzing ? "重算中" : analyzeResult ? "已重算" : "一键重算排期"}
-                  </button>
+                  {applyResult.requiresRecalculation ? (
+                    <button
+                      type="button"
+                      onClick={runScheduleAnalysis}
+                      disabled={isAnalyzing || !!analyzeResult}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-emerald-200"
+                    >
+                      <RefreshCw size={14} className={clsx(isAnalyzing && "animate-spin")} />
+                      {isAnalyzing ? "重算中" : analyzeResult ? "已重算" : "一键重算排期"}
+                    </button>
+                  ) : null}
                   {analyzeResult ? (
                     <button
                       type="button"
@@ -452,11 +569,21 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                 <SummaryTile label="总行数" value={preview.summary.totalRows} />
                 <SummaryTile label="已匹配" value={preview.summary.matchedRows} tone="green" />
                 <SummaryTile label="待新增" value={preview.summary.newRows} tone="blue" />
-                <SummaryTile label="需确认" value={preview.summary.conflictRows + preview.summary.invalidRows + preview.summary.unverifiedRows} tone="amber" />
+                <SummaryTile
+                  label="需确认"
+                  value={
+                    preview.summary.conflictRows +
+                    preview.summary.invalidRows +
+                    ("unverifiedRows" in preview.summary ? preview.summary.unverifiedRows : 0)
+                  }
+                  tone="amber"
+                />
                 <SummaryTile label="错误 / 警告" value={`${preview.summary.errorCount} / ${preview.summary.warningCount}`} tone="red" />
                 <SummaryTile label="重算排期" value={preview.summary.requiresRecalculation ? "需要" : "不需要"} tone="slate" />
               </section>
 
+              {projectPreview ? (
+                <>
               <section className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                 <div className="rounded-lg border border-slate-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -464,10 +591,10 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                     基础资料变化
                   </div>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <ReferenceBlock label="新版权方" values={preview.referenceChanges.newLicensors} />
-                    <ReferenceBlock label="新 IP" values={preview.referenceChanges.newIpAssets} />
-                    <ReferenceBlock label="新产品类型" values={preview.referenceChanges.newProductTypes} />
-                    <ReferenceBlock label="新项目组" values={preview.referenceChanges.newTeams} />
+                    <ReferenceBlock label="新版权方" values={projectPreview.referenceChanges.newLicensors} />
+                    <ReferenceBlock label="新 IP" values={projectPreview.referenceChanges.newIpAssets} />
+                    <ReferenceBlock label="新产品类型" values={projectPreview.referenceChanges.newProductTypes} />
+                    <ReferenceBlock label="新项目组" values={projectPreview.referenceChanges.newTeams} />
                   </div>
                 </div>
 
@@ -477,8 +604,8 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                     月度上线数量
                   </div>
                   <div className="mt-3 grid max-h-56 gap-2 overflow-auto pr-1">
-                    {preview.monthBuckets.length > 0 ? (
-                      preview.monthBuckets.map((bucket) => (
+                    {projectPreview.monthBuckets.length > 0 ? (
+                      projectPreview.monthBuckets.map((bucket) => (
                         <div key={bucket.month} className={clsx("rounded-lg border px-3 py-2 text-sm", bucketClass[bucket.level])}>
                           <div className="flex items-center justify-between gap-3">
                             <span className="font-semibold">{bucket.month}</span>
@@ -499,7 +626,7 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                   <div>
                     <div className="text-sm font-semibold text-slate-800">项目行预览</div>
                     <div className="mt-1 text-xs text-slate-500">
-                      项目 {preview.parsed.projectRows} 行 · 进度记录 {preview.parsed.actualRows} 行 · 任务规则 {preview.parsed.taskRules} 条
+                      项目 {projectPreview.parsed.projectRows} 行 · 进度记录 {projectPreview.parsed.actualRows} 行 · 任务规则 {projectPreview.parsed.taskRules} 条
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -527,16 +654,18 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                   </div>
                 </div>
                 <div className="overflow-auto">
-                  <table className="min-w-[1120px] w-full border-collapse text-left text-sm">
+                  <table className="min-w-[1400px] w-full border-collapse text-left text-sm">
                     <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                       <tr>
                         <th className="px-4 py-3">行</th>
                         <th className="px-4 py-3">状态</th>
+                        <th className="px-4 py-3">项目ID</th>
                         <th className="px-4 py-3">项目名称</th>
                         <th className="px-4 py-3">编号</th>
                         <th className="px-4 py-3">版权方 / IP</th>
                         <th className="px-4 py-3">产品类型</th>
                         <th className="px-4 py-3">上线月份</th>
+                        <th className="px-4 py-3">年度 / 紧急</th>
                         <th className="px-4 py-3">项目组</th>
                         <th className="px-4 py-3">负责人</th>
                         <th className="px-4 py-3">提示</th>
@@ -552,6 +681,7 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                             </span>
                             <div className="mt-1 text-xs text-slate-400">{row.matchBy}</div>
                           </td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{row.projectId || "-"}</td>
                           <td className="px-4 py-3 font-medium text-slate-900">
                             <div>{row.projectName || "未填写"}</div>
                             {row.matchedProjectName ? <div className="mt-1 text-xs text-slate-400">匹配到：{row.matchedProjectName}</div> : null}
@@ -563,6 +693,10 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                           </td>
                           <td className="px-4 py-3 text-slate-600">{row.productType || "-"}</td>
                           <td className="px-4 py-3 text-slate-600">{row.plannedLaunchMonth || "-"}</td>
+                          <td className="px-4 py-3 text-slate-600">
+                            <div>{row.annualPlan || "-"}</div>
+                            <div className="mt-1 text-xs text-slate-400">{row.urgency || "-"}</div>
+                          </td>
                           <td className="px-4 py-3 text-slate-600">{row.projectTeam || "-"}</td>
                           <td className="px-4 py-3 text-slate-600">
                             <div>{row.productOwner || "-"}</div>
@@ -587,10 +721,207 @@ export function ImportPreviewWorkbench({ currentUser }: { currentUser: CurrentUs
                   </table>
                 </div>
               </section>
+                </>
+              ) : (
+                modelingPreview ? (
+                <ModelingImportPreviewSection
+                  preview={modelingPreview}
+                  filteredRows={filteredModelingRows}
+                  search={search}
+                  rowFilter={rowFilter}
+                  onSearchChange={setSearch}
+                  onRowFilterChange={setRowFilter}
+                />
+                ) : null
+              )}
             </>
           ) : null}
         </main>
       </div>
+    </div>
+  );
+}
+
+function ModelingImportPreviewSection({
+  preview,
+  filteredRows,
+  search,
+  rowFilter,
+  onSearchChange,
+  onRowFilterChange,
+}: {
+  preview: ModelingImportPreview;
+  filteredRows: ModelingStylePreviewRow[];
+  search: string;
+  rowFilter: "all" | ProjectPreviewRow["matchStatus"];
+  onSearchChange: (value: string) => void;
+  onRowFilterChange: (value: "all" | ProjectPreviewRow["matchStatus"]) => void;
+}) {
+  return (
+    <>
+      <section className="mt-5 grid gap-4 xl:grid-cols-3">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-800">款式明细</div>
+          <div className="mt-2 text-3xl font-semibold">{preview.summary.styleRows}</div>
+          <div className="mt-1 text-sm text-slate-500">工作表：建模款式</div>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-800">反馈记录</div>
+          <div className="mt-2 text-3xl font-semibold">{preview.summary.feedbackRows}</div>
+          <div className="mt-1 text-sm text-slate-500">工作表：建模反馈</div>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-800">导入方式</div>
+          <div className="mt-2 text-lg font-semibold">合并更新</div>
+          <div className="mt-1 text-sm text-slate-500">款式ID优先，其次项目名称 + 款式名称 + 序号</div>
+        </div>
+      </section>
+
+      <section className="mt-5 rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-800">建模款式预览</div>
+            <div className="mt-1 text-xs text-slate-500">
+              款式 {preview.parsed.styleRows} 行 · 反馈 {preview.parsed.feedbackRows} 行
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+              <input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="搜索项目 / 款式 / 建模师"
+                className="h-9 w-60 rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-slate-400"
+              />
+            </div>
+            <select
+              value={rowFilter}
+              onChange={(event) => onRowFilterChange(event.target.value as "all" | ProjectPreviewRow["matchStatus"])}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
+            >
+              <option value="all">全部</option>
+              <option value="matched">已匹配</option>
+              <option value="new">待新增</option>
+              <option value="conflict">需确认</option>
+              <option value="invalid">不可导入</option>
+            </select>
+          </div>
+        </div>
+        <div className="overflow-auto">
+          <table className="min-w-[1320px] w-full border-collapse text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-4 py-3">行</th>
+                <th className="px-4 py-3">匹配</th>
+                <th className="px-4 py-3">项目 / 款式</th>
+                <th className="px-4 py-3">状态</th>
+                <th className="px-4 py-3">建模师</th>
+                <th className="px-4 py-3">外包供应商</th>
+                <th className="px-4 py-3">预计天数</th>
+                <th className="px-4 py-3">开始 / 内部通过 / 版权过审</th>
+                <th className="px-4 py-3">提示</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredRows.map((row) => (
+                <tr key={`${row.rowNumber}-${row.styleId}`} className="align-top hover:bg-slate-50/70">
+                  <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
+                  <td className="px-4 py-3">
+                    <span className={clsx("inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold", matchStatusClass[row.matchStatus])}>
+                      {matchStatusLabel[row.matchStatus]}
+                    </span>
+                    <div className="mt-1 text-xs text-slate-400">{row.matchBy}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-900">{row.projectName || "未填写项目"}</div>
+                    <div className="mt-1 text-slate-600">{row.styleName || "未填写款式"}</div>
+                    <div className="mt-1 text-xs text-slate-400">{row.styleId || row.styleSequence || "-"}</div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">{row.status || "-"}</td>
+                  <td className="px-4 py-3 text-slate-700">{row.modelerName || "-"}</td>
+                  <td className="px-4 py-3 text-slate-700">{row.vendorName || "-"}</td>
+                  <td className="px-4 py-3 text-slate-700">{row.estimatedWorkdays ?? "-"}</td>
+                  <td className="px-4 py-3 text-slate-600">
+                    <div>{row.plannedStartDate || "-"}</div>
+                    <div className="mt-1 text-xs text-slate-400">{row.internalApprovedDate || "-"} / {row.copyrightApprovedDate || "-"}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <IssueList issues={row.issues} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {preview.feedbackRows.length > 0 ? (
+        <section className="mt-5 rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <div className="text-sm font-semibold text-slate-800">建模反馈预览</div>
+          </div>
+          <div className="overflow-auto">
+            <table className="min-w-[1100px] w-full border-collapse text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">行</th>
+                  <th className="px-4 py-3">匹配</th>
+                  <th className="px-4 py-3">项目 / 款式</th>
+                  <th className="px-4 py-3">反馈日期</th>
+                  <th className="px-4 py-3">来源 / 类型</th>
+                  <th className="px-4 py-3">反馈内容</th>
+                  <th className="px-4 py-3">处理状态</th>
+                  <th className="px-4 py-3">提示</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {preview.feedbackRows.slice(0, 80).map((row) => (
+                  <tr key={`${row.rowNumber}-${row.projectName}-${row.styleName}`} className="align-top hover:bg-slate-50/70">
+                    <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
+                    <td className="px-4 py-3">
+                      <span className={clsx("inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold", matchStatusClass[row.matchStatus])}>
+                        {matchStatusLabel[row.matchStatus]}
+                      </span>
+                      <div className="mt-1 text-xs text-slate-400">{row.matchBy}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div>{row.projectName}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.styleName}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">{row.feedbackDate || "-"}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div>{row.feedbackSource || "-"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.feedbackType || "-"}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">{row.feedbackContent || "-"}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.processStatus || "-"}</td>
+                    <td className="px-4 py-3">
+                      <IssueList issues={row.issues} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function IssueList({ issues }: { issues: PreviewIssue[] }) {
+  return (
+    <div className="flex max-w-72 flex-wrap gap-1.5">
+      {issues.length > 0 ? (
+        issues.slice(0, 4).map((issue, index) => (
+          <span key={`${issue.severity}-${index}`} className={clsx("rounded-md px-2 py-1 text-xs", issueToneClass[issue.severity])}>
+            {issue.message}
+          </span>
+        ))
+      ) : (
+        <span className="text-xs text-slate-400">无</span>
+      )}
     </div>
   );
 }

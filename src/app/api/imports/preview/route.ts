@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
+import { previewModelingImport } from "@/lib/imports/modeling-import";
 import { previewProjectMainImport } from "@/lib/imports/project-main-preview";
 
 export const runtime = "nodejs";
@@ -15,8 +16,8 @@ export async function POST(request: Request) {
     const file = formData.get("file");
     const importType = optionalText(formData.get("importType")) ?? "project-main";
 
-    if (importType !== "project-main") {
-      return NextResponse.json({ ok: false, message: "当前只支持项目主数据预览。" }, { status: 400 });
+    if (importType !== "project-main" && importType !== "modeling") {
+      return NextResponse.json({ ok: false, message: "当前只支持项目主数据和建模款式预览。" }, { status: 400 });
     }
 
     if (!(file instanceof File)) {
@@ -33,7 +34,10 @@ export async function POST(request: Request) {
     const workbookPath = path.join(importDir, sanitizeFileName(file.name));
     await fs.writeFile(workbookPath, Buffer.from(await file.arrayBuffer()));
 
-    const preview = await previewProjectMainImport(workbookPath, file.name);
+    const preview =
+      importType === "modeling"
+        ? await previewModelingImport(workbookPath, file.name)
+        : await previewProjectMainImport(workbookPath, file.name);
 
     return NextResponse.json({
       ok: true,

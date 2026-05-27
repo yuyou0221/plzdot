@@ -8,6 +8,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "未分配",
   "已排期",
   "建模中",
+  "修改中",
   "已送审",
   "等反馈",
   "已通过",
@@ -16,7 +17,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "取消",
 ]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "已送审", "等反馈", "已通过", "外包中"]);
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "已送审", "等反馈", "已通过", "外包中"]);
 
 export class ModelingTaskUpdateError extends Error {
   statusCode: number;
@@ -225,11 +226,11 @@ function applyStatusEffects(
     data.stableOutsourceCapacity = false;
   }
 
-  if (status === "建模中") {
+  if (status === "建模中" || status === "修改中") {
     data.actualStartDate = options.actualStartDate ?? today;
     data.blockedSince = null;
     data.blockedDays = 0;
-    data.blockType = null;
+    data.blockType = status === "修改中" ? (options.blockType ?? "修改中") : null;
   }
 
   if (reviewBlockedStatuses.has(status)) {
@@ -253,7 +254,7 @@ function applyStatusEffects(
   }
 }
 
-async function refreshProjectModelingProgress(
+export async function refreshProjectModelingProgress(
   tx: Prisma.TransactionClient,
   projectId: string,
   projectTaskId: string,
@@ -276,7 +277,7 @@ async function refreshProjectModelingProgress(
   const approvedStyles = requiredTasks.filter((task) => normalizeExistingStatus(task.status, task.isOutsourced) === "已通过").length;
   const inProgressStyles = requiredTasks.filter((task) => {
     const status = normalizeExistingStatus(task.status, task.isOutsourced);
-    return status === "已排期" || status === "建模中";
+    return status === "已排期" || status === "建模中" || status === "修改中";
   }).length;
   const submittedStyles = requiredTasks.filter((task) => {
     const status = normalizeExistingStatus(task.status, task.isOutsourced);
@@ -360,6 +361,7 @@ function normalizeExistingStatus(value: string, isOutsourced: boolean): Modeling
 
   if (value.includes("未分配")) return "未分配";
   if (value.includes("排期")) return "已排期";
+  if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
@@ -384,6 +386,7 @@ function isOriginalArtApproved(status: string, approvedDate: Date | null) {
 function defaultFeedbackType(status: ModelingTaskStatus) {
   if (status === "已送审") return "送审记录";
   if (status === "等反馈") return "版权方反馈";
+  if (status === "修改中") return "修改意见";
   if (status === "建模中") return "修改意见";
   if (status === "已通过") return "通过记录";
   return "检修反馈";

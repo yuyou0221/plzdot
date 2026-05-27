@@ -9,7 +9,9 @@ import type {
   ProductGuideMilestoneBoard,
   ProductGuideMilestoneCard,
   ProductGuideMetric,
+  ProductGuideRecentUpdate,
   ProductGuideRiskLevel,
+  ProductGuideStyleSummary,
 } from "@/lib/product-guide-types";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
 import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
@@ -37,7 +39,10 @@ type UserRow = {
   id: string;
   name: string;
   teamId: string | null;
+  departmentTeamId: string | null;
+  projectGroupTeamId: string | null;
   roleTitle: string | null;
+  businessRoles: unknown;
   status: string;
 };
 
@@ -111,6 +116,11 @@ type ModelingTaskRow = {
   projectTaskId: string;
   styleCode: string;
   styleName: string;
+  isRequired: boolean;
+  originalArtStatus: string;
+  originalArtApprovedDate: Date | null;
+  difficulty: string;
+  estimatedWorkdays: number;
   modelerId: string | null;
   isOutsourced: boolean;
   outsourceVendorId: string | null;
@@ -123,6 +133,17 @@ type ModelingTaskRow = {
   blockType: string | null;
   lastUpdatedAt: Date | null;
   updatedAt: Date;
+};
+
+type ProgressUpdateRow = {
+  id: string;
+  projectId: string;
+  projectTaskId: string;
+  updateType: string;
+  newValue: unknown;
+  note: string | null;
+  updatedByName: string | null;
+  createdAt: Date;
 };
 
 type AlertRow = {
@@ -169,6 +190,8 @@ type ContextMaps = {
   taskById: Map<string, ProjectTaskRow>;
   projectResultById: Map<string, ProjectResultRow>;
   modelingProgressByProjectId: Map<string, ModelingProgressRow>;
+  recentUpdatesByProjectId: Map<string, ProductGuideRecentUpdate[]>;
+  recentUpdatesByTaskId: Map<string, ProductGuideRecentUpdate[]>;
 };
 
 const keyPathTaskNos = new Set([6, 7, 8, 9, 10, 11, 14, 15, 17, 18, 21, 22, 23, 24, 25, 26, 27, 30]);
@@ -209,7 +232,10 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
           id: true,
           name: true,
           teamId: true,
+          departmentTeamId: true,
+          projectGroupTeamId: true,
           roleTitle: true,
+          businessRoles: true,
           status: true,
         },
       }),
@@ -225,7 +251,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
     }
 
     const projectIds = projects.map((project) => project.id);
-    const [projectResults, taskResults, projectTasks, modelingProgress, modelingTasks, alerts, workTasks] =
+    const [projectResults, taskResults, projectTasks, modelingProgress, modelingTasks, alerts, workTasks, progressUpdates] =
       await Promise.all([
         latestRun
           ? prisma.scheduleProjectResult.findMany({
@@ -315,6 +341,11 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
             projectTaskId: true,
             styleCode: true,
             styleName: true,
+            isRequired: true,
+            originalArtStatus: true,
+            originalArtApprovedDate: true,
+            difficulty: true,
+            estimatedWorkdays: true,
             modelerId: true,
             isOutsourced: true,
             outsourceVendorId: true,
@@ -373,6 +404,21 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
             updatedAt: true,
           },
         }),
+        prisma.progressUpdate.findMany({
+          where: { projectId: { in: projectIds } },
+          orderBy: [{ createdAt: "desc" }],
+          take: 900,
+          select: {
+            id: true,
+            projectId: true,
+            projectTaskId: true,
+            updateType: true,
+            newValue: true,
+            note: true,
+            updatedByName: true,
+            createdAt: true,
+          },
+        }),
       ]);
 
     const projectById = new Map(projects.map((project) => [project.id, project]));
@@ -382,6 +428,8 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       taskById: new Map(projectTasks.map((task) => [task.id, task])),
       projectResultById: new Map(projectResults.map((result) => [result.projectId, result])),
       modelingProgressByProjectId: new Map(modelingProgress.map((progress) => [progress.projectId, progress])),
+      recentUpdatesByProjectId: groupRecentUpdates(progressUpdates, "projectId"),
+      recentUpdatesByTaskId: groupRecentUpdates(progressUpdates, "projectTaskId"),
     };
     const itemsById = new Map<string, ProductGuideItem>();
 
@@ -600,8 +648,9 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       generatedAt: new Date().toISOString(),
       metrics: buildMetrics(items),
       milestoneBoard,
-      filters: buildFilters(items, users, milestoneBoard.cards),
+      filters: buildFilters(items, users, teams, milestoneBoard.cards),
       items,
+      styleSummaries: buildStyleSummaries(modelingTasks),
     };
   } catch (error) {
     console.error("Failed to build product guide data", error);
@@ -680,6 +729,7 @@ function buildScheduleTaskItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(result, project),
     riskCopy,
+    recentUpdates: recentUpdatesFor(project.id, row.projectTaskId, maps),
   };
 }
 
@@ -736,6 +786,7 @@ function buildProjectRiskItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(result, project),
     riskCopy: result.riskMessage ?? `${project.projectName} 当前有延期风险，请尽快确认卡点。`,
+    recentUpdates: recentUpdatesFor(project.id, task?.id, maps),
   };
 }
 
@@ -799,6 +850,7 @@ function buildProjectTaskItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(result, project),
     riskCopy: task.blockReason ?? (isStale ? `${task.taskName} 已超过 3 天没有更新。` : "该任务需要产品组跟进。"),
+    recentUpdates: recentUpdatesFor(project.id, task.id, maps),
   };
 }
 
@@ -850,6 +902,7 @@ function buildWorkTaskItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
     riskCopy: workTask.riskMessage ?? suggestion,
+    recentUpdates: recentUpdatesFor(project.id, workTask.projectTaskId ?? undefined, maps),
   };
 }
 
@@ -896,6 +949,7 @@ function buildAlertItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
     riskCopy: alert.message,
+    recentUpdates: recentUpdatesFor(project.id, alert.projectTaskId ?? undefined, maps),
   };
 }
 
@@ -955,6 +1009,7 @@ function buildModelingProgressItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
     riskCopy: `${project.projectName} 建模里程碑仍有 ${count} 款需要产品组处理。`,
+    recentUpdates: recentUpdatesFor(project.id, undefined, maps),
   };
 }
 
@@ -1024,6 +1079,7 @@ function buildModelingTaskItem({
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
     riskCopy: modelingTask.blockType ?? `${styleName} 当前需要处理。`,
+    recentUpdates: recentUpdatesFor(project.id, modelingTask.projectTaskId, maps),
   };
 }
 
@@ -1073,6 +1129,126 @@ function buildMilestoneBoard(
   };
 }
 
+function buildStyleSummaries(modelingTasks: ModelingTaskRow[]): ProductGuideStyleSummary[] {
+  return modelingTasks
+    .map((task) => ({
+      id: task.id,
+      projectId: task.projectId,
+      projectTaskId: task.projectTaskId,
+      styleCode: task.styleCode,
+      styleName: task.styleName || task.styleCode,
+      isRequired: task.isRequired,
+      originalArtStatus: task.originalArtStatus,
+      originalArtApprovedDate: formatDate(task.originalArtApprovedDate),
+      difficulty: task.difficulty,
+      estimatedWorkdays: task.estimatedWorkdays,
+      status: normalizeModelingStatus(task.status, task.isOutsourced),
+      plannedFinishDate: formatDate(task.plannedFinishDate),
+      actualFinishDate: formatDate(task.actualFinishDate),
+      lastUpdatedAt: formatDate(task.lastUpdatedAt ?? task.updatedAt),
+    }))
+    .sort((a, b) => a.projectId.localeCompare(b.projectId) || a.styleCode.localeCompare(b.styleCode, "zh-CN"));
+}
+
+function groupRecentUpdates(rows: ProgressUpdateRow[], key: "projectId" | "projectTaskId") {
+  const groups = new Map<string, ProductGuideRecentUpdate[]>();
+
+  for (const row of rows) {
+    const groupKey = row[key];
+    const current = groups.get(groupKey) ?? [];
+
+    if (current.length >= 5) {
+      continue;
+    }
+
+    current.push({
+      id: row.id,
+      updateType: row.updateType,
+      note: row.note ?? undefined,
+      createdAt: formatDateTime(row.createdAt),
+      updatedByName: row.updatedByName ?? undefined,
+      newValueSummary: summarizeUpdateValue(row.newValue),
+    });
+    groups.set(groupKey, current);
+  }
+
+  return groups;
+}
+
+function recentUpdatesFor(projectId: string, taskId: string | undefined, maps: ContextMaps) {
+  const seen = new Set<string>();
+  const updates: ProductGuideRecentUpdate[] = [];
+  const candidates = [
+    ...(taskId ? maps.recentUpdatesByTaskId.get(taskId) ?? [] : []),
+    ...(maps.recentUpdatesByProjectId.get(projectId) ?? []),
+  ];
+
+  for (const update of candidates) {
+    if (seen.has(update.id)) {
+      continue;
+    }
+
+    seen.add(update.id);
+    updates.push(update);
+
+    if (updates.length >= 3) {
+      break;
+    }
+  }
+
+  return updates;
+}
+
+function summarizeUpdateValue(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const parts = Object.entries(value as Record<string, unknown>)
+    .map(([key, fieldValue]) => `${updateFieldLabel(key)}：${summarizePrimitive(fieldValue)}`)
+    .filter((text) => !text.endsWith("："))
+    .slice(0, 3);
+
+  return parts.length > 0 ? parts.join("，") : undefined;
+}
+
+function updateFieldLabel(key: string) {
+  const labels: Record<string, string> = {
+    status: "状态",
+    actualFinishDate: "实际完成",
+    expectedFinishDate: "预计完成",
+    submittedAt: "送审日期",
+    reviewTarget: "送审对象",
+    blockReason: "阻塞原因",
+    progressNote: "进度",
+    createdStyleCount: "新增款式",
+    styleNames: "款式",
+    isBlocked: "阻塞",
+  };
+
+  return labels[key] ?? key;
+}
+
+function summarizePrimitive(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => summarizePrimitive(item)).filter(Boolean).slice(0, 3).join("、");
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
 function addOrMergeItem(itemsById: Map<string, ProductGuideItem>, item: ProductGuideItem) {
   const existing = itemsById.get(item.id);
 
@@ -1087,6 +1263,7 @@ function addOrMergeItem(itemsById: Map<string, ProductGuideItem>, item: ProductG
   existing.requiresArtReview = existing.requiresArtReview || item.requiresArtReview;
   existing.waitingLicensor = existing.waitingLicensor || item.waitingLicensor;
   existing.staleDays = Math.max(existing.staleDays, item.staleDays);
+  existing.recentUpdates = mergeRecentUpdates(existing.recentUpdates, item.recentUpdates);
   const worseRiskLevel = worseRisk(existing.riskLevel, item.riskLevel);
 
   if (worseRiskLevel !== existing.riskLevel) {
@@ -1098,6 +1275,24 @@ function addOrMergeItem(itemsById: Map<string, ProductGuideItem>, item: ProductG
   if (item.isBlocked && !existing.isBlocked) {
     existing.suggestion = item.suggestion;
   }
+}
+
+function mergeRecentUpdates(a: ProductGuideRecentUpdate[], b: ProductGuideRecentUpdate[]) {
+  const seen = new Set<string>();
+  const merged: ProductGuideRecentUpdate[] = [];
+
+  for (const update of [...a, ...b]) {
+    if (seen.has(update.id)) {
+      continue;
+    }
+
+    seen.add(update.id);
+    merged.push(update);
+  }
+
+  return merged
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 3);
 }
 
 function buildMetrics(items: ProductGuideItem[]): ProductGuideMetric[] {
@@ -1146,10 +1341,20 @@ function buildMetrics(items: ProductGuideItem[]): ProductGuideMetric[] {
   ];
 }
 
-function buildFilters(items: ProductGuideItem[], users: UserRow[], milestoneCards: ProductGuideMilestoneCard[] = []) {
+function buildFilters(
+  items: ProductGuideItem[],
+  users: UserRow[],
+  teamsSource: TeamRow[] = [],
+  milestoneCards: ProductGuideMilestoneCard[] = [],
+) {
+  const teamById = new Map(teamsSource.map((team) => [team.id, team.name]));
+  const projectGroupsFromUsers = users
+    .filter((user) => user.status !== "停用" && user.projectGroupTeamId)
+    .map((user) => ({ value: user.projectGroupTeamId ?? "", label: teamById.get(user.projectGroupTeamId ?? "") ?? "未匹配项目小组" }));
   const teams = uniqueOptions([
     ...items.map((item) => ({ value: item.projectTeamKey, label: item.projectTeamName })),
     ...milestoneCards.map((card) => ({ value: card.projectTeamKey, label: card.projectTeamName })),
+    ...projectGroupsFromUsers,
   ]);
   const productOwners = uniqueOptions(items.map((item) => ({ value: item.productOwnerKey, label: item.productOwnerName })));
   const artOwners = uniqueOptions(items.map((item) => ({ value: item.artOwnerKey, label: item.artOwnerName })));
@@ -1159,7 +1364,7 @@ function buildFilters(items: ProductGuideItem[], users: UserRow[], milestoneCard
     { value: item.artOwnerKey, label: item.artOwnerName },
   ]);
   const activeProductUsers = users
-    .filter((user) => user.status !== "停用" && isProductRole(user.roleTitle))
+    .filter((user) => user.status !== "停用" && isProductRole(user))
     .map((user) => ({ value: user.id, label: user.name }));
 
   return {
@@ -1209,6 +1414,7 @@ function buildFallbackData(): ProductGuideData {
       nextStep: "该项目预测会延期，请确认当前卡点并更新预计完成时间。",
       relatedProjectProgress: "项目进度 42%，计划上线 2026-05-22。",
       riskCopy: "若本周无法确认外包补位，建模里程碑会继续延期。",
+      recentUpdates: [],
     },
     {
       id: "fallback:2",
@@ -1245,6 +1451,7 @@ function buildFallbackData(): ProductGuideData {
       nextStep: "该款式卡在送审 / 修改，请产品美术确认下一步反馈。",
       relatedProjectProgress: "项目进度 28%，复杂款式占比较高。",
       riskCopy: "送审反馈未明确会影响建模里程碑回收。",
+      recentUpdates: [],
     },
   ];
 
@@ -1281,7 +1488,7 @@ function buildFallbackData(): ProductGuideData {
         },
       ],
     },
-    filters: buildFilters(items, [], [
+    filters: buildFilters(items, [], [], [
       {
         id: "fallback-project-1:建模里程碑",
         projectId: "fallback-project-1",
@@ -1306,6 +1513,7 @@ function buildFallbackData(): ProductGuideData {
       },
     ]),
     items,
+    styleSummaries: [],
   };
 }
 
@@ -1532,6 +1740,10 @@ function formatDate(value?: Date | null) {
   return value ? value.toISOString().slice(0, 10) : undefined;
 }
 
+function formatDateTime(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")} ${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
+}
+
 function teamRef(value: string | null | undefined, teamById: Map<string, TeamRow>): RefLabel {
   if (value && teamById.has(value)) {
     return { key: value, label: teamById.get(value)?.name ?? "未匹配团队" };
@@ -1583,8 +1795,21 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function isProductRole(value: string | null) {
-  return Boolean(value && (value.includes("产品研发") || value.includes("产品") || value.includes("美术")));
+function isProductRole(user: UserRow) {
+  const roleText = [stringValue(user.roleTitle), ...jsonStringList(user.businessRoles)].filter(Boolean).join(" ");
+  return Boolean(roleText && (roleText.includes("产品研发") || roleText.includes("产品总监") || roleText.includes("产品") || roleText.includes("美术")));
+}
+
+function jsonStringList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(stringValue).filter((item): item is string => Boolean(item));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function isCompletedProject(project: ProjectRow, result: ProjectResultRow | undefined) {

@@ -1,6 +1,5 @@
 import "server-only";
 
-import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { authRoleLabels } from "@/lib/auth/permissions";
 import type {
@@ -21,11 +20,13 @@ const baseTeams = [
   { name: "供应链团队", teamType: "供应链" },
 ];
 
+const baseProductGroups = ["忍者组", "迪no组", "丹东组", "易特凡组"];
+
 export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData> {
   try {
     await ensureBaseUserData();
 
-    const [teamRows, userRows, tagRows, vendorRows] = await Promise.all([
+    const [teamRows, userRows, tagRows, vendorRows, availabilityRows] = await Promise.all([
       prisma.team.findMany({
         orderBy: [{ status: "asc" }, { name: "asc" }],
         select: {
@@ -44,13 +45,18 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
           id: true,
           name: true,
           teamId: true,
+          departmentTeamId: true,
+          projectGroupTeamId: true,
           roleTitle: true,
+          businessRoles: true,
           userType: true,
           loginName: true,
           passwordHash: true,
           authRole: true,
           isModeler: true,
           weeklyCapacityStyles: true,
+          weeklyAvailableWorkdays: true,
+          isSchedulable: true,
           status: true,
           notes: true,
         },
@@ -68,10 +74,26 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
         select: {
           id: true,
           name: true,
+          vendorType: true,
           contactName: true,
           contactInfo: true,
           specialtyTags: true,
           stableCapacity: true,
+          status: true,
+          notes: true,
+        },
+      }),
+      prisma.userAvailabilityBlock.findMany({
+        where: { status: { not: "停用" } },
+        orderBy: [{ startDate: "asc" }, { endDate: "asc" }],
+        take: 300,
+        select: {
+          id: true,
+          userId: true,
+          blockType: true,
+          startDate: true,
+          endDate: true,
+          workdayCount: true,
           status: true,
           notes: true,
         },
@@ -84,21 +106,33 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
 
     const people: UserDataPerson[] = userRows.map((user) => {
       const tags = tagsByUserId.get(user.id) ?? { specialtyTags: [], weaknessTags: [] };
-      const missingCapacity = user.isModeler && (!user.weeklyCapacityStyles || user.weeklyCapacityStyles <= 0);
+      const weeklyAvailableWorkdays = user.weeklyAvailableWorkdays ?? user.weeklyCapacityStyles ?? undefined;
+      const departmentTeamId = user.departmentTeamId ?? user.teamId ?? undefined;
+      const projectGroupTeamId = user.projectGroupTeamId ?? undefined;
+      const missingCapacity = user.isModeler && (!weeklyAvailableWorkdays || weeklyAvailableWorkdays <= 0);
+      const businessRoles = jsonStringList(user.businessRoles);
+      const roleTitle = businessRoles.length > 0 ? businessRoles.join("、") : (user.roleTitle ?? "未填写");
 
       return {
         id: user.id,
         name: user.name,
-        teamId: user.teamId ?? undefined,
-        teamName: user.teamId ? (teamNameById.get(user.teamId) ?? "未匹配团队") : "未分配",
-        roleTitle: user.roleTitle ?? "未填写",
+        teamId: departmentTeamId,
+        teamName: departmentTeamId ? (teamNameById.get(departmentTeamId) ?? "未匹配团队") : "未分配",
+        departmentTeamId,
+        departmentTeamName: departmentTeamId ? (teamNameById.get(departmentTeamId) ?? "未匹配部门") : "未分配",
+        projectGroupTeamId,
+        projectGroupTeamName: projectGroupTeamId ? (teamNameById.get(projectGroupTeamId) ?? "未匹配项目小组") : "未分配",
+        roleTitle,
+        businessRoles,
         userType: user.userType,
         loginName: user.loginName ?? "",
         authRole: user.authRole,
         authRoleLabel: authRoleLabels[user.authRole] ?? user.authRole,
         canLogin: Boolean(user.loginName && user.passwordHash),
         isModeler: user.isModeler,
-        weeklyCapacityStyles: user.weeklyCapacityStyles ?? undefined,
+        weeklyCapacityStyles: weeklyAvailableWorkdays,
+        weeklyAvailableWorkdays,
+        isSchedulable: user.isSchedulable,
         status: user.status,
         notes: user.notes ?? "",
         specialtyTags: tags.specialtyTags,
@@ -122,12 +156,25 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
     const vendors: UserDataVendor[] = vendorRows.map((vendor) => ({
       id: vendor.id,
       name: vendor.name,
+      vendorType: vendor.vendorType ?? "建模外包",
       contactName: vendor.contactName ?? "",
       contactInfo: vendor.contactInfo ?? "",
       specialtyTags: jsonStringList(vendor.specialtyTags),
       stableCapacity: vendor.stableCapacity,
       status: vendor.status,
       notes: vendor.notes ?? "",
+    }));
+
+    const availabilityBlocks = availabilityRows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      userName: userNameById.get(row.userId) ?? "未匹配人员",
+      blockType: row.blockType,
+      startDate: dateOnly(row.startDate),
+      endDate: dateOnly(row.endDate),
+      workdayCount: row.workdayCount ?? undefined,
+      status: row.status,
+      notes: row.notes ?? "",
     }));
 
     return {
@@ -137,6 +184,7 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       people,
       teams,
       vendors,
+      availabilityBlocks,
     };
   } catch (error) {
     console.error("Failed to build user data workbench", error);
@@ -158,6 +206,7 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       people: [],
       teams,
       vendors: [],
+      availabilityBlocks: [],
     };
   }
 }
@@ -180,6 +229,23 @@ async function ensureBaseUserData() {
       });
     }
 
+    const teamsAfterBase = await tx.team.findMany({ select: { id: true, name: true } });
+    const productTeam = teamsAfterBase.find((team) => team.name === "产品团队");
+    const existingProjectGroups = new Set(teamsAfterBase.map((team) => team.name));
+    const missingProjectGroups = baseProductGroups.filter((name) => !existingProjectGroups.has(name));
+
+    if (missingProjectGroups.length > 0) {
+      await tx.team.createMany({
+        data: missingProjectGroups.map((name) => ({
+          name,
+          teamType: "产品",
+          parentTeamId: productTeam?.id,
+          status: "启用",
+          notes: "产品部门下的项目小组。",
+        })),
+      });
+    }
+
     const teams = await tx.team.findMany({ select: { id: true, name: true } });
     const teamIdByName = new Map(teams.map((team) => [team.name, team.id]));
     const userRows = await tx.user.findMany({ select: { name: true } });
@@ -193,20 +259,6 @@ async function ensureBaseUserData() {
     if (missingUsers.length > 0) {
       await tx.user.createMany({ data: missingUsers });
     }
-
-    const seededModelers = await tx.user.findMany({
-      where: { name: { in: ["建模师待补充 A", "建模师待补充 B"] } },
-      select: { id: true, name: true },
-    });
-    const modelerA = seededModelers.find((user) => user.name === "建模师待补充 A");
-    const modelerB = seededModelers.find((user) => user.name === "建模师待补充 B");
-
-    await ensureSeedTags(tx, modelerA?.id, [
-      { tagName: "Q版", tagType: "擅长" },
-      { tagName: "常规款", tagType: "擅长" },
-      { tagName: "复杂机械", tagType: "不擅长" },
-    ]);
-    await ensureSeedTags(tx, modelerB?.id, [{ tagName: "正比例", tagType: "擅长" }]);
 
     const vendorRows = await tx.outsourceVendor.findMany({ select: { name: true } });
     const existingVendorNames = new Set(vendorRows.map((vendor) => vendor.name));
@@ -229,70 +281,61 @@ function buildSeedUsers(teamIdByName: Map<string, string>) {
     {
       name: "产品研发待补充",
       teamId: teamIdByName.get("产品团队"),
+      departmentTeamId: teamIdByName.get("产品团队"),
       roleTitle: "产品研发",
+      businessRoles: ["产品研发"],
       userType: "内部",
       isModeler: false,
+      isSchedulable: true,
       status: "启用",
       notes: "基础占位数据，可编辑为真实人员。",
     },
     {
       name: "产品研发美术待补充",
       teamId: teamIdByName.get("产品团队"),
+      departmentTeamId: teamIdByName.get("产品团队"),
       roleTitle: "产品研发美术",
+      businessRoles: ["产品研发美术"],
       userType: "内部",
       isModeler: false,
+      isSchedulable: true,
       status: "启用",
       notes: "基础占位数据，可编辑为真实人员。",
     },
     {
       name: "建模师待补充 A",
       teamId: teamIdByName.get("建模团队"),
+      departmentTeamId: teamIdByName.get("建模团队"),
       roleTitle: "建模师",
+      businessRoles: ["建模师"],
       userType: "内部",
       isModeler: true,
       weeklyCapacityStyles: 4,
+      weeklyAvailableWorkdays: 4,
+      isSchedulable: true,
       status: "启用",
       notes: "基础占位数据，可编辑为真实人员。",
     },
     {
       name: "建模师待补充 B",
       teamId: teamIdByName.get("建模团队"),
+      departmentTeamId: teamIdByName.get("建模团队"),
       roleTitle: "建模师",
+      businessRoles: ["建模师"],
       userType: "内部",
       isModeler: true,
+      isSchedulable: true,
       status: "启用",
       notes: "基础占位数据，当前故意保留产能缺口用于配置提醒。",
     },
   ];
 }
 
-async function ensureSeedTags(
-  tx: Prisma.TransactionClient,
-  userId: string | undefined,
-  tags: Array<{ tagName: string; tagType: string }>,
-) {
-  if (!userId) {
-    return;
-  }
-
-  const existingTags = await tx.modelerCapabilityTag.findMany({
-    where: { userId },
-    select: { tagName: true, tagType: true },
-  });
-  const existingTagKeys = new Set(existingTags.map((tag) => `${tag.tagType}:${tag.tagName}`));
-  const missingTags = tags.filter((tag) => !existingTagKeys.has(`${tag.tagType}:${tag.tagName}`));
-
-  if (missingTags.length > 0) {
-    await tx.modelerCapabilityTag.createMany({
-      data: missingTags.map((tag) => ({ userId, ...tag })),
-    });
-  }
-}
-
 function buildSeedVendors() {
   return [
     {
       name: "稳定外包供应商待补充",
+      vendorType: "稳定建模外包",
       contactName: "联系人待补充",
       specialtyTags: ["Q版", "常规款"],
       stableCapacity: true,
@@ -301,6 +344,7 @@ function buildSeedVendors() {
     },
     {
       name: "临时外包供应商待补充",
+      vendorType: "临时建模外包",
       contactName: "联系人待补充",
       specialtyTags: ["复杂结构"],
       stableCapacity: false,
@@ -336,7 +380,9 @@ function isWeaknessTag(tagType: string) {
 
 function buildMetrics(people: UserDataPerson[], teams: UserDataTeam[], vendors: UserDataVendor[]) {
   const activePeople = people.filter((person) => person.status !== "停用");
-  const productTeamIds = new Set(teams.filter((team) => team.name.includes("产品")).map((team) => team.id));
+  const productTeamIds = new Set(
+    teams.filter((team) => team.teamType === "产品" || team.name.includes("产品")).map((team) => team.id),
+  );
   const modelers = activePeople.filter((person) => person.isModeler);
 
   return [
@@ -348,8 +394,12 @@ function buildMetrics(people: UserDataPerson[], teams: UserDataTeam[], vendors: 
     },
     {
       label: "产品组人数",
-      value: activePeople.filter((person) => person.teamId && productTeamIds.has(person.teamId)).length,
-      helper: "所属团队包含产品",
+      value: activePeople.filter(
+        (person) =>
+          (person.departmentTeamId && productTeamIds.has(person.departmentTeamId)) ||
+          (person.projectGroupTeamId && productTeamIds.has(person.projectGroupTeamId)),
+      ).length,
+      helper: "公司部门或项目小组属于产品",
       tone: "info" as const,
     },
     {
@@ -361,7 +411,7 @@ function buildMetrics(people: UserDataPerson[], teams: UserDataTeam[], vendors: 
     {
       label: "缺少产能参数人数",
       value: modelers.filter((person) => person.missingCapacity).length,
-      helper: "建模师未填写每周产能",
+      helper: "建模师未填写每周可用工作日",
       tone: "warning" as const,
     },
     {
@@ -379,4 +429,8 @@ function jsonStringList(value: unknown) {
   }
 
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function dateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
 }

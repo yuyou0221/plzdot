@@ -18,6 +18,7 @@ const statusColumns: ModelingTaskStatus[] = [
   "未分配",
   "已排期",
   "建模中",
+  "修改中",
   "已送审",
   "等反馈",
   "已通过",
@@ -26,7 +27,7 @@ const statusColumns: ModelingTaskStatus[] = [
   "取消",
 ];
 
-const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "已送审", "等反馈", "外包中", "暂停"]);
+const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "已送审", "等反馈", "外包中", "暂停"]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
 const defaultVirtualModelers: ModelerCapacity[] = [
   {
@@ -34,7 +35,9 @@ const defaultVirtualModelers: ModelerCapacity[] = [
     name: "待补充建模师 A",
     roleTitle: "内部建模",
     weeklyCapacityStyles: 4,
-    specialtyTags: ["常规款", "Q版"],
+    weeklyAvailableWorkdays: 4,
+    isSchedulable: true,
+    specialtyTags: [],
     isVirtual: true,
   },
   {
@@ -42,7 +45,9 @@ const defaultVirtualModelers: ModelerCapacity[] = [
     name: "待补充建模师 B",
     roleTitle: "内部建模",
     weeklyCapacityStyles: 4,
-    specialtyTags: ["复杂结构", "正比例"],
+    weeklyAvailableWorkdays: 4,
+    isSchedulable: true,
+    specialtyTags: [],
     isVirtual: true,
   },
   {
@@ -50,7 +55,9 @@ const defaultVirtualModelers: ModelerCapacity[] = [
     name: "待补充建模师 C",
     roleTitle: "内部建模",
     weeklyCapacityStyles: 4,
-    specialtyTags: ["简单款", "换色款"],
+    weeklyAvailableWorkdays: 4,
+    isSchedulable: true,
+    specialtyTags: [],
     isVirtual: true,
   },
 ];
@@ -82,6 +89,8 @@ type ModelingTaskRow = {
   plannedFinishDate: Date | null;
   actualStartDate: Date | null;
   actualFinishDate: Date | null;
+  internalApprovedDate: Date | null;
+  copyrightApprovedDate: Date | null;
   actualWorkdays: number | null;
   status: string;
   reviewRound: number | null;
@@ -155,6 +164,8 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
           plannedFinishDate: true,
           actualStartDate: true,
           actualFinishDate: true,
+          internalApprovedDate: true,
+          copyrightApprovedDate: true,
           actualWorkdays: true,
           status: true,
           reviewRound: true,
@@ -172,6 +183,8 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
           name: true,
           roleTitle: true,
           weeklyCapacityStyles: true,
+          weeklyAvailableWorkdays: true,
+          isSchedulable: true,
         },
       }),
       prisma.outsourceVendor.findMany({
@@ -301,7 +314,14 @@ function buildVendors(vendors: Array<{ id: string; name: string; stableCapacity:
 }
 
 function buildModelers(
-  users: Array<{ id: string; name: string; roleTitle: string | null; weeklyCapacityStyles: number | null }>,
+  users: Array<{
+    id: string;
+    name: string;
+    roleTitle: string | null;
+    weeklyCapacityStyles: number | null;
+    weeklyAvailableWorkdays: number | null;
+    isSchedulable: boolean;
+  }>,
   capabilityTags: Array<{ userId: string; tagName: string }>,
   tasks: ModelingTaskRow[],
 ): ModelerCapacity[] {
@@ -314,12 +334,16 @@ function buildModelers(
   }
 
   const modelers = users.map((user): ModelerCapacity => {
+    const weeklyAvailableWorkdays = user.weeklyAvailableWorkdays ?? user.weeklyCapacityStyles ?? 4;
+
     return {
       id: user.id,
       name: user.name,
       roleTitle: user.roleTitle ?? "建模师",
-      weeklyCapacityStyles: user.weeklyCapacityStyles ?? 4,
-      specialtyTags: tagsByUserId.get(user.id) ?? ["待补充擅长类型"],
+      weeklyCapacityStyles: weeklyAvailableWorkdays,
+      weeklyAvailableWorkdays,
+      isSchedulable: user.isSchedulable,
+      specialtyTags: tagsByUserId.get(user.id) ?? [],
       isVirtual: false,
     };
   });
@@ -336,7 +360,9 @@ function buildModelers(
       name: `未知建模师 ${task.modelerId.slice(0, 6)}`,
       roleTitle: "待补充人员",
       weeklyCapacityStyles: 4,
-      specialtyTags: ["待补充擅长类型"],
+      weeklyAvailableWorkdays: 4,
+      isSchedulable: true,
+      specialtyTags: [],
       isVirtual: true,
     });
   }
@@ -566,6 +592,8 @@ function buildRealTasks(
       plannedFinishDate: formatDate(task.plannedFinishDate),
       actualStartDate: formatDate(task.actualStartDate),
       actualFinishDate: formatDate(actualFinishDate),
+      internalApprovedDate: formatDate(task.internalApprovedDate),
+      copyrightApprovedDate: formatDate(task.copyrightApprovedDate),
       reviewRound: task.reviewRound ?? latestFeedback?.roundNo ?? 0,
       lastFeedbackAt: isCompletedBySchedule ? undefined : formatDate(task.lastFeedbackAt ?? latestFeedback?.feedbackAt),
       lastUpdatedAt: formatDate(lastUpdatedAt),
@@ -718,7 +746,7 @@ function buildProjectSummaries(
       if (projectTasks.length > 0) {
         const totalStyles = projectTasks.length;
         const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
-        const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中").length;
+        const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
         const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
         const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
         const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
@@ -758,7 +786,7 @@ function buildProjectSummaries(
 
       const totalStyles = projectTasks.length;
       const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
-      const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中").length;
+      const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
       const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
       const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
       const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
@@ -782,7 +810,7 @@ function buildProjectSummaries(
 
 function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): ModelingMetric[] {
   const overloadedModelerCount = modelers.filter((modeler) => assignedActiveTasks(tasks, modeler.id).length > 4).length;
-  const stuckTasks = tasks.filter((task) => reviewBlockedStatuses.has(task.status) || task.blockType?.includes("修改"));
+  const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || task.blockType?.includes("修改"));
 
   return [
     {
@@ -827,6 +855,7 @@ function normalizeStatus(value: string, isOutsourced: boolean): ModelingTaskStat
 
   if (value.includes("未分配")) return "未分配";
   if (value.includes("排期")) return "已排期";
+  if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";

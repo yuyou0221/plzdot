@@ -5,8 +5,8 @@ import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  await requireCurrentUser("/");
+  const currentUser = await requireCurrentUser("/");
   const data = await getScheduleWorkbenchData();
 
-  return <ScheduleWorkbench data={data} />;
+  return <ScheduleWorkbench currentUser={currentUser} data={data} />;
 }

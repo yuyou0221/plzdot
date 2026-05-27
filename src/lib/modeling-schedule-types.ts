@@ -2,6 +2,7 @@ export type ModelingTaskStatus =
   | "未分配"
   | "已排期"
   | "建模中"
+  | "修改中"
   | "已送审"
   | "等反馈"
   | "已通过"
@@ -40,6 +41,8 @@ export type ModelingTaskCard = {
   plannedFinishDate?: string;
   actualStartDate?: string;
   actualFinishDate?: string;
+  internalApprovedDate?: string;
+  copyrightApprovedDate?: string;
   reviewRound: number;
   lastFeedbackAt?: string;
   lastUpdatedAt?: string;
@@ -58,6 +61,8 @@ export type ModelerCapacity = {
   name: string;
   roleTitle: string;
   weeklyCapacityStyles: number;
+  weeklyAvailableWorkdays: number;
+  isSchedulable: boolean;
   specialtyTags: string[];
   isVirtual: boolean;
 };

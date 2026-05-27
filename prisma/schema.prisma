@@ -26,7 +26,10 @@ model User {
   id                   String   @id @default(uuid())
   name                 String
   teamId               String?
+  departmentTeamId     String?
+  projectGroupTeamId   String?
   roleTitle            String?
+  businessRoles        Json?
   userType             String   @default("内部")
   loginName            String?  @unique
   passwordHash         String?
@@ -35,6 +38,8 @@ model User {
   lastLoginAt          DateTime?
   isModeler            Boolean  @default(false)
   weeklyCapacityStyles Int?
+  weeklyAvailableWorkdays Int?
+  isSchedulable        Boolean  @default(true)
   status               String   @default("启用")
   contactInfo          String?
   notes                String?
@@ -42,9 +47,12 @@ model User {
   updatedAt            DateTime @updatedAt
 
   @@index([teamId])
+  @@index([departmentTeamId])
+  @@index([projectGroupTeamId])
   @@index([loginName])
   @@index([authRole])
   @@index([isModeler])
+  @@index([isSchedulable])
   @@index([status])
 }
 
@@ -62,6 +70,7 @@ model ModelerCapabilityTag {
 model OutsourceVendor {
   id             String   @id @default(uuid())
   name           String
+  vendorType     String?
   contactName    String?
   contactInfo    String?
   specialtyTags  Json?
@@ -71,6 +80,23 @@ model OutsourceVendor {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@index([status])
+}
+
+model UserAvailabilityBlock {
+  id           String   @id @default(uuid())
+  userId       String
+  blockType    String
+  startDate    DateTime @db.Date
+  endDate      DateTime @db.Date
+  workdayCount Int?
+  status       String   @default("启用")
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@index([startDate, endDate])
   @@index([status])
 }
 
@@ -281,6 +307,8 @@ model ModelingTask {
   plannedFinishDate       DateTime? @db.Date
   actualStartDate         DateTime? @db.Date
   actualFinishDate        DateTime? @db.Date
+  internalApprovedDate    DateTime? @db.Date
+  copyrightApprovedDate   DateTime? @db.Date
   actualWorkdays          Int?
   remainingWorkdays       Int?
   status                  String    @default("未分配")

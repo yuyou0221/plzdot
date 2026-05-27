@@ -1,27 +1,28 @@
 "use client";
 
 import type { FormEvent, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Building2,
+  CalendarDays,
   CheckCircle2,
   Clock3,
   Database,
   Edit3,
+  FileSpreadsheet,
   Gauge,
   PackageCheck,
   Plus,
   Save,
   Search,
-  Tags,
   UserRound,
   UsersRound,
 } from "lucide-react";
 import clsx from "clsx";
-import { LogoutButton } from "@/components/auth/logout-button";
-import { authRoleOptions, canManageUsers, type AuthUser } from "@/lib/auth/permissions";
+import { AccountPanel } from "@/components/auth/account-panel";
+import { authRoleOptions, type AuthUser } from "@/lib/auth/permissions";
 import type {
   UserDataMetric,
   UserDataPerson,
@@ -30,19 +31,21 @@ import type {
   UserDataWorkbenchData,
 } from "@/lib/user-data-types";
 
-type TabKey = "people" | "teams" | "modeling" | "vendors";
+type TabKey = "people" | "teams" | "modeling" | "availability" | "vendors";
 
 type PersonDraft = {
   id?: string;
   name: string;
-  teamId: string;
-  roleTitle: string;
+  departmentTeamId: string;
+  projectGroupTeamId: string;
+  businessRolesInput: string;
   userType: string;
   loginName: string;
   authRole: string;
   password: string;
   isModeler: boolean;
-  weeklyCapacityStyles: string;
+  weeklyAvailableWorkdays: string;
+  isSchedulable: boolean;
   status: string;
   notes: string;
 };
@@ -59,18 +62,29 @@ type TeamDraft = {
 
 type CapabilityDraft = {
   userId: string;
-  weeklyCapacityStyles: string;
-  specialtyTagsInput: string;
-  weaknessTagsInput: string;
+  weeklyAvailableWorkdays: string;
+  isSchedulable: boolean;
 };
 
 type VendorDraft = {
   id?: string;
   name: string;
+  vendorType: string;
   contactName: string;
   contactInfo: string;
   specialtyTagsInput: string;
   stableCapacity: boolean;
+  status: string;
+  notes: string;
+};
+
+type AvailabilityDraft = {
+  id?: string;
+  userId: string;
+  blockType: string;
+  startDate: string;
+  endDate: string;
+  workdayCount: string;
   status: string;
   notes: string;
 };
@@ -84,7 +98,8 @@ type MutationResponse = {
 const tabLabels: Record<TabKey, string> = {
   people: "人员名单",
   teams: "团队结构",
-  modeling: "建模能力",
+  modeling: "建模排期参数",
+  availability: "不可排期记录",
   vendors: "外包供应商",
 };
 
@@ -97,7 +112,9 @@ const metricToneClass: Record<UserDataMetric["tone"], string> = {
 
 export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkbenchData; currentUser: AuthUser }) {
   const router = useRouter();
-  const canManage = canManageUsers(currentUser);
+  const canManage = false;
+  const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
+  const importSectionRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState("全部团队");
@@ -108,19 +125,22 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [teamDraft, setTeamDraft] = useState<TeamDraft | null>(null);
   const [capabilityDraft, setCapabilityDraft] = useState<CapabilityDraft | null>(null);
   const [vendorDraft, setVendorDraft] = useState<VendorDraft | null>(null);
+  const [availabilityDraft, setAvailabilityDraft] = useState<AvailabilityDraft | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"info" | "warning">("info");
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
     return data.people.filter((person) => {
       const matchSearch =
         !visibleSearch ||
-        [person.name, person.teamName, person.roleTitle, person.userType, person.notes]
+        [person.name, person.departmentTeamName, person.projectGroupTeamName, person.roleTitle, person.userType, person.notes]
           .filter(Boolean)
           .some((value) => value.includes(visibleSearch));
-      const matchTeam = teamFilter === "全部团队" || person.teamId === teamFilter;
+      const matchTeam = teamFilter === "全部团队" || person.departmentTeamId === teamFilter || person.projectGroupTeamId === teamFilter;
       const matchModeler =
         modelerFilter === "全部" ||
         (modelerFilter === "建模师" && person.isModeler) ||
@@ -132,6 +152,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   }, [data.people, modelerFilter, missingCapacityOnly, teamFilter, visibleSearch]);
 
   const modelers = useMemo(() => data.people.filter((person) => person.isModeler), [data.people]);
+  const availabilityByUserId = useMemo(() => {
+    const grouped = new Map<string, number>();
+    for (const block of data.availabilityBlocks) {
+      grouped.set(block.userId, (grouped.get(block.userId) ?? 0) + 1);
+    }
+    return grouped;
+  }, [data.availabilityBlocks]);
   const selectedPerson =
     data.people.find((person) => person.id === selectedPersonId) ?? filteredPeople[0] ?? data.people[0];
 
@@ -155,14 +182,18 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
     const payload = {
       name: personDraft.name,
-      teamId: personDraft.teamId,
-      roleTitle: personDraft.roleTitle,
+      teamId: personDraft.departmentTeamId,
+      departmentTeamId: personDraft.departmentTeamId,
+      projectGroupTeamId: personDraft.projectGroupTeamId,
+      businessRoles: splitTags(personDraft.businessRolesInput),
+      roleTitle: personDraft.businessRolesInput,
       userType: personDraft.userType,
       loginName: personDraft.loginName,
       authRole: personDraft.authRole,
       password: personDraft.password,
       isModeler: personDraft.isModeler,
-      weeklyCapacityStyles: nullableNumber(personDraft.weeklyCapacityStyles),
+      weeklyAvailableWorkdays: nullableNumber(personDraft.weeklyAvailableWorkdays),
+      isSchedulable: personDraft.isSchedulable,
       status: personDraft.status,
       notes: personDraft.notes,
     };
@@ -199,7 +230,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   async function saveCapabilities(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canManage) {
-      notify("当前账号没有权限保存建模能力。", "warning");
+      notify("当前账号没有权限保存建模排期参数。", "warning");
       return;
     }
     if (!capabilityDraft?.userId) {
@@ -211,9 +242,11 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       path: `/api/users/modeler-capabilities/${capabilityDraft.userId}`,
       method: "PATCH",
       payload: {
-        weeklyCapacityStyles: nullableNumber(capabilityDraft.weeklyCapacityStyles),
-        specialtyTags: splitTags(capabilityDraft.specialtyTagsInput),
-        weaknessTags: splitTags(capabilityDraft.weaknessTagsInput),
+        weeklyAvailableWorkdays: nullableNumber(capabilityDraft.weeklyAvailableWorkdays),
+        weeklyCapacityStyles: nullableNumber(capabilityDraft.weeklyAvailableWorkdays),
+        isSchedulable: capabilityDraft.isSchedulable,
+        specialtyTags: [],
+        weaknessTags: [],
       },
       onSuccess: () => setCapabilityDraft(null),
     });
@@ -236,6 +269,66 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       },
       onSuccess: () => setVendorDraft(null),
     });
+  }
+
+  async function saveAvailability(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!availabilityDraft) return;
+    if (!canImport) {
+      notify("当前账号没有权限保存不可排期记录。", "warning");
+      return;
+    }
+
+    await saveMutation({
+      path: availabilityDraft.id ? `/api/users/availability/${availabilityDraft.id}` : "/api/users/availability",
+      method: availabilityDraft.id ? "PATCH" : "POST",
+      payload: {
+        userId: availabilityDraft.userId,
+        blockType: availabilityDraft.blockType,
+        startDate: availabilityDraft.startDate,
+        endDate: availabilityDraft.endDate,
+        workdayCount: nullableNumber(availabilityDraft.workdayCount),
+        status: availabilityDraft.status,
+        notes: availabilityDraft.notes,
+      },
+      onSuccess: () => setAvailabilityDraft(null),
+    });
+  }
+
+  async function importUserDataExcel() {
+    if (!importFile) {
+      notify("请先选择用户数据 Excel。", "warning");
+      return;
+    }
+    if (!canImport) {
+      notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", importFile);
+      formData.set("mode", "replace");
+      const response = await fetch("/api/users/import-excel", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await readMutationResponse(response);
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "用户数据导入失败。", "warning");
+        return;
+      }
+
+      setImportFile(null);
+      notify(result.message ?? "用户数据导入完成。");
+      router.refresh();
+    } catch {
+      notify("用户数据导入接口暂时不可用。", "warning");
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function saveMutation({
@@ -277,14 +370,16 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     setActiveTab("people");
     setPersonDraft({
       name: "",
-      teamId: data.teams.find((team) => team.name === "产品团队")?.id ?? "",
-      roleTitle: "",
+      departmentTeamId: data.teams.find((team) => team.name === "产品团队")?.id ?? "",
+      projectGroupTeamId: "",
+      businessRolesInput: "",
       userType: "内部",
       loginName: "",
       authRole: "viewer",
       password: "",
       isModeler: false,
-      weeklyCapacityStyles: "",
+      weeklyAvailableWorkdays: "",
+      isSchedulable: true,
       status: "启用",
       notes: "",
     });
@@ -296,9 +391,8 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     setActiveTab("modeling");
     setCapabilityDraft({
       userId: target?.id ?? "",
-      weeklyCapacityStyles: target?.weeklyCapacityStyles ? String(target.weeklyCapacityStyles) : "",
-      specialtyTagsInput: joinTags(target?.specialtyTags ?? []),
-      weaknessTagsInput: joinTags(target?.weaknessTags ?? []),
+      weeklyAvailableWorkdays: target?.weeklyAvailableWorkdays ? String(target.weeklyAvailableWorkdays) : "",
+      isSchedulable: target?.isSchedulable ?? true,
     });
   }
 
@@ -307,9 +401,8 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
     setCapabilityDraft({
       userId,
-      weeklyCapacityStyles: person?.weeklyCapacityStyles ? String(person.weeklyCapacityStyles) : "",
-      specialtyTagsInput: joinTags(person?.specialtyTags ?? []),
-      weaknessTagsInput: joinTags(person?.weaknessTags ?? []),
+      weeklyAvailableWorkdays: person?.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "",
+      isSchedulable: person?.isSchedulable ?? true,
     });
   }
 
@@ -330,7 +423,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             <SideNavButton label="用户数据" badge="基础" active />
             <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
-          <LogoutButton />
+          <AccountPanel currentUser={currentUser} />
         </aside>
 
         <main className="min-w-0 px-6 py-5 max-md:px-4">
@@ -349,6 +442,11 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
+              <ActionButton
+                icon={<FileSpreadsheet size={16} />}
+                label="导入 Excel"
+                onClick={() => importSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              />
               {canManage ? (
                 <>
                   <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
@@ -359,7 +457,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                       setActiveTab("teams");
                       setTeamDraft({
                         name: "",
-                        teamType: "业务团队",
+                        teamType: "产品",
                         parentTeamId: "",
                         leaderUserId: "",
                         status: "启用",
@@ -392,12 +490,48 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             ))}
           </section>
 
+          <section ref={importSectionRef} className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-700">
+                  <FileSpreadsheet size={16} />
+                  用户数据 Excel 导入
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".xlsx"
+                    disabled={!canImport}
+                    onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+                    className="max-w-72 text-sm text-slate-600 file:mr-3 file:h-9 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:text-sm file:font-semibold file:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <span className="inline-flex h-9 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-800">
+                    覆盖更新
+                  </span>
+                  <button
+                    type="button"
+                    disabled={importing || !canImport}
+                    onClick={importUserDataExcel}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FileSpreadsheet size={16} />
+                    {importing ? "导入中" : "导入 Excel"}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
+                {canImport
+                  ? "只支持通过 Excel 更新用户数据；每次导入都会覆盖当前人员、团队和外包供应商数据。密码只用于写入哈希，不会在页面回显。"
+                  : "当前账号没有导入权限。请使用 admin 或 manager 账号导入 Excel。"}
+              </div>
+            </section>
+
           <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="inline-flex h-9 rounded-lg bg-slate-100 p-1">
                 <TabButton active={activeTab === "people"} icon={<UsersRound size={15} />} label="人员名单" onClick={() => openTab("people")} />
                 <TabButton active={activeTab === "teams"} icon={<Building2 size={15} />} label="团队结构" onClick={() => openTab("teams")} />
-                <TabButton active={activeTab === "modeling"} icon={<Gauge size={15} />} label="建模能力" onClick={() => openTab("modeling")} />
+                <TabButton active={activeTab === "modeling"} icon={<Gauge size={15} />} label="建模排期" onClick={() => openTab("modeling")} />
+                <TabButton active={activeTab === "availability"} icon={<CalendarDays size={15} />} label="不可排期" onClick={() => openTab("availability")} />
                 <TabButton active={activeTab === "vendors"} icon={<PackageCheck size={15} />} label="外包供应商" onClick={() => openTab("vendors")} />
               </div>
               <div className="text-sm font-medium text-slate-500">
@@ -410,6 +544,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             {activeTab === "people" ? renderPeopleTab() : null}
             {activeTab === "teams" ? renderTeamsTab() : null}
             {activeTab === "modeling" ? renderModelingTab() : null}
+            {activeTab === "availability" ? renderAvailabilityTab() : null}
             {activeTab === "vendors" ? renderVendorsTab() : null}
           </div>
         </main>
@@ -461,17 +596,19 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-left text-sm">
+            <table className="w-full min-w-[1280px] text-left text-sm">
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">姓名</th>
-                  <th className="px-3 py-2">团队</th>
-                  <th className="px-3 py-2">职位</th>
+                  <th className="px-3 py-2">公司部门</th>
+                  <th className="px-3 py-2">项目小组</th>
+                  <th className="px-3 py-2">岗位</th>
                   <th className="px-3 py-2">用户类型</th>
                   <th className="px-3 py-2">登录名</th>
                   <th className="px-3 py-2">权限</th>
                   <th className="px-3 py-2">建模师</th>
-                  <th className="px-3 py-2">每周产能</th>
+                  <th className="px-3 py-2">每周可用工作日</th>
+                  <th className="px-3 py-2">可排期</th>
                   <th className="px-3 py-2">状态</th>
                   <th className="px-3 py-2">备注</th>
                   <th className="px-3 py-2 text-right">操作</th>
@@ -488,7 +625,8 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     )}
                   >
                     <td className="px-3 py-3 font-semibold text-slate-900">{person.name}</td>
-                    <td className="px-3 py-3 text-slate-600">{person.teamName}</td>
+                    <td className="px-3 py-3 text-slate-600">{person.departmentTeamName}</td>
+                    <td className="px-3 py-3 text-slate-600">{person.projectGroupTeamName}</td>
                     <td className="px-3 py-3 text-slate-600">{person.roleTitle}</td>
                     <td className="px-3 py-3">
                       <TypeBadge value={person.userType} />
@@ -507,8 +645,11 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                           缺少
                         </span>
                       ) : (
-                        <span className="text-slate-700">{person.weeklyCapacityStyles ?? "-"}</span>
+                        <span className="text-slate-700">{person.weeklyAvailableWorkdays ?? "-"}</span>
                       )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {person.isSchedulable ? <StatusBadge value="可排期" tone="success" /> : <StatusBadge value="不可排期" tone="warning" />}
                     </td>
                     <td className="px-3 py-3">
                       <StatusBadge value={person.status} tone={person.status === "停用" ? "neutral" : "success"} />
@@ -533,7 +674,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 ))}
                 {filteredPeople.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-3 py-12 text-center text-sm text-slate-400">
+                    <td colSpan={13} className="px-3 py-12 text-center text-sm text-slate-400">
                       暂无人员数据
                     </td>
                   </tr>
@@ -568,7 +709,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               人员详情
             </div>
             <h2 className="mt-2 text-xl font-semibold">{selectedPerson.name}</h2>
-            <div className="mt-1 text-sm text-slate-500">{selectedPerson.teamName} · {selectedPerson.roleTitle}</div>
+            <div className="mt-1 text-sm text-slate-500">{selectedPerson.departmentTeamName} · {selectedPerson.roleTitle}</div>
           </div>
           <StatusBadge value={selectedPerson.status} tone={selectedPerson.status === "停用" ? "neutral" : "success"} />
         </div>
@@ -578,19 +719,14 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} />
           <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} />
           <DetailItem label="是否建模师" value={selectedPerson.isModeler ? "是" : "否"} />
-          <DetailItem label="每周产能" value={selectedPerson.weeklyCapacityStyles ?? "未填写"} />
-          <DetailItem label="团队" value={selectedPerson.teamName} />
+          <DetailItem label="每周可用工作日" value={selectedPerson.weeklyAvailableWorkdays ?? "未填写"} />
+          <DetailItem label="公司部门" value={selectedPerson.departmentTeamName} />
+          <DetailItem label="项目小组" value={selectedPerson.projectGroupTeamName} />
+          <DetailItem label="排期状态" value={selectedPerson.isSchedulable ? "可排期" : "不可排期"} />
         </div>
-
-        {selectedPerson.isModeler ? (
-          <div className="mt-4 grid gap-3">
-            <TagGroup title="擅长类型" tags={selectedPerson.specialtyTags} />
-            <TagGroup title="不擅长类型" tags={selectedPerson.weaknessTags} />
-            {selectedPerson.missingCapacity ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                缺少每周建模产能参数。
-              </div>
-            ) : null}
+        {selectedPerson.missingCapacity ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            缺少每周可用工作日参数。
           </div>
         ) : null}
 
@@ -602,7 +738,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           {canManage ? (
             <>
               <ActionButton icon={<Edit3 size={16} />} label="编辑人员" onClick={() => setPersonDraft(personDraftFromPerson(selectedPerson))} />
-              <ActionButton icon={<Tags size={16} />} label="编辑标签" onClick={() => openCapabilityEditor(selectedPerson)} />
+              <ActionButton icon={<Gauge size={16} />} label="维护排期参数" onClick={() => openCapabilityEditor(selectedPerson)} />
             </>
           ) : null}
         </div>
@@ -618,7 +754,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
         <FormHeader title={personDraft.id ? "编辑人员" : "新增人员"} onCancel={() => setPersonDraft(null)} />
         <div className="mt-4 grid gap-3">
           <TextInput label="姓名" value={personDraft.name} onChange={(value) => setPersonDraft({ ...personDraft, name: value })} required />
-          <SelectField label="团队" value={personDraft.teamId} onChange={(value) => setPersonDraft({ ...personDraft, teamId: value })}>
+          <SelectField label="公司部门" value={personDraft.departmentTeamId} onChange={(value) => setPersonDraft({ ...personDraft, departmentTeamId: value })}>
             <option value="">未分配</option>
             {data.teams.map((team) => (
               <option key={team.id} value={team.id}>
@@ -626,7 +762,17 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </option>
             ))}
           </SelectField>
-          <TextInput label="职位 / 角色" value={personDraft.roleTitle} onChange={(value) => setPersonDraft({ ...personDraft, roleTitle: value })} />
+          <SelectField label="项目小组" value={personDraft.projectGroupTeamId} onChange={(value) => setPersonDraft({ ...personDraft, projectGroupTeamId: value })}>
+            <option value="">未分配</option>
+            {data.teams
+              .filter((team) => team.teamType === "产品" || team.parentTeamId)
+              .map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+          </SelectField>
+          <TextInput label="岗位（多个用逗号分隔）" value={personDraft.businessRolesInput} onChange={(value) => setPersonDraft({ ...personDraft, businessRolesInput: value })} />
           <SelectField label="用户类型" value={personDraft.userType} onChange={(value) => setPersonDraft({ ...personDraft, userType: value })}>
             <option>内部</option>
             <option>外包</option>
@@ -647,12 +793,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           />
           <ToggleField label="是否建模师" checked={personDraft.isModeler} onChange={(value) => setPersonDraft({ ...personDraft, isModeler: value })} />
           <TextInput
-            label="每周建模产能"
+            label="每周可用工作日"
             type="number"
             min={0}
-            value={personDraft.weeklyCapacityStyles}
-            onChange={(value) => setPersonDraft({ ...personDraft, weeklyCapacityStyles: value })}
+            value={personDraft.weeklyAvailableWorkdays}
+            onChange={(value) => setPersonDraft({ ...personDraft, weeklyAvailableWorkdays: value })}
           />
+          <ToggleField label="是否可排期" checked={personDraft.isSchedulable} onChange={(value) => setPersonDraft({ ...personDraft, isSchedulable: value })} />
           <SelectField label="状态" value={personDraft.status} onChange={(value) => setPersonDraft({ ...personDraft, status: value })}>
             <option>启用</option>
             <option>停用</option>
@@ -680,7 +827,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 onClick={() =>
                   setTeamDraft({
                     name: "",
-                    teamType: "业务团队",
+                    teamType: "产品",
                     parentTeamId: "",
                     leaderUserId: "",
                     status: "启用",
@@ -762,7 +909,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
         <FormHeader title={teamDraft.id ? "编辑团队" : "新增团队"} onCancel={() => setTeamDraft(null)} />
         <div className="mt-4 grid gap-3">
           <TextInput label="团队名称" value={teamDraft.name} onChange={(value) => setTeamDraft({ ...teamDraft, name: value })} required />
-          <TextInput label="团队类型" value={teamDraft.teamType} onChange={(value) => setTeamDraft({ ...teamDraft, teamType: value })} />
+          <SelectField label="团队类型" value={teamDraft.teamType} onChange={(value) => setTeamDraft({ ...teamDraft, teamType: value })}>
+            {["产品", "制作", "设计", "打样", "运营", "商务", "供应链"].map((teamType) => (
+              <option key={teamType} value={teamType}>
+                {teamType}
+              </option>
+            ))}
+          </SelectField>
           <SelectField label="上级团队" value={teamDraft.parentTeamId} onChange={(value) => setTeamDraft({ ...teamDraft, parentTeamId: value })}>
             <option value="">无</option>
             {data.teams
@@ -799,18 +952,20 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold">
               <Gauge size={16} />
-              建模能力
+              建模排期参数
             </div>
-            {canManage ? <ActionButton icon={<Tags size={16} />} label="新增标签" onClick={() => openCapabilityEditor()} /> : null}
+            {canManage ? <ActionButton icon={<Gauge size={16} />} label="维护参数" onClick={() => openCapabilityEditor()} /> : null}
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-left text-sm">
+            <table className="w-full min-w-[920px] text-left text-sm">
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">建模师</th>
-                  <th className="px-3 py-2">擅长标签</th>
-                  <th className="px-3 py-2">不擅长标签</th>
-                  <th className="px-3 py-2">每周产能</th>
+                  <th className="px-3 py-2">公司部门</th>
+                  <th className="px-3 py-2">项目小组</th>
+                  <th className="px-3 py-2">每周可用工作日</th>
+                  <th className="px-3 py-2">可排期</th>
+                  <th className="px-3 py-2">不可排期记录</th>
                   <th className="px-3 py-2">配置状态</th>
                   <th className="px-3 py-2 text-right">操作</th>
                 </tr>
@@ -820,17 +975,15 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                   <tr key={person.id} className="hover:bg-slate-50">
                     <td className="px-3 py-3">
                       <div className="font-semibold text-slate-900">{person.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{person.teamName} · {person.roleTitle}</div>
+                      <div className="mt-1 text-xs text-slate-500">{person.roleTitle}</div>
                     </td>
+                    <td className="px-3 py-3 text-slate-600">{person.departmentTeamName}</td>
+                    <td className="px-3 py-3 text-slate-600">{person.projectGroupTeamName}</td>
+                    <td className="px-3 py-3">{person.weeklyAvailableWorkdays ?? "-"}</td>
                     <td className="px-3 py-3">
-                      <TagList tags={person.specialtyTags} emptyLabel="未填写" />
+                      {person.isSchedulable ? <StatusBadge value="可排期" tone="success" /> : <StatusBadge value="不可排期" tone="warning" />}
                     </td>
-                    <td className="px-3 py-3">
-                      <TagList tags={person.weaknessTags} emptyLabel="未填写" muted />
-                    </td>
-                    <td className="px-3 py-3">
-                      {person.weeklyCapacityStyles ?? "-"}
-                    </td>
+                    <td className="px-3 py-3">{availabilityByUserId.get(person.id) ?? 0}</td>
                     <td className="px-3 py-3">
                       {capabilityStateBadge(person)}
                     </td>
@@ -842,7 +995,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                           className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                         >
                           <Edit3 size={14} />
-                          编辑标签
+                          编辑参数
                         </button>
                       ) : null}
                     </td>
@@ -850,7 +1003,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 ))}
                 {modelers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-12 text-center text-sm text-slate-400">
+                    <td colSpan={8} className="px-3 py-12 text-center text-sm text-slate-400">
                       暂无建模师
                     </td>
                   </tr>
@@ -868,19 +1021,19 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
   function renderModelingSummary() {
     const missingCapacity = modelers.filter((person) => person.missingCapacity);
-    const missingTags = modelers.filter((person) => person.specialtyTags.length === 0);
+    const notSchedulable = modelers.filter((person) => !person.isSchedulable);
 
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
           <Gauge size={16} />
-          建模配置
+          建模排期参数
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
           <DetailItem label="建模师" value={modelers.length} />
-          <DetailItem label="缺少产能" value={missingCapacity.length} />
-          <DetailItem label="缺少擅长标签" value={missingTags.length} />
-          <DetailItem label="总周产能" value={modelers.reduce((sum, person) => sum + (person.weeklyCapacityStyles ?? 0), 0)} />
+          <DetailItem label="缺少工作日" value={missingCapacity.length} />
+          <DetailItem label="不可排期" value={notSchedulable.length} />
+          <DetailItem label="总周工作日" value={modelers.reduce((sum, person) => sum + (person.weeklyAvailableWorkdays ?? 0), 0)} />
         </div>
         {canManage && missingCapacity.length > 0 ? (
           <div className="mt-4 grid gap-2">
@@ -906,7 +1059,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
     return (
       <form onSubmit={saveCapabilities} className="rounded-lg border border-slate-200 bg-white p-4">
-        <FormHeader title="新增 / 编辑建模能力标签" onCancel={() => setCapabilityDraft(null)} />
+        <FormHeader title="维护建模排期参数" onCancel={() => setCapabilityDraft(null)} />
         <div className="mt-4 grid gap-3">
           <SelectField label="人员" value={capabilityDraft.userId} onChange={changeCapabilityUser}>
             <option value="">未选择</option>
@@ -917,26 +1070,151 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             ))}
           </SelectField>
           <TextInput
-            label="每周建模产能"
+            label="每周可用工作日"
             type="number"
             min={0}
-            value={capabilityDraft.weeklyCapacityStyles}
-            onChange={(value) => setCapabilityDraft({ ...capabilityDraft, weeklyCapacityStyles: value })}
+            value={capabilityDraft.weeklyAvailableWorkdays}
+            onChange={(value) => setCapabilityDraft({ ...capabilityDraft, weeklyAvailableWorkdays: value })}
           />
-          <TextArea
-            label="擅长标签"
-            value={capabilityDraft.specialtyTagsInput}
-            onChange={(value) => setCapabilityDraft({ ...capabilityDraft, specialtyTagsInput: value })}
-            placeholder="Q版, 常规款, 正比例"
-          />
-          <TextArea
-            label="不擅长标签"
-            value={capabilityDraft.weaknessTagsInput}
-            onChange={(value) => setCapabilityDraft({ ...capabilityDraft, weaknessTagsInput: value })}
-            placeholder="复杂机械, 超写实"
-          />
+          <ToggleField label="是否可排期" checked={capabilityDraft.isSchedulable} onChange={(value) => setCapabilityDraft({ ...capabilityDraft, isSchedulable: value })} />
         </div>
-        <FormActions saving={saving} submitLabel="保存能力标签" />
+        <FormActions saving={saving} submitLabel="保存排期参数" />
+      </form>
+    );
+  }
+
+  function renderAvailabilityTab() {
+    return (
+      <section className="grid grid-cols-[minmax(0,1fr)_360px] gap-4 max-xl:grid-cols-1">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <CalendarDays size={16} />
+              请假 / 不可排期记录
+            </div>
+            {canManage ? <ActionButton icon={<Plus size={16} />} label="新增记录" onClick={openNewAvailability} /> : null}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">人员</th>
+                  <th className="px-3 py-2">类型</th>
+                  <th className="px-3 py-2">开始日期</th>
+                  <th className="px-3 py-2">结束日期</th>
+                  <th className="px-3 py-2">工作日</th>
+                  <th className="px-3 py-2">状态</th>
+                  <th className="px-3 py-2">备注</th>
+                  <th className="px-3 py-2 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {data.availabilityBlocks.map((block) => (
+                  <tr key={block.id} className="hover:bg-slate-50">
+                    <td className="px-3 py-3 font-semibold text-slate-900">{block.userName}</td>
+                    <td className="px-3 py-3 text-slate-600">{block.blockType}</td>
+                    <td className="px-3 py-3 text-slate-600">{block.startDate}</td>
+                    <td className="px-3 py-3 text-slate-600">{block.endDate}</td>
+                    <td className="px-3 py-3 text-slate-600">{block.workdayCount ?? "-"}</td>
+                    <td className="px-3 py-3">
+                      <StatusBadge value={block.status} tone={block.status === "停用" ? "neutral" : "warning"} />
+                    </td>
+                    <td className="max-w-[220px] truncate px-3 py-3 text-slate-500">{block.notes || "-"}</td>
+                    <td className="px-3 py-3 text-right">
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => setAvailabilityDraft(availabilityDraftFromBlock(block))}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={14} />
+                          编辑
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+                {data.availabilityBlocks.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-12 text-center text-sm text-slate-400">
+                      暂无不可排期记录
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <aside className="min-w-0">
+          {availabilityDraft ? renderAvailabilityForm() : renderAvailabilitySummary()}
+        </aside>
+      </section>
+    );
+  }
+
+  function openNewAvailability() {
+    setActiveTab("availability");
+    setAvailabilityDraft({
+      userId: selectedPerson?.id ?? data.people[0]?.id ?? "",
+      blockType: "不可排期",
+      startDate: "",
+      endDate: "",
+      workdayCount: "",
+      status: "启用",
+      notes: "",
+    });
+  }
+
+  function renderAvailabilitySummary() {
+    const activeBlocks = data.availabilityBlocks.filter((block) => block.status !== "停用");
+
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
+          <CalendarDays size={16} />
+          不可排期概览
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+          <DetailItem label="记录数" value={data.availabilityBlocks.length} />
+          <DetailItem label="启用记录" value={activeBlocks.length} />
+          <DetailItem label="涉及人员" value={new Set(activeBlocks.map((block) => block.userId)).size} />
+          <DetailItem label="工作日合计" value={activeBlocks.reduce((sum, block) => sum + (block.workdayCount ?? 0), 0)} />
+        </div>
+      </section>
+    );
+  }
+
+  function renderAvailabilityForm() {
+    if (!availabilityDraft) return null;
+
+    return (
+      <form onSubmit={saveAvailability} className="rounded-lg border border-slate-200 bg-white p-4">
+        <FormHeader title={availabilityDraft.id ? "编辑不可排期记录" : "新增不可排期记录"} onCancel={() => setAvailabilityDraft(null)} />
+        <div className="mt-4 grid gap-3">
+          <SelectField label="人员" value={availabilityDraft.userId} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, userId: value })}>
+            <option value="">未选择</option>
+            {data.people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField label="类型" value={availabilityDraft.blockType} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, blockType: value })}>
+            <option>不可排期</option>
+            <option>请假</option>
+            <option>外出</option>
+            <option>其他</option>
+          </SelectField>
+          <TextInput label="开始日期" type="date" value={availabilityDraft.startDate} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, startDate: value })} required />
+          <TextInput label="结束日期" type="date" value={availabilityDraft.endDate} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, endDate: value })} required />
+          <TextInput label="占用工作日" type="number" min={0} value={availabilityDraft.workdayCount} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, workdayCount: value })} />
+          <SelectField label="状态" value={availabilityDraft.status} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, status: value })}>
+            <option>启用</option>
+            <option>停用</option>
+          </SelectField>
+          <TextArea label="备注" value={availabilityDraft.notes} onChange={(value) => setAvailabilityDraft({ ...availabilityDraft, notes: value })} />
+        </div>
+        <FormActions saving={saving} submitLabel="保存记录" />
       </form>
     );
   }
@@ -953,13 +1231,14 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             {canManage ? <ActionButton icon={<Plus size={16} />} label="新增外包" onClick={openNewVendor} /> : null}
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[840px] text-left text-sm">
+            <table className="w-full min-w-[900px] text-left text-sm">
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">供应商名称</th>
+                  <th className="px-3 py-2">供应商类型</th>
                   <th className="px-3 py-2">联系人</th>
+                  <th className="px-3 py-2">联系方式</th>
                   <th className="px-3 py-2">稳定外包</th>
-                  <th className="px-3 py-2">擅长类型</th>
                   <th className="px-3 py-2">状态</th>
                   <th className="px-3 py-2">备注</th>
                   <th className="px-3 py-2 text-right">操作</th>
@@ -969,12 +1248,11 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 {data.vendors.map((vendor) => (
                   <tr key={vendor.id} className="hover:bg-slate-50">
                     <td className="px-3 py-3 font-semibold text-slate-900">{vendor.name}</td>
+                    <td className="px-3 py-3 text-slate-600">{vendor.vendorType}</td>
                     <td className="px-3 py-3 text-slate-600">{vendor.contactName || "-"}</td>
+                    <td className="px-3 py-3 text-slate-600">{vendor.contactInfo || "-"}</td>
                     <td className="px-3 py-3">
                       {vendor.stableCapacity ? <StatusBadge value="稳定" tone="success" /> : <StatusBadge value="非稳定" tone="neutral" />}
-                    </td>
-                    <td className="px-3 py-3">
-                      <TagList tags={vendor.specialtyTags} emptyLabel="未填写" />
                     </td>
                     <td className="px-3 py-3">
                       <StatusBadge value={vendor.status} tone={vendor.status === "停用" ? "neutral" : "success"} />
@@ -996,7 +1274,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 ))}
                 {data.vendors.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-12 text-center text-sm text-slate-400">
+                    <td colSpan={8} className="px-3 py-12 text-center text-sm text-slate-400">
                       暂无外包供应商
                     </td>
                   </tr>
@@ -1016,6 +1294,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     setActiveTab("vendors");
     setVendorDraft({
       name: "",
+      vendorType: "建模外包",
       contactName: "",
       contactInfo: "",
       specialtyTagsInput: "",
@@ -1050,6 +1329,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
         <FormHeader title={vendorDraft.id ? "编辑外包供应商" : "新增外包供应商"} onCancel={() => setVendorDraft(null)} />
         <div className="mt-4 grid gap-3">
           <TextInput label="供应商名称" value={vendorDraft.name} onChange={(value) => setVendorDraft({ ...vendorDraft, name: value })} required />
+          <TextInput label="供应商类型" value={vendorDraft.vendorType} onChange={(value) => setVendorDraft({ ...vendorDraft, vendorType: value })} />
           <TextInput label="联系人" value={vendorDraft.contactName} onChange={(value) => setVendorDraft({ ...vendorDraft, contactName: value })} />
           <TextInput label="联系方式" value={vendorDraft.contactInfo} onChange={(value) => setVendorDraft({ ...vendorDraft, contactInfo: value })} />
           <ToggleField label="稳定外包" checked={vendorDraft.stableCapacity} onChange={(value) => setVendorDraft({ ...vendorDraft, stableCapacity: value })} />
@@ -1188,7 +1468,7 @@ function TextInput({
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
-  type?: "text" | "number" | "password";
+  type?: "text" | "number" | "password" | "date";
   min?: number;
 }) {
   return (
@@ -1304,37 +1584,6 @@ function DetailItem({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function TagGroup({ title, tags }: { title: string; tags: string[] }) {
-  return (
-    <div>
-      <div className="mb-2 text-xs font-semibold text-slate-500">{title}</div>
-      <TagList tags={tags} emptyLabel="未填写" />
-    </div>
-  );
-}
-
-function TagList({ tags, emptyLabel, muted }: { tags: string[]; emptyLabel: string; muted?: boolean }) {
-  if (tags.length === 0) {
-    return <span className="text-sm text-slate-400">{emptyLabel}</span>;
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {tags.map((tag, index) => (
-        <span
-          key={`${tag}-${index}`}
-          className={clsx(
-            "rounded-full border px-2 py-0.5 text-xs font-medium",
-            muted ? "border-slate-200 bg-slate-50 text-slate-500" : "border-sky-200 bg-sky-50 text-sky-700",
-          )}
-        >
-          {tag}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function TypeBadge({ value }: { value: string }) {
   return (
     <span className={clsx("rounded-full px-2 py-0.5 text-xs font-semibold", value === "外包" ? "bg-cyan-100 text-cyan-700" : "bg-slate-100 text-slate-700")}>
@@ -1362,28 +1611,30 @@ function StatusBadge({ value, tone }: { value: string; tone: "success" | "neutra
 
 function capabilityStateBadge(person: UserDataPerson) {
   if (person.missingCapacity) {
-    return <StatusBadge value="缺少产能" tone="warning" />;
+    return <StatusBadge value="缺少工作日" tone="warning" />;
   }
 
-  if (person.specialtyTags.length === 0) {
-    return <StatusBadge value="缺少标签" tone="warning" />;
+  if (!person.isSchedulable) {
+    return <StatusBadge value="不可排期" tone="warning" />;
   }
 
-  return <StatusBadge value="完整" tone="success" />;
+  return <StatusBadge value="可排期" tone="success" />;
 }
 
 function personDraftFromPerson(person: UserDataPerson): PersonDraft {
   return {
     id: person.id,
     name: person.name,
-    teamId: person.teamId ?? "",
-    roleTitle: person.roleTitle === "未填写" ? "" : person.roleTitle,
+    departmentTeamId: person.departmentTeamId ?? person.teamId ?? "",
+    projectGroupTeamId: person.projectGroupTeamId ?? "",
+    businessRolesInput: joinTags(person.businessRoles.length > 0 ? person.businessRoles : [person.roleTitle === "未填写" ? "" : person.roleTitle]),
     userType: person.userType,
     loginName: person.loginName,
     authRole: person.authRole,
     password: "",
     isModeler: person.isModeler,
-    weeklyCapacityStyles: person.weeklyCapacityStyles ? String(person.weeklyCapacityStyles) : "",
+    weeklyAvailableWorkdays: person.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "",
+    isSchedulable: person.isSchedulable,
     status: person.status,
     notes: person.notes,
   };
@@ -1405,12 +1656,26 @@ function vendorDraftFromVendor(vendor: UserDataVendor): VendorDraft {
   return {
     id: vendor.id,
     name: vendor.name,
+    vendorType: vendor.vendorType,
     contactName: vendor.contactName,
     contactInfo: vendor.contactInfo,
     specialtyTagsInput: joinTags(vendor.specialtyTags),
     stableCapacity: vendor.stableCapacity,
     status: vendor.status,
     notes: vendor.notes,
+  };
+}
+
+function availabilityDraftFromBlock(block: UserDataWorkbenchData["availabilityBlocks"][number]): AvailabilityDraft {
+  return {
+    id: block.id,
+    userId: block.userId,
+    blockType: block.blockType,
+    startDate: block.startDate,
+    endDate: block.endDate,
+    workdayCount: block.workdayCount ? String(block.workdayCount) : "",
+    status: block.status,
+    notes: block.notes,
   };
 }
 

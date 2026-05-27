@@ -42,6 +42,10 @@ export async function applyProjectMainImport(
         importedBy,
         rawMetadata: {
           mode: "merge",
+          inputContract: {
+            identity: "项目ID优先；无项目ID时使用项目名称 + 版权方 + IP",
+            blockedCalculatedFields: ["预测完成时间", "预测上线时间", "风险等级", "延期判断", "产能超载", "里程碑状态"],
+          },
           summary: preview.summary,
           referenceChanges: preview.referenceChanges,
           monthBuckets: preview.monthBuckets,
@@ -125,20 +129,20 @@ function projectCreateData(row: ProjectPreviewRow, importId: string) {
     artOwnerId: nullableText(row.productArtist),
     currentStage: nullableText(row.status),
     status: nullableText(row.status) ?? "规划中",
+    notes: nullableText(buildProjectNotes(row)),
     sourceImportId: importId,
   };
 }
 
 function projectUpdateData(row: ProjectPreviewRow, importId: string) {
   const data = projectCreateData({ ...row, plannedLaunchDate: row.plannedLaunchDate || "2000-01-01" }, importId);
+  const { plannedLaunchDate, notes, ...rest } = data;
 
-  if (!row.plannedLaunchDate) {
-    const { plannedLaunchDate: _plannedLaunchDate, ...rest } = data;
-    void _plannedLaunchDate;
-    return rest;
-  }
-
-  return data;
+  return {
+    ...rest,
+    ...(row.plannedLaunchDate ? { plannedLaunchDate } : {}),
+    ...(buildProjectNotes(row) ? { notes } : {}),
+  };
 }
 
 function nullableText(value: string) {
@@ -157,4 +161,14 @@ function dateOnly(value: string) {
   }
 
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
+}
+
+function buildProjectNotes(row: ProjectPreviewRow) {
+  const parts = [
+    row.annualPlan ? `年度规划：${row.annualPlan}` : "",
+    row.urgency ? `紧急程度：${row.urgency}` : "",
+    row.notes ? `备注：${row.notes}` : "",
+  ].filter(Boolean);
+
+  return parts.join("\n");
 }

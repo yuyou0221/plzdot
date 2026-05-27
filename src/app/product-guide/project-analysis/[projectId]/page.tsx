@@ -11,12 +11,12 @@ export default async function ProductGuideProjectAnalysisRoute({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  await requireCurrentUser(`/product-guide/project-analysis/${projectId}`);
+  const currentUser = await requireCurrentUser(`/product-guide/project-analysis/${projectId}`);
 
   const data = await getProjectAnalysisData(projectId);
   if (!data) {
     notFound();
   }
 
-  return <ProjectAnalysisPage data={data} />;
+  return <ProjectAnalysisPage currentUser={currentUser} data={data} />;
 }

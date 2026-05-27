@@ -9,6 +9,7 @@ import {
   CalendarRange,
   CheckCircle2,
   Clock3,
+  FileSpreadsheet,
   GripVertical,
   ListChecks,
   Loader2,
@@ -22,7 +23,8 @@ import {
   Workflow,
 } from "lucide-react";
 import clsx from "clsx";
-import { LogoutButton } from "@/components/auth/logout-button";
+import { AccountPanel } from "@/components/auth/account-panel";
+import type { AuthUser } from "@/lib/auth/permissions";
 import type {
   ModelerCapacity,
   ModelingMilestoneCard,
@@ -47,10 +49,10 @@ type CapacityRow = ModelerCapacity & {
 type ModelingView = "milestones" | "management-board" | "style-board" | "profile";
 type StyleBoardMode = "active" | "approved";
 
-const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "已送审", "等反馈", "外包中", "暂停"]);
+const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "已送审", "等反馈", "外包中", "暂停"]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const statusOptions: ModelingTaskStatus[] = ["未分配", "已排期", "建模中", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "已送审", "等反馈", "已通过", "外包中"]);
+const statusOptions: ModelingTaskStatus[] = ["未分配", "已排期", "建模中", "修改中", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "已送审", "等反馈", "已通过", "外包中"]);
 
 const statusMeta: Record<
   ModelingTaskStatus,
@@ -78,6 +80,12 @@ const statusMeta: Record<
     dotClass: "bg-blue-600",
     cardClass: "border-blue-200 bg-white",
     columnClass: "border-blue-200 bg-blue-50/60",
+  },
+  修改中: {
+    title: "修改中",
+    dotClass: "bg-orange-500",
+    cardClass: "border-orange-200 bg-orange-50",
+    columnClass: "border-orange-200 bg-orange-50/70",
   },
   已送审: {
     title: "已送审",
@@ -136,7 +144,7 @@ const milestoneRiskLabel: Record<ModelingMilestoneRiskLevel, string> = {
   delay: "必然延期",
 };
 
-export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) {
+export function ModelingScheduleBoard({ currentUser, data }: { currentUser: AuthUser; data: ModelingScheduleData }) {
   const router = useRouter();
   const [view, setView] = useState<ModelingView>("milestones");
   const [styleBoardMode, setStyleBoardMode] = useState<StyleBoardMode>("active");
@@ -281,6 +289,12 @@ export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) 
       return;
     }
 
+    if (!modeler.isSchedulable) {
+      setOperationMessage({ tone: "danger", text: "该建模师当前标记为不可排期，请先在用户数据中调整排期状态。" });
+      setDraggingTaskId(null);
+      return;
+    }
+
     void saveTaskUpdate(task, { modelerId });
     setSelectedTaskId(task.id);
     setDraggingTaskId(null);
@@ -416,7 +430,7 @@ export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) 
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">预览</span>
             </button>
           </nav>
-          <LogoutButton />
+          <AccountPanel currentUser={currentUser} />
         </aside>
 
         <main className="min-w-0 px-6 py-5 max-md:px-4">
@@ -441,6 +455,14 @@ export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) 
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => router.push("/imports?importType=modeling")}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-50"
+              >
+                <FileSpreadsheet size={16} />
+                导入建模款式
+              </button>
               <div className="inline-flex h-10 rounded-lg bg-slate-100 p-1">
                 <button
                   onClick={() => setView("milestones")}
@@ -565,7 +587,7 @@ export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) 
                   <div className="min-w-0">
                     <SectionTitle icon={<Boxes size={18} />} title="款式任务看板" helper={`当前显示 ${filteredTasks.length} 款`} />
                     <div className="mt-3 overflow-x-auto pb-2">
-                      <div className="grid min-w-[2070px] grid-cols-9 gap-3">
+                      <div className="grid min-w-[2300px] grid-cols-10 gap-3">
                         {data.statusColumns.map((status) => {
                           const columnTasks = filteredTasks.filter((task) => task.status === status);
 
@@ -842,6 +864,9 @@ function ModelerCapacityCard({
             {modeler.isVirtual ? (
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">待补充人员名</span>
             ) : null}
+            {!modeler.isSchedulable ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">不可排期</span>
+            ) : null}
           </div>
           <div className="mt-1 text-xs text-slate-500">{modeler.roleTitle}</div>
         </div>
@@ -855,24 +880,26 @@ function ModelerCapacityCard({
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {modeler.specialtyTags.slice(0, 3).map((tag) => (
-          <span key={tag} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-            {tag}
-          </span>
-        ))}
-      </div>
+      {modeler.specialtyTags.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {modeler.specialtyTags.slice(0, 3).map((tag) => (
+            <span key={tag} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+              {tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div className={clsx("mt-3 grid gap-2 text-center text-xs", showCapacity ? "grid-cols-3" : "grid-cols-2")}>
         <MiniStat label="本周" value={modeler.weekTasks.length} />
         <MiniStat label="排队" value={modeler.queueTasks.length} />
-        {showCapacity ? <MiniStat label="产能" value={modeler.weeklyCapacityStyles} /> : null}
+        {showCapacity ? <MiniStat label="工作日" value={modeler.weeklyAvailableWorkdays} /> : null}
       </div>
 
       {modeler.isOverloaded ? (
         <div className="mt-3 flex items-center gap-2 rounded-md bg-rose-50 px-2 py-1.5 text-xs font-medium text-rose-700">
           <AlertTriangle size={14} />
-          排队超过 4 款，已超载
+          排队超过每周可用工作日，已超载
         </div>
       ) : null}
 
@@ -981,11 +1008,12 @@ function ModelerProfileView({
               {selectedModeler ? (
                 <div className="text-sm text-slate-500">
                   {selectedModeler.roleTitle}
+                  {!selectedModeler.isSchedulable ? " · 不可排期" : ""}
                   {selectedModeler.isVirtual ? " · 待补充人员名" : ""}
                 </div>
               ) : null}
             </div>
-            {selectedModeler ? (
+            {selectedModeler && selectedModeler.specialtyTags.length > 0 ? (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {selectedModeler.specialtyTags.slice(0, 5).map((tag) => (
                   <span key={tag} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
@@ -997,8 +1025,8 @@ function ModelerProfileView({
           </div>
           {selectedModeler ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-right">
-              <div className="text-xs font-medium text-slate-500">周产能</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedModeler.weeklyCapacityStyles}</div>
+              <div className="text-xs font-medium text-slate-500">周可用工作日</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedModeler.weeklyAvailableWorkdays}</div>
             </div>
           ) : null}
         </div>
@@ -1750,7 +1778,7 @@ function TaskDetailPanel({
               等反馈
             </button>
             <button
-              onClick={() => handleRecordFeedback("建模中", "修改意见")}
+              onClick={() => handleRecordFeedback("修改中", "修改意见")}
               disabled={!canSaveFeedback}
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 font-semibold text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
@@ -1873,16 +1901,16 @@ function buildCapacityRows(modelers: ModelerCapacity[], tasks: ModelingTaskCard[
       queueTasks,
       weekTasks,
       staleTasks,
-      isOverloaded: queueTasks.length > 4,
+      isOverloaded: queueTasks.length > modeler.weeklyAvailableWorkdays,
     };
   });
 }
 
 function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): ModelingMetric[] {
   const overloadedModelerCount = modelers.filter((modeler) => {
-    return tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status)).length > 4;
+    return tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status)).length > modeler.weeklyAvailableWorkdays;
   }).length;
-  const stuckTasks = tasks.filter((task) => reviewBlockedStatuses.has(task.status) || task.blockType?.includes("修改"));
+  const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || task.blockType?.includes("修改"));
 
   return [
     {
@@ -1900,7 +1928,7 @@ function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]
     {
       label: "超载建模师数",
       value: overloadedModelerCount,
-      helper: "排队款式超过 4 个",
+      helper: "排队款式超过每周可用工作日",
       tone: overloadedModelerCount > 0 ? "danger" : "neutral",
     },
     {
