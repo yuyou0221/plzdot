@@ -408,6 +408,13 @@ export function ModelingScheduleBoard({ data }: { data: ModelingScheduleData }) 
               用户数据
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
             </button>
+            <button
+              onClick={() => router.push("/imports")}
+              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+            >
+              数据导入
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">预览</span>
+            </button>
           </nav>
           <LogoutButton />
         </aside>
