@@ -36,10 +36,12 @@ export async function POST(request: Request) {
   }
 
   try {
+    const calculatedAt = await nextScheduleCalculatedAt();
     const run = await prisma.scheduleRun.create({
       data: {
         runName: `手动测算 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
         runType: "正式测算",
+        sourceImportId: sourceImportIdFromPayload(payload.source),
         scriptName: "project-analysis-v5-excel.js",
         scriptVersion: "p0-adapter",
         inputSnapshot: {
@@ -48,7 +50,7 @@ export async function POST(request: Request) {
           today: payload.today ?? new Date().toISOString().slice(0, 10),
         },
         runStatus: "进行中",
-        calculatedAt: new Date(),
+        calculatedAt,
       },
     });
 
@@ -63,7 +65,7 @@ export async function POST(request: Request) {
       where: { id: run.id },
       data: {
         runStatus: "成功",
-        calculatedAt: new Date(),
+        calculatedAt,
       },
     });
 
@@ -86,6 +88,32 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+}
+
+async function nextScheduleCalculatedAt() {
+  const latestSuccessfulRun = await prisma.scheduleRun.findFirst({
+    where: { runStatus: "成功" },
+    orderBy: { calculatedAt: "desc" },
+    select: { calculatedAt: true },
+  });
+  const now = new Date();
+
+  if (!latestSuccessfulRun || now.getTime() > latestSuccessfulRun.calculatedAt.getTime()) {
+    return now;
+  }
+
+  return new Date(latestSuccessfulRun.calculatedAt.getTime() + 1000);
+}
+
+function sourceImportIdFromPayload(source: string | undefined) {
+  const prefix = "project-main-import:";
+
+  if (!source?.startsWith(prefix)) {
+    return null;
+  }
+
+  const importId = source.slice(prefix.length).trim();
+  return importId.length > 0 ? importId : null;
 }
 
 async function checkWritableDatabase() {
