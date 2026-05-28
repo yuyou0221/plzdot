@@ -1282,6 +1282,7 @@ function CalendarProjectButton({
         <div className="grid grid-cols-2 gap-1.5">
           <PlanningCardField label="预测上线" value={project.forecastLaunchDate ?? "待测算"} />
           <PlanningCardField label="项目组" value={project.projectTeam} />
+          <PlanningCardField label="建模负责人" value={project.modelingOwner} />
         </div>
       </div>
     </div>
@@ -1460,6 +1461,7 @@ type PlanningTableDraft = {
   plannedLaunchDate: string;
   routeType: string;
   projectTeam: string;
+  modelingOwner: string;
 };
 
 type ProjectMutationResponse = {
@@ -1512,7 +1514,7 @@ function PlanningTableView({
       </div>
 
       <div className="max-h-[72vh] overflow-auto">
-        <table className="w-full min-w-[1120px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1260px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold text-slate-500">
             <tr>
               <th className="border-b border-slate-200 px-3 py-2">项目</th>
@@ -1522,6 +1524,7 @@ function PlanningTableView({
               <th className="border-b border-slate-200 px-3 py-2">状态</th>
               <th className="border-b border-slate-200 px-3 py-2">路线</th>
               <th className="border-b border-slate-200 px-3 py-2">项目组</th>
+              <th className="border-b border-slate-200 px-3 py-2">建模负责人</th>
               <th className="border-b border-slate-200 px-3 py-2">操作</th>
             </tr>
           </thead>
@@ -1565,6 +1568,14 @@ function PlanningTableView({
                     value={row.projectTeam}
                     placeholder="项目组"
                     onChange={(value) => updateNewRow(row.rowId, { projectTeam: value })}
+                  />
+                </td>
+                <td className="border-b border-slate-100 px-3 py-2">
+                  <PlanningTableInput
+                    ariaLabel={`${row.name || "新项目"} 建模负责人`}
+                    value={row.modelingOwner}
+                    placeholder="建模负责人"
+                    onChange={(value) => updateNewRow(row.rowId, { modelingOwner: value })}
                   />
                 </td>
                 <td className="border-b border-slate-100 px-3 py-2">
@@ -1637,6 +1648,13 @@ function PlanningTableView({
                     />
                   </td>
                   <td className="border-b border-slate-100 px-3 py-2" onClick={(event) => event.stopPropagation()}>
+                    <PlanningTableInput
+                      ariaLabel={`${project.name} 建模负责人`}
+                      value={draft.modelingOwner}
+                      onChange={(value) => updateProjectDraft(project, { modelingOwner: value })}
+                    />
+                  </td>
+                  <td className="border-b border-slate-100 px-3 py-2" onClick={(event) => event.stopPropagation()}>
                     <div className="flex items-center gap-2">
                       <TableActionButton
                         icon={<Save size={14} />}
@@ -1659,7 +1677,7 @@ function PlanningTableView({
 
             {!hasRows ? (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-400">
+                <td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-400">
                   暂无匹配项目
                 </td>
               </tr>
@@ -1678,6 +1696,7 @@ function PlanningTableView({
         plannedLaunchDate: new Date().toISOString().slice(0, 10),
         routeType: "",
         projectTeam: "",
+        modelingOwner: "",
       },
       ...rows,
     ]);
@@ -1731,6 +1750,7 @@ function PlanningTableView({
           plannedLaunchDate,
           routeType: row.routeType,
           projectTeamId: row.projectTeam,
+          modelingOwnerId: row.modelingOwner,
         }),
       });
       const result = await readProjectMutationResponse(response);
@@ -1772,6 +1792,7 @@ function PlanningTableView({
           plannedLaunchDate: draft.plannedLaunchDate,
           routeType: draft.routeType,
           projectTeamId: draft.projectTeam,
+          modelingOwnerId: draft.modelingOwner,
         }),
       });
       const result = await readProjectMutationResponse(response);
@@ -1832,6 +1853,7 @@ function PlanningTableView({
         status: "新项目",
         routeType: row.routeType,
         projectTeam: row.projectTeam,
+        modelingOwner: row.modelingOwner,
       })),
       ...projects.map((project) => {
         const draft = drafts[project.projectId] ?? draftFromProject(project);
@@ -1844,6 +1866,7 @@ function PlanningTableView({
           status: riskLabel[project.riskLevel],
           routeType: draft.routeType,
           projectTeam: draft.projectTeam,
+          modelingOwner: draft.modelingOwner,
         };
       }),
     ];
@@ -1856,7 +1879,7 @@ function PlanningTableView({
     downloadPlanningTableCsv(
       "项目上线规划.csv",
       [
-        ["项目名称", "上线月份", "计划上线", "预测 / 完成", "状态", "路线", "项目组"],
+        ["项目名称", "上线月份", "计划上线", "预测 / 完成", "状态", "路线", "项目组", "建模负责人"],
         ...rows.map((row) => [
           row.name,
           row.month,
@@ -1865,6 +1888,7 @@ function PlanningTableView({
           row.status,
           row.routeType,
           row.projectTeam,
+          row.modelingOwner,
         ]),
       ],
     );
@@ -1940,6 +1964,7 @@ function draftFromProject(project: CalendarProject): PlanningTableDraft {
     plannedLaunchDate: project.plannedLaunchDate,
     routeType: project.routeType,
     projectTeam: project.projectTeam,
+    modelingOwner: project.modelingOwner,
   };
 }
 
@@ -1947,7 +1972,8 @@ function isDraftChanged(project: CalendarProject, draft: PlanningTableDraft) {
   return (
     draft.plannedLaunchDate !== project.plannedLaunchDate ||
     draft.routeType !== project.routeType ||
-    draft.projectTeam !== project.projectTeam
+    draft.projectTeam !== project.projectTeam ||
+    draft.modelingOwner !== project.modelingOwner
   );
 }
 
@@ -2000,6 +2026,7 @@ function ProjectEntryView({ project, onNotify }: { project: ProjectDetail; onNot
           <ReadonlyField label="项目组" value={project.projectTeam} />
           <ReadonlyField label="产品研发" value={project.owner} />
           <ReadonlyField label="产品美术" value={project.artOwner} />
+          <ReadonlyField label="建模负责人" value={project.modelingOwner} />
           <ReadonlyField label="当前阶段" value={project.currentTask} />
         </div>
 
@@ -2043,7 +2070,7 @@ function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
           <div>
             <h2 className="text-xl font-semibold">{project.name}</h2>
             <div className="mt-1 text-sm text-slate-500">
-              {project.projectTeam} · 产品研发：{project.owner} · 产品美术：{project.artOwner}
+              {project.projectTeam} · 产品研发：{project.owner} · 产品美术：{project.artOwner} · 建模负责人：{project.modelingOwner}
             </div>
           </div>
           <span className={clsx("rounded-full px-2.5 py-1 text-xs font-semibold", badgeClass[project.riskLevel])}>
@@ -2058,6 +2085,7 @@ function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
             ["当前任务", project.currentTask],
             ["计划上线", project.plannedFinish],
             [forecastLabel, project.forecastFinish],
+            ["建模负责人", project.modelingOwner],
             ["项目进度", `${project.progressPercent}%`],
           ]}
         />
@@ -2396,6 +2424,7 @@ function fallbackDetail(projectId: string, cards: ProjectCard[]): ProjectDetail 
     projectTeam: "待补充",
     owner: "待补充",
     artOwner: "待补充",
+    modelingOwner: "待补充建模负责人",
     currentTask: "待从测算结果同步",
     plannedFinish: "待补充",
     forecastFinish: "待补充",

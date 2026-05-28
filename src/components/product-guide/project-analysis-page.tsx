@@ -80,6 +80,8 @@ export function ProjectAnalysisPage({ currentUser, data }: { currentUser: AuthUs
                     <span>产品研发：{data.project.productOwnerName}</span>
                     <span className="text-slate-300">/</span>
                     <span>产品美术：{data.project.artOwnerName}</span>
+                    <span className="text-slate-300">/</span>
+                    <span>建模负责人：{data.project.modelingOwnerName}</span>
                   </div>
                 </div>
                 <span className={clsx("rounded-full px-3 py-1 text-xs font-semibold", riskBadgeClass[data.result.riskLevel])}>

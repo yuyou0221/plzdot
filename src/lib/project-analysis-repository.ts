@@ -71,6 +71,7 @@ export async function getProjectAnalysisData(projectId: string): Promise<Project
   const userIds = uniqueStrings([
     project.projectOwnerId,
     project.artOwnerId,
+    project.modelingOwnerId,
     ...projectTasks.map((task) => task.ownerId),
   ]);
   const teamIds = uniqueStrings([project.projectTeamId]);
@@ -129,6 +130,7 @@ export async function getProjectAnalysisData(projectId: string): Promise<Project
       projectTeamName: labelFromMap(project.projectTeamId, teamById, "待补充项目组"),
       productOwnerName: labelFromMap(project.projectOwnerId, userById, "待补充产品研发"),
       artOwnerName: labelFromMap(project.artOwnerId, userById, "待补充产品美术"),
+      modelingOwnerName: labelFromMap(project.modelingOwnerId, userById, "待补充建模负责人"),
       currentStage: project.currentStage ?? "待补充",
       status: project.status,
       plannedLaunchDate: formatDate(project.plannedLaunchDate) ?? "待补",
@@ -195,6 +197,7 @@ function getProjectRow(projectId: string) {
       projectTeamId: true,
       projectOwnerId: true,
       artOwnerId: true,
+      modelingOwnerId: true,
       currentStage: true,
       status: true,
       updatedAt: true,

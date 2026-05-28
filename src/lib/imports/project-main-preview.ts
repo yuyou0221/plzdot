@@ -48,6 +48,7 @@ type ProjectPreviewRow = {
   projectTeam: string;
   productOwner: string;
   productArtist: string;
+  modelingOwner: string;
   status: string;
   annualPlan: string;
   urgency: string;
@@ -114,6 +115,7 @@ const PROJECT_START_DATE_FIELDS = ["启动日期", "项目启动日期"];
 const PROJECT_TEAM_FIELDS = ["项目组", "所属团队"];
 const PRODUCT_OWNER_FIELDS = ["产品研发", "项目管理"];
 const PRODUCT_ARTIST_FIELDS = ["产品研发美术", "产品美术"];
+const MODELING_OWNER_FIELDS = ["建模负责人", "建模负责", "模型负责人"];
 const STATUS_FIELDS = ["项目状态", "当前阶段"];
 const STYLE_COUNT_FIELDS = ["预计款式数", "规格", "款式数"];
 const PROJECT_LEVEL_FIELDS = ["项目等级"];
@@ -280,6 +282,7 @@ function previewProjectRow(
   const projectTeam = stringFieldAny(record, PROJECT_TEAM_FIELDS);
   const productOwner = stringFieldAny(record, PRODUCT_OWNER_FIELDS);
   const productArtist = stringFieldAny(record, PRODUCT_ARTIST_FIELDS);
+  const modelingOwner = stringFieldAny(record, MODELING_OWNER_FIELDS);
   const status = stringFieldAny(record, STATUS_FIELDS);
   const styleCount = numberFieldAny(record, STYLE_COUNT_FIELDS);
   const projectLevel = stringFieldAny(record, PROJECT_LEVEL_FIELDS);
@@ -360,6 +363,7 @@ function previewProjectRow(
     projectTeam,
     productOwner,
     productArtist,
+    modelingOwner,
     status,
     annualPlan,
     urgency,
@@ -473,6 +477,9 @@ function isProjectRecordCandidate(record: Record<string, unknown>) {
     ...PLANNED_LAUNCH_MONTH_FIELDS,
     ...LAUNCH_ORDER_FIELDS,
     ...PROJECT_TEAM_FIELDS,
+    ...PRODUCT_OWNER_FIELDS,
+    ...PRODUCT_ARTIST_FIELDS,
+    ...MODELING_OWNER_FIELDS,
     ...STATUS_FIELDS,
   ];
 

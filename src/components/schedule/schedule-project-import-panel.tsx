@@ -23,6 +23,7 @@ type ProjectPreviewRow = {
   projectTeam: string;
   productOwner: string;
   productArtist: string;
+  modelingOwner: string;
   annualPlan: string;
   urgency: string;
   matchStatus: "matched" | "new" | "conflict" | "invalid" | "unverified";
@@ -550,6 +551,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
                       <td className="px-3 py-3 text-slate-600">
                         <div>{row.productOwner || "-"}</div>
                         <div className="mt-1 text-xs text-slate-400">{row.productArtist || "-"}</div>
+                        <div className="mt-1 text-xs text-slate-400">{row.modelingOwner || "-"}</div>
                       </td>
                       <td className="px-3 py-3">
                         <IssueList issues={row.issues} />

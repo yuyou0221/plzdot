@@ -35,6 +35,7 @@ type ProjectRow = {
   projectTeamId: string | null;
   projectOwnerId: string | null;
   artOwnerId: string | null;
+  modelingOwnerId: string | null;
   routeType: string | null;
   currentStage: string | null;
   status: string;
@@ -145,6 +146,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
         projectTeam: project.projectTeamId ?? "待补充项目组",
         owner: project.projectOwnerId ?? "待补充",
         artOwner: project.artOwnerId ?? "待补充",
+        modelingOwner: project.modelingOwnerId ?? "待补充建模负责人",
         currentTask: isFinishedRiskLevel(riskLevel) ? "项目已完成" : (result?.currentTaskName ?? "待从测算结果同步"),
         plannedFinish: formatDate(project.plannedLaunchDate),
         forecastFinish: formatDate(result?.forecastLaunchDate),
@@ -319,6 +321,7 @@ function buildCalendarProjects(
         projectTeam: project.projectTeamId ?? "待补充项目组",
         owner: project.projectOwnerId ?? "待补充",
         artOwner: project.artOwnerId ?? "待补充",
+        modelingOwner: project.modelingOwnerId ?? "待补充建模负责人",
         riskLevel: projectDisplayRiskLevel(project, result),
       };
     })

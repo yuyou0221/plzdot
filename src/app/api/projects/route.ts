@@ -11,6 +11,7 @@ type CreateProjectRequest = {
   plannedLaunchDate?: string;
   routeType?: string;
   projectTeamId?: string;
+  modelingOwnerId?: string;
 };
 
 export async function POST(request: Request) {
@@ -44,6 +45,7 @@ export async function POST(request: Request) {
           plannedLaunchDate,
           routeType: normalizeOptionalText(payload.routeType),
           projectTeamId: normalizeOptionalText(payload.projectTeamId),
+          modelingOwnerId: normalizeOptionalText(payload.modelingOwnerId),
           status: "进行中",
         },
         select: { id: true },
@@ -59,6 +61,7 @@ export async function POST(request: Request) {
           plannedLaunchDate: true,
           routeType: true,
           projectTeamId: true,
+          modelingOwnerId: true,
         },
       });
     });

@@ -144,6 +144,7 @@ function projectCreateData(row: ProjectPreviewRow, importId: string) {
     projectTeamId: nullableText(row.projectTeam),
     projectOwnerId: nullableText(row.productOwner),
     artOwnerId: nullableText(row.productArtist),
+    modelingOwnerId: nullableText(row.modelingOwner),
     currentStage: nullableText(row.status),
     status: nullableText(row.status) ?? "规划中",
     notes: nullableText(buildProjectNotes(row)),

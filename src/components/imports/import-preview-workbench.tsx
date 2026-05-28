@@ -26,6 +26,7 @@ type ProjectPreviewRow = {
   projectTeam: string;
   productOwner: string;
   productArtist: string;
+  modelingOwner: string;
   status: string;
   annualPlan: string;
   urgency: string;
@@ -701,6 +702,7 @@ export function ImportPreviewWorkbench({
                           <td className="px-4 py-3 text-slate-600">
                             <div>{row.productOwner || "-"}</div>
                             <div className="mt-1 text-xs text-slate-400">{row.productArtist || "-"}</div>
+                            <div className="mt-1 text-xs text-slate-400">{row.modelingOwner || "-"}</div>
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex max-w-72 flex-wrap gap-1.5">

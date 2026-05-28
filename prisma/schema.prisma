@@ -128,6 +128,7 @@ model Project {
   projectTeamId     String?
   projectOwnerId    String?
   artOwnerId        String?
+  modelingOwnerId   String?
   currentStage      String?
   status            String    @default("进行中")
   sourceImportId    String?
@@ -138,6 +139,7 @@ model Project {
   @@index([projectName])
   @@index([plannedLaunchDate])
   @@index([projectTeamId])
+  @@index([modelingOwnerId])
   @@index([status])
 }
 

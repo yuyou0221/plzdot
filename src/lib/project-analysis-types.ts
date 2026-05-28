@@ -58,6 +58,7 @@ export type ProjectAnalysisData = {
     projectTeamName: string;
     productOwnerName: string;
     artOwnerName: string;
+    modelingOwnerName: string;
     currentStage: string;
     status: string;
     plannedLaunchDate: string;

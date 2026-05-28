@@ -27,6 +27,7 @@ export type CalendarProject = {
   projectTeam: string;
   owner: string;
   artOwner: string;
+  modelingOwner: string;
   riskLevel: RiskLevel;
 };
 
@@ -84,6 +85,7 @@ export type ProjectDetail = {
   projectTeam: string;
   owner: string;
   artOwner: string;
+  modelingOwner: string;
   currentTask: string;
   plannedFinish: string;
   forecastFinish: string;
@@ -263,6 +265,9 @@ function card(
   };
 }
 
-function detail(project: ProjectDetail): ProjectDetail {
-  return project;
+function detail(project: Omit<ProjectDetail, "modelingOwner"> & { modelingOwner?: string }): ProjectDetail {
+  return {
+    modelingOwner: "待补充建模负责人",
+    ...project,
+  };
 }

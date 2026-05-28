@@ -10,6 +10,7 @@ type UpdateProjectRequest = {
   plannedLaunchDate?: string;
   routeType?: string;
   projectTeamId?: string;
+  modelingOwnerId?: string;
 };
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -47,6 +48,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     plannedLaunchDate?: Date;
     routeType?: string | null;
     projectTeamId?: string | null;
+    modelingOwnerId?: string | null;
   } = {};
 
   if (plannedLaunchDate) {
@@ -59,6 +61,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
   if (payload.projectTeamId !== undefined) {
     data.projectTeamId = normalizeOptionalText(payload.projectTeamId);
+  }
+
+  if (payload.modelingOwnerId !== undefined) {
+    data.modelingOwnerId = normalizeOptionalText(payload.modelingOwnerId);
   }
 
   if (Object.keys(data).length === 0) {
@@ -89,6 +95,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           plannedLaunchDate: true,
           routeType: true,
           projectTeamId: true,
+          modelingOwnerId: true,
         },
       });
     });

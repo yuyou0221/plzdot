@@ -58,7 +58,7 @@ projectDetails
 ```text
 1. 创建 Project 记录。
 2. 必填项目名称和计划上线日期。
-3. 可选写入路线 routeType 和项目组 projectTeamId。
+3. 可选写入路线 routeType、项目组 projectTeamId 和项目级建模负责人 modelingOwnerId。
 4. 页面保存成功后会触发 /api/schedule/analyze 刷新预测和风险。
 ```
 
@@ -69,7 +69,8 @@ projectDetails
   "projectName": "小狗7代",
   "plannedLaunchDate": "2026-09-15",
   "routeType": "常规路线",
-  "projectTeamId": "产品一组"
+  "projectTeamId": "产品一组",
+  "modelingOwnerId": "建模负责人姓名"
 }
 ```
 
@@ -83,6 +84,7 @@ projectDetails
 plannedLaunchDate
 routeType
 projectTeamId
+modelingOwnerId
 ```
 
 ## DELETE /api/projects/:id
