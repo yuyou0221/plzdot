@@ -64,6 +64,9 @@ type MutationResponse = {
   ok?: boolean;
   message?: string;
   needsRecalculation?: boolean;
+  requiresStyleList?: boolean;
+  styleListProjectTaskId?: string;
+  styleListMessage?: string;
 };
 
 const teamStorageKey = "product-guide:team-key";
@@ -134,6 +137,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   const [activeAction, setActiveAction] = useState<GuideActionKind | null>(null);
   const [taskForm, setTaskForm] = useState<TaskActionForm>(() => defaultTaskActionForm());
   const [styleForm, setStyleForm] = useState<StyleListForm>(() => defaultStyleListForm());
+  const [styleListProjectTaskId, setStyleListProjectTaskId] = useState("");
+  const [styleListHandoffMessage, setStyleListHandoffMessage] = useState("");
 
   const visibleSearch = search.trim();
   const activeMineKey = minePersonFilter === "all" ? data.filters.people[0]?.value : minePersonFilter;
@@ -221,6 +226,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
     setStyleForm(defaultStyleListForm());
+    setStyleListProjectTaskId("");
+    setStyleListHandoffMessage("");
   }
 
   function selectMilestoneCard(card: ProductGuideMilestoneCard) {
@@ -230,6 +237,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
     setStyleForm(defaultStyleListForm());
+    setStyleListProjectTaskId("");
+    setStyleListHandoffMessage("");
   }
 
   function chooseTeam(teamKey: string) {
@@ -237,6 +246,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedItemId("");
     setSelectedMilestoneCardId("");
     setActiveAction(null);
+    setStyleListProjectTaskId("");
+    setStyleListHandoffMessage("");
   }
 
   function switchTeam(offset: number) {
@@ -296,8 +307,24 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       method: "PATCH",
       payload,
       onSuccess: (result) => {
-        setActiveAction(null);
         setPendingUpdateCount((count) => count + 1);
+        if (action === "complete" && result.requiresStyleList) {
+          setStyleListProjectTaskId(result.styleListProjectTaskId ?? "");
+          setStyleListHandoffMessage(result.styleListMessage ?? "");
+          setStyleForm({
+            ...defaultStyleListForm(),
+            originalArtStatus: "已过审",
+            originalArtApprovedDate: taskForm.actualFinishDate,
+            note: "原画里程碑已完成，递交建模排期。",
+          });
+          setActiveAction("style-list");
+          notify(result.styleListMessage ?? "原画里程碑已完成，请录入建模款式清单。", "warning");
+          return;
+        }
+
+        setActiveAction(null);
+        setStyleListProjectTaskId("");
+        setStyleListHandoffMessage("");
         notify(result.message ?? "已保存。");
         router.refresh();
       },
@@ -314,7 +341,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       method: "POST",
       payload: {
         projectId: selectedItem.projectId,
-        projectTaskId: selectedItem.taskId,
+        projectTaskId: styleListProjectTaskId || selectedItem.taskId,
         styleNames: styleForm.styleNames,
         styleCount: styleForm.styleCount,
         difficulty: styleForm.difficulty,
@@ -326,8 +353,10 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       onSuccess: (result) => {
         setActiveAction(null);
         setStyleForm(defaultStyleListForm());
+        setStyleListProjectTaskId("");
+        setStyleListHandoffMessage("");
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已生成建模款式。");
+        notify(result.message ?? "已递交建模款式给建模排期。");
         router.refresh();
       },
     });
@@ -584,6 +613,18 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                 setTaskForm={setTaskForm}
                 styleForm={styleForm}
                 setStyleForm={setStyleForm}
+                styleListHandoffMessage={styleListHandoffMessage}
+                onOpenStyleList={() => {
+                  setStyleForm(defaultStyleListForm());
+                  setStyleListProjectTaskId("");
+                  setStyleListHandoffMessage("");
+                  setActiveAction("style-list");
+                }}
+                onCancelStyleList={() => {
+                  setActiveAction(null);
+                  setStyleListProjectTaskId("");
+                  setStyleListHandoffMessage("");
+                }}
                 saving={saving}
                 onSaveTaskAction={saveTaskAction}
                 onSaveStyleList={saveStyleList}
@@ -930,6 +971,9 @@ function DetailPanel({
   setTaskForm,
   styleForm,
   setStyleForm,
+  styleListHandoffMessage,
+  onOpenStyleList,
+  onCancelStyleList,
   saving,
   onSaveTaskAction,
   onSaveStyleList,
@@ -946,6 +990,9 @@ function DetailPanel({
   setTaskForm: (form: TaskActionForm) => void;
   styleForm: StyleListForm;
   setStyleForm: (form: StyleListForm) => void;
+  styleListHandoffMessage: string;
+  onOpenStyleList: () => void;
+  onCancelStyleList: () => void;
   saving: boolean;
   onSaveTaskAction: (action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
   onSaveStyleList: () => void;
@@ -1083,10 +1130,7 @@ function DetailPanel({
             <>
               <SmallActionButton
                 label="录入款式"
-                onClick={() => {
-                  setStyleForm(defaultStyleListForm());
-                  setActiveAction("style-list");
-                }}
+                onClick={onOpenStyleList}
               />
               <SmallActionButton label="管理款式" onClick={onOpenModeling} />
             </>
@@ -1154,8 +1198,9 @@ function DetailPanel({
             <StyleListFormView
               form={styleForm}
               setForm={setStyleForm}
+              handoffMessage={styleListHandoffMessage}
               saving={saving}
-              onCancel={() => setActiveAction(null)}
+              onCancel={onCancelStyleList}
               onSubmit={onSaveStyleList}
             />
           ) : null}
@@ -1516,12 +1561,14 @@ function SubmitReviewForm({
 function StyleListFormView({
   form,
   setForm,
+  handoffMessage,
   saving,
   onCancel,
   onSubmit,
 }: {
   form: StyleListForm;
   setForm: (form: StyleListForm) => void;
+  handoffMessage: string;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
@@ -1529,8 +1576,12 @@ function StyleListFormView({
   return (
     <div className="grid gap-3">
       <div>
-        <div className="text-sm font-semibold text-slate-900">录入款式清单</div>
-        <div className="mt-1 text-xs text-slate-500">有真实名称就逐行填写；没有名称时填写数量，会生成待补充款式。</div>
+        <div className="text-sm font-semibold text-slate-900">
+          {handoffMessage ? "原画完成后递交建模排期" : "录入款式清单"}
+        </div>
+        <div className="mt-1 text-xs text-slate-500">
+          {handoffMessage || "有真实名称就逐行填写；没有名称时填写数量，会生成待补充款式。"}
+        </div>
       </div>
       <LabeledTextarea
         label="款式名称"
@@ -1582,7 +1633,12 @@ function StyleListFormView({
         placeholder="可填写款式拆分说明"
         onChange={(value) => setForm({ ...form, note: value })}
       />
-      <FormActions saving={saving} submitLabel="生成款式" onCancel={onCancel} onSubmit={onSubmit} />
+      <FormActions
+        saving={saving}
+        submitLabel={handoffMessage ? "递交建模排期" : "生成款式"}
+        onCancel={onCancel}
+        onSubmit={onSubmit}
+      />
     </div>
   );
 }

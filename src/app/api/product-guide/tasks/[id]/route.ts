@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import { formatDate, optionalText, parseDateOnly, requiredText, todayDateOnly } from "@/lib/product-guide-mutation";
+import { isModelingMilestoneTaskNo, milestoneByTaskNo } from "@/lib/schedule-domain";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         isBlocked: true,
         blockReason: true,
         progressNote: true,
+        taskNo: true,
+        milestoneType: true,
       },
     });
 
@@ -314,7 +317,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       };
     });
 
-    return NextResponse.json({ ok: true, ...result, needsRecalculation: true });
+    const styleListHandoff =
+      action === "complete" ? await buildOriginalArtStyleListHandoff(task.projectId, task.id) : null;
+
+    return NextResponse.json({ ok: true, ...result, ...styleListHandoff, needsRecalculation: true });
   } catch (error) {
     if (error instanceof MutationError) {
       return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
@@ -331,6 +337,59 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       { status: 500 },
     );
   }
+}
+
+async function buildOriginalArtStyleListHandoff(projectId: string, completedTaskId: string) {
+  const projectTasks = await prisma.projectTask.findMany({
+    where: { projectId },
+    orderBy: [{ taskNo: "asc" }],
+    select: {
+      id: true,
+      taskNo: true,
+      taskName: true,
+      milestoneType: true,
+      status: true,
+      actualFinishDate: true,
+    },
+  });
+  const originalArtTasks = projectTasks.filter(isOriginalArtTask);
+  const completedOriginalArtTask = originalArtTasks.some((task) => task.id === completedTaskId);
+
+  if (!completedOriginalArtTask) {
+    return null;
+  }
+
+  const allOriginalArtTasksCompleted = originalArtTasks.every(isTaskCompleted);
+  if (!allOriginalArtTasksCompleted) {
+    return null;
+  }
+
+  const existingStyleCount = await prisma.modelingTask.count({ where: { projectId } });
+  if (existingStyleCount > 0) {
+    return null;
+  }
+
+  const modelingProjectTask = projectTasks.find(isModelingTask);
+
+  return {
+    requiresStyleList: true,
+    styleListProjectTaskId: modelingProjectTask?.id,
+    styleListMessage: modelingProjectTask
+      ? "原画里程碑已完成，请录入建模款式清单。保存后系统会递交给建模排期。"
+      : "原画里程碑已完成，请录入建模款式清单；但当前项目缺少建模任务，请先确认任务模板。",
+  };
+}
+
+function isOriginalArtTask(task: { taskNo: number; taskName: string; milestoneType: string }) {
+  return milestoneByTaskNo(task.taskNo) === "原画里程碑" || `${task.milestoneType} ${task.taskName}`.includes("原画");
+}
+
+function isModelingTask(task: { taskNo: number; taskName: string; milestoneType: string }) {
+  return isModelingMilestoneTaskNo(task.taskNo) || `${task.milestoneType} ${task.taskName}`.includes("建模");
+}
+
+function isTaskCompleted(task: { status: string; actualFinishDate: Date | null }) {
+  return Boolean(task.actualFinishDate) || task.status.includes("已完成") || task.status.includes("已通过");
 }
 
 function updateTypeForAction(action: TaskAction) {

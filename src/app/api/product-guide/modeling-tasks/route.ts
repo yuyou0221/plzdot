@@ -9,6 +9,7 @@ import {
   parsePositiveInt,
   requiredText,
 } from "@/lib/product-guide-mutation";
+import { isModelingMilestoneTaskNo } from "@/lib/schedule-domain";
 
 export const runtime = "nodejs";
 
@@ -134,7 +135,7 @@ export async function POST(request: Request) {
         data: {
           projectId: project.id,
           projectTaskId,
-          updateType: "产品组录入建模款式",
+          updateType: "产品组递交建模款式清单",
           oldValue: { existingStyleCount: existingCount },
           newValue: {
             createdStyleCount: count,
@@ -155,7 +156,7 @@ export async function POST(request: Request) {
       createdCount: createdTasks.length,
       projectTaskId,
       needsRecalculation: true,
-      message: `已生成 ${createdTasks.length} 个建模款式，建模排期中将显示为未分配。`,
+      message: `已递交 ${createdTasks.length} 个建模款式给建模排期，当前状态为未分配。`,
     });
   } catch (error) {
     return NextResponse.json(
@@ -175,10 +176,10 @@ async function resolveModelingProjectTaskId(projectId: string, projectTaskId?: s
   if (projectTaskId) {
     const task = await prisma.projectTask.findFirst({
       where: { id: projectTaskId, projectId },
-      select: { id: true },
+      select: { id: true, taskNo: true, taskName: true, milestoneType: true },
     });
 
-    if (task) {
+    if (task && isModelingProjectTask(task)) {
       return task.id;
     }
   }
@@ -196,6 +197,10 @@ async function resolveModelingProjectTaskId(projectId: string, projectTaskId?: s
   });
 
   return task?.id;
+}
+
+function isModelingProjectTask(task: { taskNo: number; taskName: string; milestoneType: string }) {
+  return isModelingMilestoneTaskNo(task.taskNo) || `${task.milestoneType} ${task.taskName}`.includes("建模");
 }
 
 function normalizeStyleNames(value: unknown) {
