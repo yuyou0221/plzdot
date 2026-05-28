@@ -7,6 +7,7 @@ import type {
   ModelingMilestoneOverview,
   ModelingMilestoneRiskLevel,
   ModelingMetric,
+  ModelingReferenceImage,
   ModelingScheduleData,
   ModelingTaskCard,
   ModelingTaskStatus,
@@ -15,10 +16,12 @@ import type {
 } from "@/lib/modeling-schedule-types";
 
 const statusColumns: ModelingTaskStatus[] = [
+  "未启动",
   "未分配",
   "已排期",
   "建模中",
   "修改中",
+  "待送审",
   "已送审",
   "等反馈",
   "已通过",
@@ -75,8 +78,12 @@ type ModelingTaskRow = {
   id: string;
   projectId: string;
   projectTaskId: string;
+  sourceStyleId: string | null;
   styleCode: string;
+  styleSequence: string | null;
   styleName: string;
+  isFirstModelingStyle: boolean;
+  referenceImageUrls: unknown;
   originalArtStatus: string;
   originalArtApprovedDate: Date | null;
   difficulty: string;
@@ -150,8 +157,12 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
           id: true,
           projectId: true,
           projectTaskId: true,
+          sourceStyleId: true,
           styleCode: true,
+          styleSequence: true,
           styleName: true,
+          isFirstModelingStyle: true,
+          referenceImageUrls: true,
           originalArtStatus: true,
           originalArtApprovedDate: true,
           difficulty: true,
@@ -574,8 +585,12 @@ function buildRealTasks(
       projectTaskId: task.projectTaskId,
       projectName: project?.projectName ?? "未知项目",
       projectStage: project?.currentStage ?? project?.status ?? "待补充阶段",
+      sourceStyleId: task.sourceStyleId ?? undefined,
       styleCode: task.styleCode,
+      styleSequence: task.styleSequence ?? undefined,
       styleName: task.styleName || "待补充款式名",
+      isFirstModelingStyle: task.isFirstModelingStyle,
+      referenceImageUrls: referenceImagesFromJson(task.referenceImageUrls),
       status,
       difficulty: task.difficulty || "常规",
       estimatedWorkdays: task.estimatedWorkdays || 7,
@@ -606,7 +621,7 @@ function buildRealTasks(
       latestFeedback: isCompletedBySchedule ? undefined : latestFeedback?.content,
       feedbackStatus: isCompletedBySchedule ? undefined : latestFeedback?.status,
       isVirtual: false,
-      canDragAssign: !task.modelerId && !task.isOutsourced && status !== "已通过" && !isCompletedBySchedule,
+      canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
   });
 }
@@ -652,8 +667,12 @@ function buildVirtualTasks(
           projectTaskId: `${project.id}-modeling-task`,
           projectName: project.projectName,
           projectStage: stage,
+          sourceStyleId: undefined,
           styleCode: `${project.id}-S${String(index).padStart(2, "0")}`,
+          styleSequence: String(index),
           styleName: `待补充款式名 ${String(index).padStart(2, "0")}`,
+          isFirstModelingStyle: index === 1,
+          referenceImageUrls: [],
           status,
           difficulty,
           estimatedWorkdays,
@@ -749,7 +768,7 @@ function buildProjectSummaries(
         const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
         const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
         const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
-        const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
+        const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
         return {
           projectId: project.id,
@@ -789,7 +808,7 @@ function buildProjectSummaries(
       const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
       const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
       const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
-      const unassignedStyles = projectTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
+      const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
       return {
         projectId: project.id,
@@ -821,7 +840,7 @@ function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): M
     },
     {
       label: "未分配款式数",
-      value: tasks.filter((task) => !task.modelerId && !task.isOutsourced).length,
+      value: tasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length,
       helper: "负责人待手动录入",
       tone: "warning",
     },
@@ -853,10 +872,12 @@ function normalizeStatus(value: string, isOutsourced: boolean): ModelingTaskStat
     return value as ModelingTaskStatus;
   }
 
+  if (value.includes("未启动")) return "未启动";
   if (value.includes("未分配")) return "未分配";
   if (value.includes("排期")) return "已排期";
   if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
+  if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
   if (value.includes("通过") || value.includes("完成")) return "已通过";
@@ -949,6 +970,36 @@ function maxDate(values: Array<Date | null | undefined>) {
 
 function rawTaskResult(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function referenceImagesFromJson(value: unknown): ModelingReferenceImage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const url = typeof record.url === "string" ? record.url.trim() : "";
+
+      if (!url) {
+        return null;
+      }
+
+      const image: ModelingReferenceImage = { url };
+      const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : "";
+      const type = typeof record.type === "string" && record.type.trim() ? record.type.trim() : "";
+
+      if (name) image.name = name;
+      if (type) image.type = type;
+
+      return image;
+    })
+    .filter((item): item is ModelingReferenceImage => item !== null);
 }
 
 function dateFromRawValue(value: unknown) {

@@ -51,8 +51,8 @@ type StyleBoardMode = "active" | "approved";
 
 const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "已送审", "等反馈", "外包中", "暂停"]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const statusOptions: ModelingTaskStatus[] = ["未分配", "已排期", "建模中", "修改中", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "已送审", "等反馈", "已通过", "外包中"]);
+const statusOptions: ModelingTaskStatus[] = ["未启动", "未分配", "已排期", "建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
 
 const statusMeta: Record<
   ModelingTaskStatus,
@@ -63,6 +63,12 @@ const statusMeta: Record<
     columnClass: string;
   }
 > = {
+  未启动: {
+    title: "未启动",
+    dotClass: "bg-stone-400",
+    cardClass: "border-stone-200 bg-stone-50",
+    columnClass: "border-stone-200 bg-stone-50/70",
+  },
   未分配: {
     title: "未分配",
     dotClass: "bg-slate-400",
@@ -86,6 +92,12 @@ const statusMeta: Record<
     dotClass: "bg-orange-500",
     cardClass: "border-orange-200 bg-orange-50",
     columnClass: "border-orange-200 bg-orange-50/70",
+  },
+  待送审: {
+    title: "待送审",
+    dotClass: "bg-indigo-500",
+    cardClass: "border-indigo-200 bg-indigo-50",
+    columnClass: "border-indigo-200 bg-indigo-50/70",
   },
   已送审: {
     title: "已送审",

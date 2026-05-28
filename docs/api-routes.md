@@ -272,6 +272,11 @@ POST /api/product-guide/modeling-tasks
 
 ```text
 PATCH /api/modeling/tasks/:id
+POST /api/modeling/style-submissions
+POST /api/modeling/style-start-events
+POST /api/modeling/review-results
+GET /api/modeling/projects/:projectId/styles
+GET /api/modeling/projects/:projectId/progress
 ```
 
 当前行为：
@@ -283,4 +288,65 @@ PATCH /api/modeling/tasks/:id
 4. 状态改为“已通过”时会写入实际完成日期和实际工作日。
 5. 每次保存会重算 ProjectModelingProgress。
 6. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
+```
+
+### POST /api/modeling/style-submissions
+
+用途：接收产品组工作指引提交的完整建模款式清单，由建模排期创建或更新 `ModelingTask`。
+
+核心规则：
+
+```text
+1. 只接受任务 7 / 10 相关款式。
+2. 款式清单必须且只能有 1 个 isFirstModelingStyle=true。
+3. 第一款挂任务 7，其余款式挂任务 10。
+4. 新建款式默认 status=未启动。
+5. 已存在款式只更新基础资料，不把已推进的状态重置回未启动。
+6. 匹配顺序：sourceStyleId、projectId+projectTaskId+styleCode、projectId+projectTaskId+styleSequence、projectId+projectTaskId+styleName。
+```
+
+### POST /api/modeling/style-start-events
+
+用途：接收产品组工作指引发出的任务启动事件，把已登记但未启动的款式释放到可分配池。
+
+核心规则：
+
+```text
+1. taskNo=7 时 startScope 必须是 first-style，只启动第一款。
+2. taskNo=10 时 startScope 必须是 remaining-styles，只启动其余款式。
+3. 状态只从 未启动 推进到 未分配。
+4. 任务 8、9 不接受款式启动事件。
+```
+
+### POST /api/modeling/review-results
+
+用途：接收产品组工作指引提交的内部审核 / 送审结果，由建模排期更新状态和反馈。
+
+状态映射：
+
+```text
+内部通过可送审 -> 待送审，写入 internalApprovedDate
+内部不通过 -> 修改中，生成内部审核反馈
+送审通过 -> 已通过，写入 copyrightApprovedDate
+送审不通过 -> 修改中，生成版权方反馈
+```
+
+### GET /api/modeling/projects/:projectId/styles
+
+用途：给产品组工作指引读取项目下款式建模状态。
+
+返回内容包括：
+
+```text
+modelingTaskId、款式编号、款式名称、是否第一款、建模状态、建模师、外包供应商、内部通过日期、版权方过审日期、最新反馈、修改轮次、是否卡住、参考图 URL。
+```
+
+### GET /api/modeling/projects/:projectId/progress
+
+用途：给产品组工作指引读取项目级建模进度。
+
+返回内容包括：
+
+```text
+totalRequiredStyles、approvedStyles、inProgressStyles、submittedStyles、waitingSubmissionStyles、outsourcedStyles、unstartedStyles、unassignedStyles、progressPercent、canWritebackProjectTask。
 ```

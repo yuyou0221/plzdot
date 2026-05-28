@@ -5,10 +5,12 @@ import { prisma } from "@/lib/db/prisma";
 import type { ModelingTaskStatus, ModelingWritebackDraft } from "@/lib/modeling-schedule-types";
 
 const validStatuses = new Set<ModelingTaskStatus>([
+  "未启动",
   "未分配",
   "已排期",
   "建模中",
   "修改中",
+  "待送审",
   "已送审",
   "等反馈",
   "已通过",
@@ -17,7 +19,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "取消",
 ]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "已送审", "等反馈", "已通过", "外包中"]);
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
 
 export class ModelingTaskUpdateError extends Error {
   statusCode: number;
@@ -96,7 +98,7 @@ export async function updateModelingTask(taskId: string, payload: Record<string,
         data.outsourceVendorId = null;
         data.stableOutsourceCapacity = false;
 
-        if (!explicitStatus && existing.status === "未分配") {
+        if (!explicitStatus && (existing.status === "未启动" || existing.status === "未分配")) {
           nextStatus = "已排期";
         }
       } else {
@@ -219,7 +221,7 @@ function applyStatusEffects(
 ) {
   const { status, existing, today, now } = options;
 
-  if (status === "未分配") {
+  if (status === "未启动" || status === "未分配") {
     data.modelerId = null;
     data.isOutsourced = false;
     data.outsourceVendorId = null;
@@ -231,6 +233,14 @@ function applyStatusEffects(
     data.blockedSince = null;
     data.blockedDays = 0;
     data.blockType = status === "修改中" ? (options.blockType ?? "修改中") : null;
+  }
+
+  if (status === "待送审") {
+    data.internalApprovedDate = today;
+    data.remainingWorkdays = 0;
+    data.blockedSince = null;
+    data.blockedDays = 0;
+    data.blockType = null;
   }
 
   if (reviewBlockedStatuses.has(status)) {
@@ -246,6 +256,7 @@ function applyStatusEffects(
 
     data.actualStartDate = startDate;
     data.actualFinishDate = finishDate;
+    data.copyrightApprovedDate = finishDate;
     data.actualWorkdays = workdaysBetween(startDate, finishDate);
     data.remainingWorkdays = 0;
     data.blockedSince = null;
@@ -284,7 +295,7 @@ export async function refreshProjectModelingProgress(
     return status === "已送审" || status === "等反馈";
   }).length;
   const outsourcedStyles = requiredTasks.filter((task) => normalizeExistingStatus(task.status, task.isOutsourced) === "外包中" || task.isOutsourced).length;
-  const unassignedStyles = requiredTasks.filter((task) => !task.modelerId && !task.isOutsourced).length;
+  const unassignedStyles = requiredTasks.filter((task) => normalizeExistingStatus(task.status, task.isOutsourced) === "未分配" && !task.modelerId && !task.isOutsourced).length;
   const allRequiredApproved = totalRequiredStyles > 0 && approvedStyles === totalRequiredStyles;
   const projectedAllApprovedDate = maxDate(
     requiredTasks.map((task) => (allRequiredApproved ? task.actualFinishDate : task.plannedFinishDate ?? task.actualFinishDate)),
@@ -360,9 +371,11 @@ function normalizeExistingStatus(value: string, isOutsourced: boolean): Modeling
   }
 
   if (value.includes("未分配")) return "未分配";
+  if (value.includes("未启动")) return "未启动";
   if (value.includes("排期")) return "已排期";
   if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
+  if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
   if (value.includes("通过") || value.includes("完成")) return "已通过";
@@ -384,6 +397,7 @@ function isOriginalArtApproved(status: string, approvedDate: Date | null) {
 }
 
 function defaultFeedbackType(status: ModelingTaskStatus) {
+  if (status === "待送审") return "内部通过";
   if (status === "已送审") return "送审记录";
   if (status === "等反馈") return "版权方反馈";
   if (status === "修改中") return "修改意见";

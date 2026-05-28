@@ -303,9 +303,13 @@ model ModelingTask {
   id                      String    @id @default(uuid())
   projectId               String
   projectTaskId           String
+  sourceStyleId           String?
   styleCode               String
+  styleSequence           String?
   styleName               String
+  isFirstModelingStyle    Boolean   @default(false)
   isRequired              Boolean   @default(true)
+  referenceImageUrls      Json?
   originalArtStatus       String    @default("未过审")
   originalArtApprovedDate DateTime? @db.Date
   difficulty              String
@@ -337,6 +341,9 @@ model ModelingTask {
 
   @@index([projectId])
   @@index([projectTaskId])
+  @@index([projectId, projectTaskId, sourceStyleId])
+  @@index([projectId, projectTaskId, styleSequence])
+  @@index([projectId, isFirstModelingStyle])
   @@index([modelerId, status])
   @@index([status])
   @@index([isOutsourced])

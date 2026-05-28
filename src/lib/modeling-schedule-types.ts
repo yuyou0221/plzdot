@@ -1,14 +1,22 @@
 export type ModelingTaskStatus =
+  | "未启动"
   | "未分配"
   | "已排期"
   | "建模中"
   | "修改中"
+  | "待送审"
   | "已送审"
   | "等反馈"
   | "已通过"
   | "外包中"
   | "暂停"
   | "取消";
+
+export type ModelingReferenceImage = {
+  name?: string;
+  url: string;
+  type?: string;
+};
 
 export type ModelingMetric = {
   label: string;
@@ -23,8 +31,12 @@ export type ModelingTaskCard = {
   projectTaskId: string;
   projectName: string;
   projectStage: string;
+  sourceStyleId?: string;
   styleCode: string;
+  styleSequence?: string;
   styleName: string;
+  isFirstModelingStyle: boolean;
+  referenceImageUrls: ModelingReferenceImage[];
   status: ModelingTaskStatus;
   difficulty: string;
   estimatedWorkdays: number;
