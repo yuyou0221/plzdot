@@ -1,10 +1,10 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { KeyRound, X } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, KeyRound } from "lucide-react";
 
-export function ChangePasswordForm({ isAvailable = true }: { isAvailable?: boolean }) {
-  const [isOpen, setIsOpen] = useState(false);
+export function ChangePasswordForm({ returnPath = "/" }: { returnPath?: string }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -12,20 +12,10 @@ export function ChangePasswordForm({ isAvailable = true }: { isAvailable?: boole
   const [messageTone, setMessageTone] = useState<"success" | "warning">("warning");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (!isAvailable) {
-    return null;
-  }
-
   function resetForm() {
     setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
-  }
-
-  function closeForm() {
-    setIsOpen(false);
-    setMessage(null);
-    resetForm();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -58,68 +48,47 @@ export function ChangePasswordForm({ isAvailable = true }: { isAvailable?: boole
     }
   }
 
-  if (!isOpen) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setIsOpen(true);
-          setMessage(null);
-        }}
-        className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-      >
-        <KeyRound size={15} />
-        修改密码
-      </button>
-    );
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="inline-flex items-center gap-2 text-sm font-semibold text-slate-800">
+    <form onSubmit={handleSubmit} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
           <KeyRound size={15} />
-          修改密码
         </div>
-        <button
-          type="button"
-          onClick={closeForm}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          aria-label="关闭修改密码"
-        >
-          <X size={15} />
-        </button>
+        <div>
+          <h1 className="text-xl font-semibold text-slate-950">修改密码</h1>
+          <p className="mt-1 text-sm text-slate-500">保存后请使用新密码登录，账号会保持当前登录状态。</p>
+        </div>
       </div>
 
-      <div className="mt-3 grid gap-2">
-        <label className="grid gap-1 text-xs font-semibold text-slate-500">
+      <div className="mt-6 grid gap-4">
+        <label className="grid gap-1.5 text-sm font-semibold text-slate-600">
           当前密码
           <input
             type="password"
             value={currentPassword}
             onChange={(event) => setCurrentPassword(event.target.value)}
-            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
+            className="h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
             required
           />
         </label>
-        <label className="grid gap-1 text-xs font-semibold text-slate-500">
+        <label className="grid gap-1.5 text-sm font-semibold text-slate-600">
           新密码
           <input
             type="password"
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
-            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
+            className="h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
             maxLength={128}
             required
           />
         </label>
-        <label className="grid gap-1 text-xs font-semibold text-slate-500">
+        <label className="grid gap-1.5 text-sm font-semibold text-slate-600">
           确认新密码
           <input
             type="password"
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
-            className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
+            className="h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-rose-300 focus:bg-white focus:ring-2 focus:ring-rose-100"
             maxLength={128}
             required
           />
@@ -130,26 +99,26 @@ export function ChangePasswordForm({ isAvailable = true }: { isAvailable?: boole
         <div
           className={
             messageTone === "success"
-              ? "mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800"
-              : "mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900"
+              ? "mt-5 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800"
+              : "mt-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900"
           }
         >
+          {messageTone === "success" ? <CheckCircle2 size={16} /> : null}
           {message}
         </div>
       ) : null}
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={closeForm}
-          className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+      <div className="mt-6 grid grid-cols-2 gap-3">
+        <Link
+          href={returnPath}
+          className="inline-flex h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
         >
-          取消
-        </button>
+          返回
+        </Link>
         <button
           type="submit"
           disabled={isSubmitting}
-          className="inline-flex h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-11 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? "保存中" : "保存"}
         </button>
