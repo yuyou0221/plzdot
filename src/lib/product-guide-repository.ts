@@ -12,6 +12,7 @@ import type {
   ProductGuideRecentUpdate,
   ProductGuideRiskLevel,
   ProductGuideStyleSummary,
+  ProductGuideUnassignedProject,
 } from "@/lib/product-guide-types";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
 import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
@@ -19,9 +20,14 @@ import type { ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
 type ProjectRow = {
   id: string;
+  projectCode: string | null;
   projectName: string;
+  ipName: string | null;
+  licensorName: string | null;
+  productType: string | null;
   styleCount: number | null;
   plannedLaunchDate: Date;
+  projectStartDate: Date | null;
   projectTeamId: string | null;
   projectOwnerId: string | null;
   artOwnerId: string | null;
@@ -211,9 +217,14 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
         take: 300,
         select: {
           id: true,
+          projectCode: true,
           projectName: true,
+          ipName: true,
+          licensorName: true,
+          productType: true,
           styleCount: true,
           plannedLaunchDate: true,
+          projectStartDate: true,
           projectTeamId: true,
           projectOwnerId: true,
           artOwnerId: true,
@@ -642,6 +653,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
 
     const items = Array.from(itemsById.values()).sort(sortGuideItems);
     const milestoneBoard = buildMilestoneBoard(scheduleData, projectById, maps.teamById);
+    const teamTargets = buildTeamTargets(users, projects, teams);
 
     return {
       sourceLabel: latestRun ? "数据库聚合" : "数据库项目",
@@ -649,6 +661,8 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       metrics: buildMetrics(items),
       milestoneBoard,
       filters: buildFilters(items, users, teams, milestoneBoard.cards),
+      teamTargets,
+      unassignedProjects: buildUnassignedProjects(projects, maps),
       items,
       styleSummaries: buildStyleSummaries(modelingTasks),
     };
@@ -1129,6 +1143,90 @@ function buildMilestoneBoard(
   };
 }
 
+function buildTeamTargets(users: UserRow[], projects: ProjectRow[], teams: TeamRow[]): ProductGuideFilterOption[] {
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  const groupIds = new Set<string>();
+
+  for (const user of users) {
+    if (user.status !== "停用" && user.projectGroupTeamId && teamById.has(user.projectGroupTeamId)) {
+      groupIds.add(user.projectGroupTeamId);
+    }
+  }
+
+  for (const project of projects) {
+    if (project.projectTeamId && teamById.has(project.projectTeamId)) {
+      groupIds.add(project.projectTeamId);
+    }
+  }
+
+  const targets = groupIds.size > 0 ? Array.from(groupIds) : teams.map((team) => team.id);
+
+  return uniqueOptions(
+    targets
+      .map((teamId) => teamById.get(teamId))
+      .filter((team): team is TeamRow => Boolean(team))
+      .map((team) => ({ value: team.id, label: team.name })),
+  );
+}
+
+function buildUnassignedProjects(projects: ProjectRow[], maps: ContextMaps): ProductGuideUnassignedProject[] {
+  return projects
+    .filter((project) => !isCompletedProject(project, maps.projectResultById.get(project.id)))
+    .filter((project) => !project.projectTeamId || !maps.teamById.has(project.projectTeamId))
+    .map((project) => {
+      const refs = projectReference(project, maps);
+      const result = maps.projectResultById.get(project.id);
+      const shouldStart = projectShouldStartDate(project, result);
+
+      return {
+        id: project.id,
+        projectCode: project.projectCode ?? undefined,
+        projectName: project.projectName,
+        ipName: project.ipName ?? undefined,
+        licensorName: project.licensorName ?? undefined,
+        productType: project.productType ?? undefined,
+        projectStartDate: formatDate(project.projectStartDate),
+        shouldStartDate: formatDate(shouldStart.date),
+        shouldStartSource: shouldStart.source,
+        plannedLaunchDate: formatDate(project.plannedLaunchDate),
+        currentStage: project.currentStage ?? undefined,
+        status: project.status,
+        productOwnerName: refs.productOwnerName,
+        artOwnerName: refs.artOwnerName,
+        updatedAt: formatDateTime(project.updatedAt),
+      };
+    })
+    .sort(
+      (a, b) =>
+        dateSortValue(a.plannedLaunchDate) - dateSortValue(b.plannedLaunchDate) ||
+        a.projectName.localeCompare(b.projectName, "zh-CN"),
+    );
+}
+
+function projectShouldStartDate(project: ProjectRow, result: ProjectResultRow | undefined) {
+  const raw = rawObject(result?.rawResult);
+  const plannedProjectStartDate =
+    dateFromRawValue(raw.plannedProjectStartDate) ??
+    dateFromRawValue(raw.effectiveProjectStartDate) ??
+    dateFromRawValue(raw.projectStartDate);
+
+  if (plannedProjectStartDate) {
+    return { date: plannedProjectStartDate, source: "排期倒推开始日" };
+  }
+
+  if (project.projectStartDate) {
+    return { date: project.projectStartDate, source: "项目启动日期" };
+  }
+
+  return { date: fallbackProjectStart(project.plannedLaunchDate), source: "上线日期倒推" };
+}
+
+function fallbackProjectStart(plannedLaunchDate: Date) {
+  const date = new Date(plannedLaunchDate);
+  date.setDate(date.getDate() - 180);
+  return date;
+}
+
 function buildStyleSummaries(modelingTasks: ModelingTaskRow[]): ProductGuideStyleSummary[] {
   return modelingTasks
     .map((task) => ({
@@ -1512,6 +1610,11 @@ function buildFallbackData(): ProductGuideData {
         projectTeamName: "产品二组",
       },
     ]),
+    teamTargets: [
+      { value: "产品一组", label: "产品一组" },
+      { value: "产品二组", label: "产品二组" },
+    ],
+    unassignedProjects: [],
     items,
     styleSummaries: [],
   };

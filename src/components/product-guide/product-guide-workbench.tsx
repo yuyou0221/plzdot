@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { DragEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -9,7 +9,9 @@ import {
   CalendarDays,
   ExternalLink,
   Gauge,
+  Inbox,
   ListChecks,
+  MoveRight,
   Palette,
   Search,
   UserRound,
@@ -19,16 +21,25 @@ import { AccountPanel } from "@/components/auth/account-panel";
 import type { AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
+  ProductGuideFilterOption,
   ProductGuideItem,
   ProductGuideMilestoneBoard,
   ProductGuideMilestoneCard,
   ProductGuideMilestoneRiskLevel,
   ProductGuideRiskLevel,
   ProductGuideStyleSummary,
+  ProductGuideUnassignedProject,
 } from "@/lib/product-guide-types";
 
-type GroupPageKey = "milestones" | "week-guide";
+type GroupPageKey = "milestones" | "week-guide" | "unassigned-projects";
 type MilestoneBoardMode = "plan" | "forecast";
+type ProductStartMonthPoint = { year: number; month: number };
+type ProductStartCycleOption = {
+  startMonth: string;
+  label: string;
+  rangeLabel: string;
+  months: string[];
+};
 
 type WeeklyGuideBucket = {
   key: "due" | "progress" | "start" | "risk" | "licensor";
@@ -115,6 +126,7 @@ const milestoneCardClass: Record<ProductGuideMilestoneRiskLevel, string> = {
 const weeklyTaskGridClass =
   "grid-cols-[minmax(120px,0.95fr)_minmax(180px,1.45fr)_96px_minmax(170px,1.2fr)] max-xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]";
 const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂停", "取消"];
+const emptyProductStartMonths: string[] = [];
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
@@ -134,10 +146,15 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   const [activeAction, setActiveAction] = useState<GuideActionKind | null>(null);
   const [taskForm, setTaskForm] = useState<TaskActionForm>(() => defaultTaskActionForm());
   const [styleForm, setStyleForm] = useState<StyleListForm>(() => defaultStyleListForm());
+  const [draggedProjectId, setDraggedProjectId] = useState("");
+  const [hoverTeamKey, setHoverTeamKey] = useState("");
+  const [assigningProjectId, setAssigningProjectId] = useState("");
+  const [assignedProjectIds, setAssignedProjectIds] = useState<Set<string>>(() => new Set());
 
   const visibleSearch = search.trim();
   const activeMineKey = minePersonFilter === "all" ? data.filters.people[0]?.value : minePersonFilter;
   const teamOptions = data.filters.teams;
+  const teamTargets = data.teamTargets;
   const rememberedTeamKey = useSyncExternalStore(subscribeTeamPreference, readTeamPreference, () => "");
   const activeTeamKey = normalizeTeamKey(rememberedTeamKey, teamOptions);
   const activeTeamLabel =
@@ -186,6 +203,32 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     }),
     [data.milestoneBoard, groupMilestoneCards],
   );
+  const visibleUnassignedProjects = useMemo(() => {
+    return data.unassignedProjects.filter((project) => {
+      if (assignedProjectIds.has(project.id)) {
+        return false;
+      }
+
+      return (
+        !visibleSearch ||
+        [
+          project.projectName,
+          project.projectCode,
+          project.ipName,
+          project.licensorName,
+          project.productType,
+          project.projectStartDate,
+          project.shouldStartDate,
+          project.shouldStartSource,
+          project.plannedLaunchDate,
+          project.currentStage,
+          project.status,
+          project.productOwnerName,
+          project.artOwnerName,
+        ].some((value) => value?.includes(visibleSearch))
+      );
+    });
+  }, [assignedProjectIds, data.unassignedProjects, visibleSearch]);
   const selectedMilestoneCard = groupMilestoneCards.find((card) => card.id === selectedMilestoneCardId);
   const selectedItem = selectedMilestoneCard
     ? filteredItems.find((item) => item.id === selectedItemId) ??
@@ -197,9 +240,15 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     [activeDetailProjectId, data.styleSummaries],
   );
   const weeklyBuckets = useMemo(() => buildWeeklyBuckets(filteredItems), [filteredItems]);
-  const hasDetailPanel = Boolean(selectedItem || selectedMilestoneCard);
+  const hasDetailPanel = activeGroupPage !== "unassigned-projects" && Boolean(selectedItem || selectedMilestoneCard);
+  const activePageLabel =
+    activeGroupPage === "milestones"
+      ? "里程碑"
+      : activeGroupPage === "week-guide"
+        ? "本周工作指引"
+        : "未分配的项目";
   const filterSummary = [
-    activeGroupPage === "milestones" ? "里程碑" : "本周工作指引",
+    activePageLabel,
     ownerFilter === "all" ? "全部产品研发" : data.filters.productOwners.find((option) => option.value === ownerFilter)?.label,
     artFilter === "all" ? "全部产品美术" : data.filters.artOwners.find((option) => option.value === artFilter)?.label,
     riskOnly ? "只看风险" : null,
@@ -207,6 +256,26 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   ]
     .filter(Boolean)
     .join(" / ");
+  const pageTitle =
+    activeGroupPage === "milestones"
+      ? `${activeTeamLabel} 里程碑`
+      : activeGroupPage === "week-guide"
+        ? `${activeTeamLabel} 本周工作指引`
+        : "未分配的项目";
+  const pageHelper =
+    activeGroupPage === "milestones"
+      ? "按里程碑查看本组要推进的项目"
+      : activeGroupPage === "week-guide"
+        ? "先看本周怎么推进，再看风险和反馈"
+        : "按项目应开始时间查看未分配项目，拖到右侧项目组完成分配";
+  const pageIcon =
+    activeGroupPage === "milestones" ? (
+      <CalendarDays size={18} />
+    ) : activeGroupPage === "week-guide" ? (
+      <ListChecks size={18} />
+    ) : (
+      <Inbox size={18} />
+    );
   const activeTeamIndex = Math.max(0, teamOptions.findIndex((option) => option.value === activeTeamKey));
 
   function notify(nextMessage: string, tone: "info" | "warning" = "info") {
@@ -331,6 +400,48 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         router.refresh();
       },
     });
+  }
+
+  function handleProjectDragStart(event: DragEvent<HTMLElement>, projectId: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", projectId);
+    setDraggedProjectId(projectId);
+  }
+
+  function handleProjectDragEnd() {
+    setDraggedProjectId("");
+    setHoverTeamKey("");
+  }
+
+  async function assignProjectTeam(projectId: string, teamKey: string) {
+    if (!projectId || !teamKey || assigningProjectId) {
+      return;
+    }
+
+    const targetTeam = teamTargets.find((team) => team.value === teamKey);
+    if (!targetTeam) {
+      notify("请选择有效的项目组。", "warning");
+      return;
+    }
+
+    setAssigningProjectId(projectId);
+    setHoverTeamKey("");
+    await saveMutation({
+      path: `/api/projects/${encodeURIComponent(projectId)}`,
+      method: "PATCH",
+      payload: { projectTeamId: teamKey },
+      onSuccess: (result) => {
+        setAssignedProjectIds((current) => {
+          const next = new Set(current);
+          next.add(projectId);
+          return next;
+        });
+        notify(result.message ?? `已指定到${targetTeam.label}。`);
+        router.refresh();
+      },
+    });
+    setAssigningProjectId("");
+    setDraggedProjectId("");
   }
 
   async function saveMutation({
@@ -491,6 +602,17 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                     setActiveAction(null);
                   }}
                 />
+                  <PageTabButton
+                    active={activeGroupPage === "unassigned-projects"}
+                    icon={<Inbox size={14} />}
+                    label="未分配的项目"
+                    onClick={() => {
+                      setActiveGroupPage("unassigned-projects");
+                      setSelectedItemId("");
+                      setSelectedMilestoneCardId("");
+                      setActiveAction(null);
+                    }}
+                  />
                 </div>
                 <details className="relative">
                   <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
@@ -556,9 +678,9 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           >
             <div className="min-w-0">
               <SectionTitle
-                icon={activeGroupPage === "milestones" ? <CalendarDays size={18} /> : <ListChecks size={18} />}
-                title={activeGroupPage === "milestones" ? `${activeTeamLabel} 里程碑` : `${activeTeamLabel} 本周工作指引`}
-                helper={activeGroupPage === "milestones" ? "按里程碑查看本组要推进的项目" : "先看本周怎么推进，再看风险和反馈"}
+                icon={pageIcon}
+                title={pageTitle}
+                helper={pageHelper}
               />
               <div className="mt-3 grid gap-3">
                 {activeGroupPage === "milestones" ? (
@@ -567,8 +689,20 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                     selectedCardId={selectedMilestoneCard?.id}
                     onSelectCard={selectMilestoneCard}
                   />
-                ) : (
+                ) : activeGroupPage === "week-guide" ? (
                   <WeeklyGuidePage buckets={weeklyBuckets} selectedItemId={selectedItem?.id} onSelectItem={selectItem} />
+                ) : (
+                  <UnassignedProjectsPage
+                    projects={visibleUnassignedProjects}
+                    teamTargets={teamTargets}
+                    draggedProjectId={draggedProjectId}
+                    hoverTeamKey={hoverTeamKey}
+                    assigningProjectId={assigningProjectId}
+                    onProjectDragStart={handleProjectDragStart}
+                    onProjectDragEnd={handleProjectDragEnd}
+                    onTeamHover={setHoverTeamKey}
+                    onTeamDrop={assignProjectTeam}
+                  />
                 )}
               </div>
             </div>
@@ -883,6 +1017,354 @@ function WeeklyTaskRow({
       <span className="whitespace-nowrap text-slate-500">{taskDeadline(item)}</span>
       <span className="min-w-0 truncate text-amber-700">{delayTriggerText(item)}</span>
     </button>
+  );
+}
+
+function UnassignedProjectsPage({
+  projects,
+  teamTargets,
+  draggedProjectId,
+  hoverTeamKey,
+  assigningProjectId,
+  onProjectDragStart,
+  onProjectDragEnd,
+  onTeamHover,
+  onTeamDrop,
+}: {
+  projects: ProductGuideUnassignedProject[];
+  teamTargets: ProductGuideFilterOption[];
+  draggedProjectId: string;
+  hoverTeamKey: string;
+  assigningProjectId: string;
+  onProjectDragStart: (event: DragEvent<HTMLElement>, projectId: string) => void;
+  onProjectDragEnd: () => void;
+  onTeamHover: (teamKey: string) => void;
+  onTeamDrop: (projectId: string, teamKey: string) => void;
+}) {
+  const [selectedCycleStart, setSelectedCycleStart] = useState("");
+  const draggedProject = projects.find((project) => project.id === draggedProjectId);
+  const cycleOptions = useMemo(() => buildProductStartCycleOptions(projects), [projects]);
+  const selectedCycle = cycleOptions.find((option) => option.startMonth === selectedCycleStart) ?? cycleOptions[0];
+  const selectedMonths = selectedCycle?.months ?? emptyProductStartMonths;
+  const monthSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
+  const projectsByMonth = useMemo(() => {
+    return selectedMonths.reduce<Record<string, ProductGuideUnassignedProject[]>>((acc, month) => {
+      acc[month] = projects
+        .filter((project) => productStartMonthLabel(project) === month)
+        .sort(sortUnassignedProjectByStartDate);
+      return acc;
+    }, {});
+  }, [projects, selectedMonths]);
+  const noStartDateProjects = useMemo(
+    () => projects.filter((project) => !project.shouldStartDate).sort(sortUnassignedProjectByStartDate),
+    [projects],
+  );
+  const outOfCycleProjects = useMemo(
+    () =>
+      projects
+        .filter((project) => {
+          const month = productStartMonthLabel(project);
+          return month && !monthSet.has(month);
+        })
+        .sort(sortUnassignedProjectByStartDate),
+    [monthSet, projects],
+  );
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-3 py-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 font-semibold">
+                <CalendarDays size={16} />
+                项目开启日历
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                按项目应开始时间归入月份，共 {projects.length} 个未分配项目
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="inline-flex rounded-lg bg-slate-100 p-1">
+                {cycleOptions.map((option) => (
+                  <button
+                    key={option.startMonth}
+                    type="button"
+                    onClick={() => setSelectedCycleStart(option.startMonth)}
+                    title={option.rangeLabel}
+                    className={clsx(
+                      "rounded-md px-3 py-1.5 text-xs font-semibold",
+                      selectedCycle?.startMonth === option.startMonth ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              {outOfCycleProjects.length > 0 ? (
+                <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
+                  其他周期 {outOfCycleProjects.length} 个
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {projects.length > 0 ? (
+          <>
+            <div className="grid max-h-[72vh] grid-cols-3 gap-px overflow-auto bg-slate-200 max-xl:grid-cols-2 max-md:grid-cols-1">
+              {selectedMonths.map((month) => (
+                <ProductStartMonthCell
+                  key={month}
+                  month={month}
+                  projects={projectsByMonth[month] ?? []}
+                  draggedProjectId={draggedProjectId}
+                  assigningProjectId={assigningProjectId}
+                  teamTargets={teamTargets}
+                  onProjectDragStart={onProjectDragStart}
+                  onProjectDragEnd={onProjectDragEnd}
+                  onTeamDrop={onTeamDrop}
+                />
+              ))}
+            </div>
+            {noStartDateProjects.length > 0 ? (
+              <div className="border-t border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-sm font-semibold text-slate-900">待补开始日期</div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {noStartDateProjects.map((project) => (
+                    <UnassignedProjectCalendarCard
+                      key={project.id}
+                      project={project}
+                      dragged={draggedProjectId === project.id}
+                      assigning={assigningProjectId === project.id}
+                      teamTargets={teamTargets}
+                      onProjectDragStart={onProjectDragStart}
+                      onProjectDragEnd={onProjectDragEnd}
+                      onTeamDrop={onTeamDrop}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="p-3">
+            <EmptyGuideState text="当前没有未分配项目。" />
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="border-b border-slate-100 pb-2">
+          <div className="text-sm font-semibold text-slate-900">项目组</div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {draggedProject ? `正在分配：${draggedProject.projectName}` : "从开启日历拖动项目到目标项目组"}
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2">
+          {teamTargets.length > 0 ? (
+            teamTargets.map((team) => (
+              <div
+                key={team.value}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  if (draggedProjectId) {
+                    onTeamHover(team.value);
+                  }
+                }}
+                onDragOver={(event) => {
+                  if (!draggedProjectId) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDragLeave={(event) => {
+                  const relatedTarget = event.relatedTarget;
+                  if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+                    return;
+                  }
+                  if (hoverTeamKey === team.value) {
+                    onTeamHover("");
+                  }
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const projectId = event.dataTransfer.getData("text/plain") || draggedProjectId;
+                  onTeamHover("");
+                  if (projectId) {
+                    onTeamDrop(projectId, team.value);
+                  }
+                }}
+                className={clsx(
+                  "rounded-lg border border-dashed p-3 transition",
+                  hoverTeamKey === team.value
+                    ? "border-rose-300 bg-rose-50 ring-2 ring-rose-100"
+                    : "border-slate-200 bg-slate-50 hover:border-slate-300",
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-900">{team.label}</div>
+                    <div className="mt-1 text-xs text-slate-500">放开后保存到该项目组</div>
+                  </div>
+                  <MoveRight className="shrink-0 text-slate-400" size={16} />
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+              暂无可分配项目组，请先在用户数据里维护项目组。
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ProductStartMonthCell({
+  month,
+  projects,
+  draggedProjectId,
+  assigningProjectId,
+  teamTargets,
+  onProjectDragStart,
+  onProjectDragEnd,
+  onTeamDrop,
+}: {
+  month: string;
+  projects: ProductGuideUnassignedProject[];
+  draggedProjectId: string;
+  assigningProjectId: string;
+  teamTargets: ProductGuideFilterOption[];
+  onProjectDragStart: (event: DragEvent<HTMLElement>, projectId: string) => void;
+  onProjectDragEnd: () => void;
+  onTeamDrop: (projectId: string, teamKey: string) => void;
+}) {
+  const pressureTone = projects.length >= 5 ? "高" : projects.length >= 3 ? "中" : "低";
+
+  return (
+    <div className="min-h-64 bg-white p-3 transition hover:bg-rose-50/40">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-base font-semibold">{month}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-slate-500">
+            <span>{projects.length} 个项目</span>
+            <span>开启压力 {pressureTone}</span>
+          </div>
+        </div>
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+          未归组
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {projects.length > 0 ? (
+          projects.map((project) => (
+            <UnassignedProjectCalendarCard
+              key={project.id}
+              project={project}
+              dragged={draggedProjectId === project.id}
+              assigning={assigningProjectId === project.id}
+              teamTargets={teamTargets}
+              onProjectDragStart={onProjectDragStart}
+              onProjectDragEnd={onProjectDragEnd}
+              onTeamDrop={onTeamDrop}
+            />
+          ))
+        ) : (
+          <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-400">
+            暂无开启项目
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UnassignedProjectCalendarCard({
+  project,
+  dragged,
+  assigning,
+  teamTargets,
+  onProjectDragStart,
+  onProjectDragEnd,
+  onTeamDrop,
+}: {
+  project: ProductGuideUnassignedProject;
+  dragged: boolean;
+  assigning: boolean;
+  teamTargets: ProductGuideFilterOption[];
+  onProjectDragStart: (event: DragEvent<HTMLElement>, projectId: string) => void;
+  onProjectDragEnd: () => void;
+  onTeamDrop: (projectId: string, teamKey: string) => void;
+}) {
+  return (
+    <article
+      draggable={!assigning}
+      onDragStart={(event) => onProjectDragStart(event, project.id)}
+      onDragEnd={onProjectDragEnd}
+      className={clsx(
+        "min-h-24 rounded-lg border p-2.5 text-left text-sm shadow-sm transition",
+        assigning
+          ? "cursor-wait border-blue-200 bg-blue-50 opacity-80"
+          : dragged
+            ? "cursor-grabbing border-rose-300 bg-rose-50 opacity-80 ring-2 ring-rose-100"
+            : "cursor-grab border-slate-200 bg-white hover:ring-2 hover:ring-blue-400",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="line-clamp-2 font-semibold leading-5 text-slate-950">{project.projectName}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-slate-500">
+            {project.projectCode ? <span>{project.projectCode}</span> : null}
+            {project.ipName ? <span>{project.ipName}</span> : null}
+            {project.productType ? <span>{project.productType}</span> : null}
+          </div>
+        </div>
+        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">
+          {assigning ? "保存中" : project.status}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs">
+        <UnassignedProjectField label="应开始" value={project.shouldStartDate ?? "待补"} />
+        <UnassignedProjectField label="计划上线" value={project.plannedLaunchDate ?? "待补"} />
+        <UnassignedProjectField label="产品研发" value={project.productOwnerName} />
+        <UnassignedProjectField label="产品美术" value={project.artOwnerName} />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
+        <span className="text-xs text-slate-500">{project.shouldStartSource}</span>
+        <select
+          value=""
+          disabled={assigning || teamTargets.length === 0}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onChange={(event) => {
+            if (event.target.value) {
+              onTeamDrop(project.id, event.target.value);
+            }
+          }}
+          className="h-7 max-w-28 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <option value="">指定到</option>
+          {teamTargets.map((team) => (
+            <option key={team.value} value={team.value}>
+              {team.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </article>
+  );
+}
+
+function UnassignedProjectField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded bg-slate-50 px-2 py-1 text-slate-700">
+      <div className="text-[11px] font-semibold text-slate-500">{label}</div>
+      <div className="mt-0.5 truncate font-semibold">{value}</div>
+    </div>
   );
 }
 
@@ -1896,6 +2378,16 @@ function sortGuideItems(a: ProductGuideItem, b: ProductGuideItem) {
   return a.projectName.localeCompare(b.projectName, "zh-CN");
 }
 
+function sortUnassignedProjectByStartDate(a: ProductGuideUnassignedProject, b: ProductGuideUnassignedProject) {
+  const startOrder = dateSortValue(a.shouldStartDate) - dateSortValue(b.shouldStartDate);
+  if (startOrder !== 0) return startOrder;
+
+  const launchOrder = dateSortValue(a.plannedLaunchDate) - dateSortValue(b.plannedLaunchDate);
+  if (launchOrder !== 0) return launchOrder;
+
+  return a.projectName.localeCompare(b.projectName, "zh-CN");
+}
+
 function riskSortValue(value: ProductGuideRiskLevel) {
   return value === "delay" ? 4 : value === "risk" ? 3 : value === "watch" ? 2 : 1;
 }
@@ -2010,4 +2502,145 @@ function saveTeamPreference(teamKey: string) {
 
   window.localStorage.setItem(teamStorageKey, teamKey);
   window.dispatchEvent(new Event("product-guide-team-change"));
+}
+
+function buildProductStartCycleOptions(projects: ProductGuideUnassignedProject[]): ProductStartCycleOption[] {
+  const starts = new Map<string, ProductStartMonthPoint>();
+  const currentStart = productStartPlanningCycleStart(new Date());
+  starts.set(formatProductStartMonthLabel(currentStart), currentStart);
+
+  for (const project of projects) {
+    const month = productStartMonthLabel(project);
+    const parsedMonth = parseProductStartMonthLabel(month);
+
+    if (parsedMonth) {
+      const start = productStartPlanningCycleStartForMonth(parsedMonth);
+      starts.set(formatProductStartMonthLabel(start), start);
+    }
+  }
+
+  return Array.from(starts.values())
+    .sort((a, b) => productStartMonthIndex(a) - productStartMonthIndex(b))
+    .map((start) => {
+      const months = productStartMonthsFrom(start, 12).map(formatProductStartMonthLabel);
+
+      return {
+        startMonth: formatProductStartMonthLabel(start),
+        label: `${String(start.year).slice(-2)}年度`,
+        rangeLabel: `${months[0]} - ${months[months.length - 1]}`,
+        months,
+      };
+    });
+}
+
+function productStartMonthLabel(project: ProductGuideUnassignedProject) {
+  return project.shouldStartDate ? productStartMonthLabelFromDate(project.shouldStartDate) : null;
+}
+
+function productStartMonthLabelFromDate(value: string) {
+  const date = parseProductStartDate(value);
+  return date ? formatProductStartMonthLabel(date) : null;
+}
+
+function parseProductStartDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > productStartDaysInMonth({ year, month })) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function parseProductStartMonthLabel(label: string | null | undefined): ProductStartMonthPoint | null {
+  if (!label) {
+    return null;
+  }
+
+  const fullYearMonth = label.match(/^(\d{4})年(\d{1,2})月$/);
+  if (fullYearMonth) {
+    return { year: Number(fullYearMonth[1]), month: Number(fullYearMonth[2]) };
+  }
+
+  const shortYearMonth = label.match(/^(\d{2})年(\d{1,2})月$/);
+  if (shortYearMonth) {
+    return { year: 2000 + Number(shortYearMonth[1]), month: Number(shortYearMonth[2]) };
+  }
+
+  return null;
+}
+
+function productStartPlanningCycleStart(today: Date): ProductStartMonthPoint {
+  return productStartPlanningCycleStartForMonth({
+    year: today.getFullYear(),
+    month: today.getMonth() + 1,
+  });
+}
+
+function productStartPlanningCycleStartForMonth(month: ProductStartMonthPoint): ProductStartMonthPoint {
+  const thisYearStart = productStartMonthAfterChineseNewYear(month.year);
+
+  if (productStartMonthIndex(month) >= productStartMonthIndex(thisYearStart)) {
+    return thisYearStart;
+  }
+
+  return productStartMonthAfterChineseNewYear(month.year - 1);
+}
+
+function productStartMonthAfterChineseNewYear(year: number): ProductStartMonthPoint {
+  const springFestival = productStartChineseNewYearByYear[year] ?? { year, month: 2, day: 1 };
+  const nextMonth = springFestival.month + 1;
+
+  if (nextMonth > 12) {
+    return { year: springFestival.year + 1, month: 1 };
+  }
+
+  return { year: springFestival.year, month: nextMonth };
+}
+
+const productStartChineseNewYearByYear: Record<number, { year: number; month: number; day: number }> = {
+  2025: { year: 2025, month: 1, day: 29 },
+  2026: { year: 2026, month: 2, day: 17 },
+  2027: { year: 2027, month: 2, day: 6 },
+  2028: { year: 2028, month: 1, day: 26 },
+  2029: { year: 2029, month: 2, day: 13 },
+  2030: { year: 2030, month: 2, day: 3 },
+  2031: { year: 2031, month: 1, day: 23 },
+};
+
+function productStartMonthsFrom(start: ProductStartMonthPoint, count: number) {
+  return Array.from({ length: count }, (_, index) => productStartAddMonths(start, index));
+}
+
+function productStartAddMonths(month: ProductStartMonthPoint, offset: number): ProductStartMonthPoint {
+  const zeroBasedMonthIndex = month.year * 12 + (month.month - 1) + offset;
+
+  return {
+    year: Math.floor(zeroBasedMonthIndex / 12),
+    month: (zeroBasedMonthIndex % 12) + 1,
+  };
+}
+
+function productStartDaysInMonth(month: ProductStartMonthPoint) {
+  return new Date(Date.UTC(month.year, month.month, 0, 12)).getUTCDate();
+}
+
+function formatProductStartMonthLabel(month: ProductStartMonthPoint) {
+  return `${String(month.year).slice(-2)}年${month.month}月`;
+}
+
+function productStartMonthIndex(month: ProductStartMonthPoint) {
+  return month.year * 12 + month.month;
 }

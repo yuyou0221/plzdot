@@ -44,6 +44,24 @@ export type ProductGuideStyleSummary = {
   lastUpdatedAt?: string;
 };
 
+export type ProductGuideUnassignedProject = {
+  id: string;
+  projectCode?: string;
+  projectName: string;
+  ipName?: string;
+  licensorName?: string;
+  productType?: string;
+  projectStartDate?: string;
+  shouldStartDate?: string;
+  shouldStartSource: string;
+  plannedLaunchDate?: string;
+  currentStage?: string;
+  status: string;
+  productOwnerName: string;
+  artOwnerName: string;
+  updatedAt: string;
+};
+
 export type ProductGuideItemSource =
   | "schedule-task"
   | "project-task"
@@ -123,6 +141,8 @@ export type ProductGuideData = {
     artOwners: ProductGuideFilterOption[];
     people: ProductGuideFilterOption[];
   };
+  teamTargets: ProductGuideFilterOption[];
+  unassignedProjects: ProductGuideUnassignedProject[];
   items: ProductGuideItem[];
   styleSummaries: ProductGuideStyleSummary[];
 };
