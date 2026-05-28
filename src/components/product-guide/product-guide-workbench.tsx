@@ -16,6 +16,13 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
+import {
+  createDefaultStyleListForm,
+  StyleListModal,
+  type StyleListForm,
+  type StyleListImage,
+  type StyleListTaskRefs,
+} from "@/components/product-guide/style-list-modal";
 import type { AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
@@ -46,18 +53,20 @@ type TaskActionForm = {
   expectedFinishDate: string;
   submittedAt: string;
   reviewTarget: string;
+  modelingReviewResult: "内部通过可送审" | "内部不通过" | "送审通过" | "送审不通过";
   blockReason: string;
   note: string;
 };
 
-type StyleListForm = {
-  styleNames: string;
-  styleCount: string;
-  difficulty: string;
-  estimatedWorkdays: string;
-  originalArtStatus: string;
-  originalArtApprovedDate: string;
-  note: string;
+type ModelingStartEvent = {
+  sourceRequestId: string;
+  projectId: string;
+  projectTaskId: string;
+  taskNo: 7 | 10;
+  taskName?: string;
+  startScope: "first-style" | "remaining-styles";
+  startedAt: string;
+  startedByName: string;
 };
 
 type MutationResponse = {
@@ -66,7 +75,10 @@ type MutationResponse = {
   needsRecalculation?: boolean;
   requiresStyleList?: boolean;
   styleListProjectTaskId?: string;
+  styleListTaskRefs?: StyleListTaskRefs;
   styleListMessage?: string;
+  modelingStartEvent?: ModelingStartEvent;
+  files?: Array<Omit<StyleListImage, "id">>;
 };
 
 const teamStorageKey = "product-guide:team-key";
@@ -136,9 +148,12 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   const [saving, setSaving] = useState(false);
   const [activeAction, setActiveAction] = useState<GuideActionKind | null>(null);
   const [taskForm, setTaskForm] = useState<TaskActionForm>(() => defaultTaskActionForm());
-  const [styleForm, setStyleForm] = useState<StyleListForm>(() => defaultStyleListForm());
+  const [styleForm, setStyleForm] = useState<StyleListForm>(() => createDefaultStyleListForm());
   const [styleListProjectTaskId, setStyleListProjectTaskId] = useState("");
+  const [styleListTaskRefs, setStyleListTaskRefs] = useState<StyleListTaskRefs | null>(null);
+  const [styleListRefsLoading, setStyleListRefsLoading] = useState(false);
   const [styleListHandoffMessage, setStyleListHandoffMessage] = useState("");
+  const [uploadingImageRowId, setUploadingImageRowId] = useState("");
 
   const visibleSearch = search.trim();
   const activeMineKey = minePersonFilter === "all" ? data.filters.people[0]?.value : minePersonFilter;
@@ -225,8 +240,9 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedMilestoneCardId("");
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
-    setStyleForm(defaultStyleListForm());
+    setStyleForm(createDefaultStyleListForm());
     setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
   }
 
@@ -236,8 +252,9 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedItemId(nextItem?.id ?? "");
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
-    setStyleForm(defaultStyleListForm());
+    setStyleForm(createDefaultStyleListForm());
     setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
   }
 
@@ -247,6 +264,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedMilestoneCardId("");
     setActiveAction(null);
     setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
   }
 
@@ -262,6 +280,11 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   async function saveTaskAction(action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") {
     if (!selectedItem?.taskId) {
       notify("当前指引没有关联项目任务，不能直接写入任务进度。", "warning");
+      return;
+    }
+
+    if (action === "submit-review" && selectedItem.source === "modeling") {
+      await saveModelingReviewResult(selectedItem);
       return;
     }
 
@@ -306,26 +329,36 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       path: `/api/product-guide/tasks/${selectedItem.taskId}`,
       method: "PATCH",
       payload,
-      onSuccess: (result) => {
+      onSuccess: async (result) => {
         setPendingUpdateCount((count) => count + 1);
         if (action === "complete" && result.requiresStyleList) {
-          setStyleListProjectTaskId(result.styleListProjectTaskId ?? "");
-          setStyleListHandoffMessage(result.styleListMessage ?? "");
-          setStyleForm({
-            ...defaultStyleListForm(),
-            originalArtStatus: "已过审",
+          openStyleListModal({
+            message: result.styleListMessage,
+            taskRefs: result.styleListTaskRefs,
             originalArtApprovedDate: taskForm.actualFinishDate,
-            note: "原画里程碑已完成，递交建模排期。",
+            note: "原画里程碑已完成，登记完整款式清单。",
           });
-          setActiveAction("style-list");
           notify(result.styleListMessage ?? "原画里程碑已完成，请录入建模款式清单。", "warning");
           return;
         }
 
+        let nextMessage = result.message ?? "已保存。";
+        if (result.modelingStartEvent) {
+          const startResult = await submitModelingStartEvent(result.modelingStartEvent);
+          if (!startResult.ok) {
+            setActiveAction(null);
+            notify(startResult.message, "warning");
+            router.refresh();
+            return;
+          }
+          nextMessage = `${nextMessage} ${startResult.message}`;
+        }
+
         setActiveAction(null);
         setStyleListProjectTaskId("");
+        setStyleListTaskRefs(null);
         setStyleListHandoffMessage("");
-        notify(result.message ?? "已保存。");
+        notify(nextMessage);
         router.refresh();
       },
     });
@@ -336,30 +369,201 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       return;
     }
 
+    const validation = validateStyleListForm(styleForm, styleListTaskRefs);
+    if (validation) {
+      notify(validation, "warning");
+      return;
+    }
+
     await saveMutation({
-      path: "/api/product-guide/modeling-tasks",
+      path: "/api/modeling/style-submissions",
       method: "POST",
-      payload: {
-        projectId: selectedItem.projectId,
-        projectTaskId: styleListProjectTaskId || selectedItem.taskId,
-        styleNames: styleForm.styleNames,
-        styleCount: styleForm.styleCount,
-        difficulty: styleForm.difficulty,
-        estimatedWorkdays: styleForm.estimatedWorkdays,
-        originalArtStatus: styleForm.originalArtStatus,
-        originalArtApprovedDate: styleForm.originalArtApprovedDate,
-        note: styleForm.note,
-      },
+      payload: buildStyleSubmissionPayload({
+        currentUser,
+        selectedItem,
+        form: styleForm,
+        taskRefs: styleListTaskRefs,
+        fallbackProjectTaskId: styleListProjectTaskId || selectedItem.taskId,
+      }),
       onSuccess: (result) => {
         setActiveAction(null);
-        setStyleForm(defaultStyleListForm());
+        setStyleForm(createDefaultStyleListForm());
         setStyleListProjectTaskId("");
+        setStyleListTaskRefs(null);
         setStyleListHandoffMessage("");
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已递交建模款式给建模排期。");
+        notify(result.message ?? "已提交款式清单给建模排期，默认状态为未启动。");
         router.refresh();
       },
     });
+  }
+
+  async function saveModelingReviewResult(item: ProductGuideItem) {
+    const modelingTaskId = modelingTaskIdFromItem(item);
+
+    if (!modelingTaskId || !item.taskId) {
+      notify("当前建模款式缺少建模任务编号，不能提交审核结果。", "warning");
+      return;
+    }
+
+    await saveMutation({
+      path: "/api/modeling/review-results",
+      method: "POST",
+      payload: {
+        sourceRequestId: `product-guide:review:${modelingTaskId}:${Date.now()}`,
+        projectId: item.projectId,
+        projectTaskId: item.taskId,
+        modelingTaskId,
+        reviewResult: taskForm.modelingReviewResult,
+        reviewAt: taskForm.submittedAt,
+        reviewerId: currentUser.id,
+        reviewerName: currentUser.name,
+        feedbackContent: taskForm.note || undefined,
+      },
+      onSuccess: (result) => {
+        setActiveAction(null);
+        setPendingUpdateCount((count) => count + 1);
+        notify(result.message ?? "已提交建模审核 / 送审结果。");
+        router.refresh();
+      },
+    });
+  }
+
+  function openStyleListModal(options?: {
+    message?: string;
+    taskRefs?: StyleListTaskRefs;
+    originalArtApprovedDate?: string;
+    note?: string;
+  }) {
+    if (!selectedItem) {
+      notify("请先选择一个项目或任务。", "warning");
+      return;
+    }
+
+    setStyleForm(
+      createDefaultStyleListForm({
+        originalArtApprovedDate: options?.originalArtApprovedDate,
+        note: options?.note,
+      }),
+    );
+    setStyleListProjectTaskId(options?.taskRefs?.firstStyleTask?.id ?? "");
+    setStyleListTaskRefs(options?.taskRefs ?? null);
+    setStyleListHandoffMessage(
+      options?.message ?? "请填写完整款式清单，并标记哪一款是第一款建模款式。提交后款式默认未启动。",
+    );
+    setActiveAction("style-list");
+
+    if (!options?.taskRefs) {
+      void loadStyleListTaskRefs(selectedItem.projectId);
+    }
+  }
+
+  async function loadStyleListTaskRefs(projectId: string) {
+    setStyleListRefsLoading(true);
+    try {
+      const response = await fetch(`/api/product-guide/projects/${projectId}/modeling-task-refs`);
+      const result = (await response.json().catch(() => ({}))) as MutationResponse & StyleListTaskRefs;
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "读取建模任务 7 / 10 失败。", "warning");
+        return;
+      }
+
+      const refs: StyleListTaskRefs = {
+        firstStyleTask: result.firstStyleTask,
+        remainingStylesTask: result.remainingStylesTask,
+      };
+      setStyleListTaskRefs(refs);
+      setStyleListProjectTaskId(refs.firstStyleTask?.id ?? refs.remainingStylesTask?.id ?? "");
+    } catch {
+      notify("读取建模任务 7 / 10 失败。", "warning");
+    } finally {
+      setStyleListRefsLoading(false);
+    }
+  }
+
+  async function uploadStyleImages(rowId: string, files: File[]) {
+    if (files.length === 0) {
+      return;
+    }
+
+    setUploadingImageRowId(rowId);
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append("files", file));
+
+      const response = await fetch("/api/product-guide/uploads", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json().catch(() => ({}))) as MutationResponse;
+
+      if (!response.ok || !result.ok || !result.files) {
+        notify(result.message ?? "图片上传失败。", "warning");
+        return;
+      }
+
+      setStyleForm((currentForm) => ({
+        ...currentForm,
+        rows: currentForm.rows.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                referenceImages: [
+                  ...row.referenceImages,
+                  ...result.files!.map((file) => ({
+                    id: `${Date.now()}-${file.url}`,
+                    name: file.name,
+                    url: file.url,
+                    type: file.type,
+                  })),
+                ],
+              }
+            : row,
+        ),
+      }));
+    } catch {
+      notify("图片上传接口暂时不可用。", "warning");
+    } finally {
+      setUploadingImageRowId("");
+    }
+  }
+
+  async function submitModelingStartEvent(event: ModelingStartEvent) {
+    try {
+      const response = await fetch("/api/modeling/style-start-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...event,
+          startedByUserId: currentUser.id,
+          startedByName: currentUser.name || event.startedByName,
+        }),
+      });
+      const result = (await response.json().catch(() => ({}))) as MutationResponse;
+
+      if (!response.ok || !result.ok) {
+        return {
+          ok: false,
+          message:
+            result.message ??
+            `任务 ${event.taskNo} 已更新为进行中，但通知建模排期启动${event.startScope === "first-style" ? "第一款" : "其余款式"}失败。`,
+        };
+      }
+
+      return {
+        ok: true,
+        message:
+          result.message ??
+          `已通知建模排期启动${event.startScope === "first-style" ? "第一款建模款式" : "其余建模款式"}。`,
+      };
+    } catch {
+      return {
+        ok: false,
+        message:
+          `任务 ${event.taskNo} 已更新为进行中，但建模排期启动接口暂时不可用，请稍后补发启动事件。`,
+      };
+    }
   }
 
   async function saveMutation({
@@ -371,7 +575,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     path: string;
     method: "POST" | "PATCH";
     payload: unknown;
-    onSuccess: (result: MutationResponse) => void;
+    onSuccess: (result: MutationResponse) => void | Promise<void>;
   }) {
     setSaving(true);
     try {
@@ -387,7 +591,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         return;
       }
 
-      onSuccess(result);
+      await onSuccess(result);
     } catch {
       notify("保存接口暂时不可用。", "warning");
     } finally {
@@ -611,23 +815,9 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                 setActiveAction={setActiveAction}
                 taskForm={taskForm}
                 setTaskForm={setTaskForm}
-                styleForm={styleForm}
-                setStyleForm={setStyleForm}
-                styleListHandoffMessage={styleListHandoffMessage}
-                onOpenStyleList={() => {
-                  setStyleForm(defaultStyleListForm());
-                  setStyleListProjectTaskId("");
-                  setStyleListHandoffMessage("");
-                  setActiveAction("style-list");
-                }}
-                onCancelStyleList={() => {
-                  setActiveAction(null);
-                  setStyleListProjectTaskId("");
-                  setStyleListHandoffMessage("");
-                }}
+                onOpenStyleList={() => openStyleListModal()}
                 saving={saving}
                 onSaveTaskAction={saveTaskAction}
-                onSaveStyleList={saveStyleList}
                 onOpenSchedule={() => router.push("/")}
                 onOpenModeling={() => router.push("/modeling")}
                 onOpenProjectAnalysis={(projectId) => router.push(`/product-guide/project-analysis/${projectId}`)}
@@ -636,6 +826,27 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           </section>
         </main>
       </div>
+
+      {activeAction === "style-list" && selectedItem ? (
+        <StyleListModal
+          projectName={selectedItem.projectName}
+          message={styleListHandoffMessage}
+          form={styleForm}
+          setForm={setStyleForm}
+          taskRefs={styleListTaskRefs}
+          refsLoading={styleListRefsLoading}
+          saving={saving}
+          uploadingRowId={uploadingImageRowId}
+          onUploadImages={uploadStyleImages}
+          onCancel={() => {
+            setActiveAction(null);
+            setStyleListProjectTaskId("");
+            setStyleListTaskRefs(null);
+            setStyleListHandoffMessage("");
+          }}
+          onSubmit={saveStyleList}
+        />
+      ) : null}
     </div>
   );
 }
@@ -969,14 +1180,9 @@ function DetailPanel({
   setActiveAction,
   taskForm,
   setTaskForm,
-  styleForm,
-  setStyleForm,
-  styleListHandoffMessage,
   onOpenStyleList,
-  onCancelStyleList,
   saving,
   onSaveTaskAction,
-  onSaveStyleList,
   onOpenSchedule,
   onOpenModeling,
   onOpenProjectAnalysis,
@@ -988,14 +1194,9 @@ function DetailPanel({
   setActiveAction: (action: GuideActionKind | null) => void;
   taskForm: TaskActionForm;
   setTaskForm: (form: TaskActionForm) => void;
-  styleForm: StyleListForm;
-  setStyleForm: (form: StyleListForm) => void;
-  styleListHandoffMessage: string;
   onOpenStyleList: () => void;
-  onCancelStyleList: () => void;
   saving: boolean;
   onSaveTaskAction: (action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
-  onSaveStyleList: () => void;
   onOpenSchedule: () => void;
   onOpenModeling: () => void;
   onOpenProjectAnalysis: (projectId: string) => void;
@@ -1138,7 +1339,7 @@ function DetailPanel({
         </div>
       </div>
 
-      {activeAction ? (
+      {activeAction && activeAction !== "style-list" ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
           {activeAction === "complete" ? (
             <TaskCompleteForm
@@ -1189,19 +1390,10 @@ function DetailPanel({
             <SubmitReviewForm
               form={taskForm}
               setForm={setTaskForm}
+              isModelingReview={item.source === "modeling"}
               saving={saving}
               onCancel={() => setActiveAction(null)}
               onSubmit={() => onSaveTaskAction("submit-review")}
-            />
-          ) : null}
-          {activeAction === "style-list" ? (
-            <StyleListFormView
-              form={styleForm}
-              setForm={setStyleForm}
-              handoffMessage={styleListHandoffMessage}
-              saving={saving}
-              onCancel={onCancelStyleList}
-              onSubmit={onSaveStyleList}
             />
           ) : null}
         </div>
@@ -1522,123 +1714,62 @@ function UnblockForm({
 function SubmitReviewForm({
   form,
   setForm,
+  isModelingReview,
   saving,
   onCancel,
   onSubmit,
 }: {
   form: TaskActionForm;
   setForm: (form: TaskActionForm) => void;
+  isModelingReview: boolean;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
   return (
     <div className="grid gap-3">
-      <div className="text-sm font-semibold text-slate-900">记录任务已送审</div>
+      <div className="text-sm font-semibold text-slate-900">{isModelingReview ? "提交建模审核 / 送审结果" : "记录任务已送审"}</div>
+      {isModelingReview ? (
+        <label className="grid gap-1 text-xs font-medium text-slate-500">
+          审核结果
+          <select
+            value={form.modelingReviewResult}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                modelingReviewResult: event.target.value as TaskActionForm["modelingReviewResult"],
+              })
+            }
+            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+          >
+            <option value="内部通过可送审">内部通过可送审</option>
+            <option value="内部不通过">内部不通过</option>
+            <option value="送审通过">送审通过</option>
+            <option value="送审不通过">送审不通过</option>
+          </select>
+        </label>
+      ) : null}
       <LabeledInput
-        label="送审日期"
+        label={isModelingReview ? "审核日期" : "送审日期"}
         type="date"
         value={form.submittedAt}
         onChange={(value) => setForm({ ...form, submittedAt: value })}
       />
-      <LabeledInput
-        label="送审对象"
-        value={form.reviewTarget}
-        placeholder="例如：版权方 / 内部评审 / 工厂"
-        onChange={(value) => setForm({ ...form, reviewTarget: value })}
-      />
+      {!isModelingReview ? (
+        <LabeledInput
+          label="送审对象"
+          value={form.reviewTarget}
+          placeholder="例如：版权方 / 内部评审 / 工厂"
+          onChange={(value) => setForm({ ...form, reviewTarget: value })}
+        />
+      ) : null}
       <LabeledTextarea
-        label="送审备注"
+        label={isModelingReview ? "反馈内容" : "送审备注"}
         value={form.note}
-        placeholder="建议写明送审版本、等待谁反馈、下一次跟进时间"
+        placeholder={isModelingReview ? "内部不通过或送审不通过时，请写明修改意见" : "建议写明送审版本、等待谁反馈、下一次跟进时间"}
         onChange={(value) => setForm({ ...form, note: value })}
       />
-      <FormActions saving={saving} submitLabel="保存送审记录" onCancel={onCancel} onSubmit={onSubmit} />
-    </div>
-  );
-}
-
-function StyleListFormView({
-  form,
-  setForm,
-  handoffMessage,
-  saving,
-  onCancel,
-  onSubmit,
-}: {
-  form: StyleListForm;
-  setForm: (form: StyleListForm) => void;
-  handoffMessage: string;
-  saving: boolean;
-  onCancel: () => void;
-  onSubmit: () => void;
-}) {
-  return (
-    <div className="grid gap-3">
-      <div>
-        <div className="text-sm font-semibold text-slate-900">
-          {handoffMessage ? "原画完成后递交建模排期" : "录入款式清单"}
-        </div>
-        <div className="mt-1 text-xs text-slate-500">
-          {handoffMessage || "有真实名称就逐行填写；没有名称时填写数量，会生成待补充款式。"}
-        </div>
-      </div>
-      <LabeledTextarea
-        label="款式名称"
-        value={form.styleNames}
-        placeholder={"例如：\n坐姿款\n站姿款\n表情替换款"}
-        onChange={(value) => setForm({ ...form, styleNames: value })}
-      />
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="款式数量"
-          type="number"
-          value={form.styleCount}
-          onChange={(value) => setForm({ ...form, styleCount: value })}
-        />
-        <LabeledInput
-          label="预估工时"
-          type="number"
-          value={form.estimatedWorkdays}
-          onChange={(value) => setForm({ ...form, estimatedWorkdays: value })}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="难度"
-          value={form.difficulty}
-          onChange={(value) => setForm({ ...form, difficulty: value })}
-        />
-        <label className="grid gap-1 text-xs font-medium text-slate-500">
-          原画状态
-          <select
-            value={form.originalArtStatus}
-            onChange={(event) => setForm({ ...form, originalArtStatus: event.target.value })}
-            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-          >
-            <option value="未过审">未过审</option>
-            <option value="已过审">已过审</option>
-          </select>
-        </label>
-      </div>
-      <LabeledInput
-        label="原画过审日期"
-        type="date"
-        value={form.originalArtApprovedDate}
-        onChange={(value) => setForm({ ...form, originalArtApprovedDate: value })}
-      />
-      <LabeledTextarea
-        label="备注"
-        value={form.note}
-        placeholder="可填写款式拆分说明"
-        onChange={(value) => setForm({ ...form, note: value })}
-      />
-      <FormActions
-        saving={saving}
-        submitLabel={handoffMessage ? "递交建模排期" : "生成款式"}
-        onCancel={onCancel}
-        onSubmit={onSubmit}
-      />
+      <FormActions saving={saving} submitLabel={isModelingReview ? "提交给建模排期" : "保存送审记录"} onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
 }
@@ -1976,6 +2107,99 @@ function canShowStyleListAction(item: ProductGuideItem) {
   return Boolean(item.projectId);
 }
 
+function validateStyleListForm(form: StyleListForm, taskRefs: StyleListTaskRefs | null) {
+  if (form.rows.length === 0) {
+    return "请至少填写一个款式。";
+  }
+
+  const namedRows = form.rows.filter((row) => row.styleName.trim().length > 0);
+  if (namedRows.length !== form.rows.length) {
+    return "请填写每个款式的名称。";
+  }
+
+  const firstRows = form.rows.filter((row) => row.isFirstModelingStyle);
+  if (firstRows.length !== 1) {
+    return "必须且只能选择一个第一款建模款式。";
+  }
+
+  if (!taskRefs?.firstStyleTask) {
+    return "缺少任务 7，无法提交第一款建模款式。";
+  }
+
+  if (form.rows.some((row) => !row.isFirstModelingStyle) && !taskRefs.remainingStylesTask) {
+    return "缺少任务 10，无法提交其余建模款式。";
+  }
+
+  return null;
+}
+
+function buildStyleSubmissionPayload({
+  currentUser,
+  selectedItem,
+  form,
+  taskRefs,
+  fallbackProjectTaskId,
+}: {
+  currentUser: AuthUser;
+  selectedItem: ProductGuideItem;
+  form: StyleListForm;
+  taskRefs: StyleListTaskRefs | null;
+  fallbackProjectTaskId?: string;
+}) {
+  const firstTask = taskRefs?.firstStyleTask;
+  const remainingTask = taskRefs?.remainingStylesTask;
+  const submittedAt = new Date().toISOString();
+
+  return {
+    sourceRequestId: `product-guide:styles:${selectedItem.projectId}:${Date.now()}`,
+    submittedAt,
+    submittedByUserId: currentUser.id,
+    submittedByName: currentUser.name,
+    projectId: selectedItem.projectId,
+    projectName: selectedItem.projectName,
+    projectTaskId: firstTask?.id ?? fallbackProjectTaskId,
+    taskNo: 7,
+    firstStyleProjectTaskId: firstTask?.id,
+    remainingStylesProjectTaskId: remainingTask?.id,
+    note: form.note.trim() || undefined,
+    styles: form.rows.map((row) => {
+      const taskRef = row.isFirstModelingStyle ? firstTask : remainingTask;
+
+      return {
+        sourceStyleId: row.sourceStyleId,
+        styleCode: row.styleCode.trim() || `S${String(row.styleSequence || "1").padStart(2, "0")}`,
+        styleName: row.styleName.trim(),
+        styleSequence: row.styleSequence.trim() || "1",
+        isRequired: row.isRequired,
+        isFirstModelingStyle: row.isFirstModelingStyle,
+        projectTaskId: taskRef?.id ?? fallbackProjectTaskId,
+        taskNo: taskRef?.taskNo ?? (row.isFirstModelingStyle ? 7 : 10),
+        productType: row.productType.trim() || undefined,
+        difficulty: row.difficulty.trim() || undefined,
+        estimatedWorkdays: parseNonNegativeInteger(row.estimatedWorkdays),
+        originalArtStatus: row.originalArtStatus,
+        originalArtApprovedDate: row.originalArtApprovedDate || undefined,
+        referenceImageUrls: row.referenceImages.map((image) => ({
+          name: image.name,
+          url: image.url,
+          type: image.type,
+        })),
+        notes: row.notes.trim() || undefined,
+      };
+    }),
+  };
+}
+
+function parseNonNegativeInteger(value: string) {
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function modelingTaskIdFromItem(item: ProductGuideItem) {
+  return item.source === "modeling" && item.id.startsWith("modeling:") ? item.id.slice("modeling:".length) : null;
+}
+
 function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
   return {
     taskStatus: normalizeTaskStatus(item?.statusLabel),
@@ -1983,21 +2207,24 @@ function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
     expectedFinishDate: item?.forecastFinishDate ?? item?.plannedFinishDate ?? todayString(),
     submittedAt: todayString(),
     reviewTarget: item?.waitingLicensor ? "版权方" : "版权方 / 审核方",
+    modelingReviewResult: defaultModelingReviewResult(item),
     blockReason: "",
     note: "",
   };
 }
 
-function defaultStyleListForm(): StyleListForm {
-  return {
-    styleNames: "",
-    styleCount: "",
-    difficulty: "常规款",
-    estimatedWorkdays: "7",
-    originalArtStatus: "未过审",
-    originalArtApprovedDate: "",
-    note: "",
-  };
+function defaultModelingReviewResult(item?: ProductGuideItem): TaskActionForm["modelingReviewResult"] {
+  const text = `${item?.statusLabel ?? ""} ${item?.taskName ?? ""} ${item?.riskCopy ?? ""}`;
+
+  if (text.includes("不通过") || text.includes("驳回") || text.includes("修改")) {
+    return "送审不通过";
+  }
+
+  if (text.includes("送审") || text.includes("反馈")) {
+    return "送审通过";
+  }
+
+  return "内部通过可送审";
 }
 
 function normalizeTaskStatus(value?: string) {

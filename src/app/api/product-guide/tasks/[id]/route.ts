@@ -319,8 +319,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     const styleListHandoff =
       action === "complete" ? await buildOriginalArtStyleListHandoff(task.projectId, task.id) : null;
+    const modelingStartEvent =
+      action === "progress" && optionalText(payload.status) === "进行中" && task.status !== "进行中"
+        ? buildModelingStartEvent(task, operatorName, now)
+        : null;
 
-    return NextResponse.json({ ok: true, ...result, ...styleListHandoff, needsRecalculation: true });
+    return NextResponse.json({ ok: true, ...result, ...styleListHandoff, ...modelingStartEvent, needsRecalculation: true });
   } catch (error) {
     if (error instanceof MutationError) {
       return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
@@ -369,14 +373,61 @@ async function buildOriginalArtStyleListHandoff(projectId: string, completedTask
     return null;
   }
 
-  const modelingProjectTask = projectTasks.find(isModelingTask);
+  const taskRefs = buildStyleListTaskRefs(projectTasks);
+  const modelingProjectTask = taskRefs.firstStyleTask ?? projectTasks.find(isModelingTask);
 
   return {
     requiresStyleList: true,
     styleListProjectTaskId: modelingProjectTask?.id,
+    styleListTaskRefs: taskRefs,
     styleListMessage: modelingProjectTask
-      ? "原画里程碑已完成，请录入建模款式清单。保存后系统会递交给建模排期。"
-      : "原画里程碑已完成，请录入建模款式清单；但当前项目缺少建模任务，请先确认任务模板。",
+      ? "原画里程碑已完成，请录入建模款式清单。提交后款式默认未启动，任务 7 / 10 启动时再通知建模排期。"
+      : "原画里程碑已完成，请录入建模款式清单；但当前项目缺少建模任务 7 / 10，请先确认任务模板。",
+  };
+}
+
+function buildStyleListTaskRefs(tasks: Array<{ id: string; taskNo: number; taskName: string }>) {
+  const firstStyleTask = tasks.find((task) => task.taskNo === 7);
+  const remainingStylesTask = tasks.find((task) => task.taskNo === 10);
+
+  return {
+    firstStyleTask: firstStyleTask
+      ? {
+          id: firstStyleTask.id,
+          taskNo: 7,
+          taskName: firstStyleTask.taskName,
+        }
+      : undefined,
+    remainingStylesTask: remainingStylesTask
+      ? {
+          id: remainingStylesTask.id,
+          taskNo: 10,
+          taskName: remainingStylesTask.taskName,
+        }
+      : undefined,
+  };
+}
+
+function buildModelingStartEvent(
+  task: { id: string; projectId: string; taskNo: number; taskName: string },
+  operatorName: string,
+  now: Date,
+) {
+  if (task.taskNo !== 7 && task.taskNo !== 10) {
+    return null;
+  }
+
+  return {
+    modelingStartEvent: {
+      sourceRequestId: `product-guide:start:${task.id}:${now.getTime()}`,
+      projectId: task.projectId,
+      projectTaskId: task.id,
+      taskNo: task.taskNo,
+      taskName: task.taskName,
+      startScope: task.taskNo === 7 ? "first-style" : "remaining-styles",
+      startedAt: now.toISOString(),
+      startedByName: operatorName,
+    },
   };
 }
 
