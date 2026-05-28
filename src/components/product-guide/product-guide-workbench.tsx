@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  Database,
   ExternalLink,
   Gauge,
   ListChecks,
@@ -639,6 +640,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
               </div>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
+              <CompactNavButton icon={<Database size={14} />} label="联调模拟" onClick={() => router.push("/product-guide/mock-lab")} />
               <CompactNavButton icon={<ExternalLink size={14} />} label="项目排期" onClick={() => router.push("/")} />
               <CompactNavButton icon={<Palette size={14} />} label="建模排期" onClick={() => router.push("/modeling")} />
             </div>
