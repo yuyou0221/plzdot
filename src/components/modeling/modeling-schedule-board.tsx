@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import type {
   ModelerCapacity,
   ModelingMilestoneCard,
@@ -146,6 +146,7 @@ const milestoneRiskLabel: Record<ModelingMilestoneRiskLevel, string> = {
 
 export function ModelingScheduleBoard({ currentUser, data }: { currentUser: AuthUser; data: ModelingScheduleData }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [view, setView] = useState<ModelingView>("milestones");
   const [styleBoardMode, setStyleBoardMode] = useState<StyleBoardMode>("active");
   const [profileModelerId, setProfileModelerId] = useState(
@@ -415,13 +416,15 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
               建模排期
               <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">P0</span>
             </button>
-            <button
-              onClick={() => router.push("/users")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              用户数据
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
-            </button>
+            {canOpenUserData ? (
+              <button
+                onClick={() => router.push("/users")}
+                className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+              >
+                用户数据
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
+              </button>
+            ) : null}
             <button
               onClick={() => router.push("/imports")}
               className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"

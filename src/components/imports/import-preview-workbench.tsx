@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Database, FileSpreadsheet, Info, RefreshCw, Search, Upload } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 
 type PreviewIssue = {
   severity: "error" | "warning" | "info";
@@ -203,6 +203,7 @@ export function ImportPreviewWorkbench({
   initialImportType?: ImportType;
 }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [importType, setImportType] = useState<ImportType>(initialImportType);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -412,7 +413,7 @@ export function ImportPreviewWorkbench({
             <SideButton label="项目排期" badge="P0" onClick={() => router.push("/")} />
             <SideButton label="产品组工作指引" badge="P0" onClick={() => router.push("/product-guide")} />
             <SideButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
-            <SideButton label="用户数据" badge="基础" onClick={() => router.push("/users")} />
+            {canOpenUserData ? <SideButton label="用户数据" badge="基础" onClick={() => router.push("/users")} /> : null}
             <button className="flex h-10 items-center justify-between rounded-lg bg-rose-50 px-3 text-sm font-semibold text-rose-700">
               数据导入
               <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">预览</span>
