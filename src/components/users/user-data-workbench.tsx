@@ -96,6 +96,33 @@ type MutationResponse = {
   message?: string;
 };
 
+type ImportPreview = {
+  fileName: string;
+  counts: {
+    people: number;
+    permissionRoles: number;
+    teams: number;
+    vendors: number;
+    total: number;
+  };
+  checks: {
+    loginUsers: number;
+    passwordRows: number;
+    shortPasswordRows: number;
+    activeAdminAfterImport: boolean;
+    duplicateLoginNames: string[];
+    loginConflicts: number;
+    activeLoginUsersMissingPassword: number;
+  };
+  canApply: boolean;
+  warnings: string[];
+  errors: string[];
+};
+
+type ImportPreviewResponse = MutationResponse & {
+  preview?: ImportPreview;
+};
+
 const tabLabels: Record<TabKey, string> = {
   people: "人员名单",
   teams: "团队结构",
@@ -116,7 +143,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const canManage = false;
   const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
   const canExportPasswords = currentUser.authRole === "admin";
-  const importSectionRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState("全部团队");
@@ -129,9 +156,11 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [vendorDraft, setVendorDraft] = useState<VendorDraft | null>(null);
   const [availabilityDraft, setAvailabilityDraft] = useState<AvailabilityDraft | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"info" | "warning">("info");
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -298,13 +327,67 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     });
   }
 
+  function openImportFilePicker() {
+    if (!canImport) {
+      notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+
+    fileInputRef.current?.click();
+  }
+
+  async function handleImportFileSelected(file: File | null) {
+    setImportFile(file);
+    setImportPreview(null);
+
+    if (!file) {
+      return;
+    }
+
+    if (!canImport) {
+      notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+
+    setPreviewing(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await fetch("/api/users/import-excel/preview", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await readMutationResponse(response)) as ImportPreviewResponse;
+
+      if (!response.ok || !result.ok || !result.preview) {
+        notify(result.message ?? "安全测试预览失败。", "warning");
+        return;
+      }
+
+      setImportPreview(result.preview);
+      notify(result.message ?? "安全测试预览完成。", result.preview.canApply ? "info" : "warning");
+    } catch {
+      notify("安全测试预览接口暂时不可用。", "warning");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   async function importUserDataExcel() {
     if (!importFile) {
-      notify("请先选择用户数据 Excel。", "warning");
+      notify("请先点击导入 Excel 选择文件。", "warning");
       return;
     }
     if (!canImport) {
       notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+    if (!importPreview) {
+      notify("请先完成安全测试预览。", "warning");
+      return;
+    }
+    if (!importPreview.canApply) {
+      notify("安全测试预览未通过，不能覆盖更新。", "warning");
       return;
     }
 
@@ -325,6 +408,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       }
 
       setImportFile(null);
+      setImportPreview(null);
       notify(result.message ?? "用户数据导入完成。");
       router.refresh();
     } catch {
@@ -477,40 +561,27 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole}
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <ActionButton
-                icon={<FileSpreadsheet size={16} />}
-                label="导入 Excel"
-                onClick={() => importSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              />
-              <ActionButton
-                icon={<Download size={16} />}
-                label={exporting ? "导出中" : "导出 Excel"}
-                disabled={!canExportPasswords || exporting}
-                onClick={exportUserDataExcel}
-              />
-              {canManage ? (
-                <>
-                  <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
-                  <ActionButton
-                    icon={<Building2 size={16} />}
-                    label="新增团队"
-                    onClick={() => {
-                      setActiveTab("teams");
-                      setTeamDraft({
-                        name: "",
-                        teamType: "产品",
-                        parentTeamId: "",
-                        leaderUserId: "",
-                        status: "启用",
-                        notes: "",
-                      });
-                    }}
-                  />
-                  <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
-                </>
-              ) : null}
-            </div>
+            {canManage ? (
+              <div className="flex flex-wrap gap-2">
+                <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
+                <ActionButton
+                  icon={<Building2 size={16} />}
+                  label="新增团队"
+                  onClick={() => {
+                    setActiveTab("teams");
+                    setTeamDraft({
+                      name: "",
+                      teamType: "产品",
+                      parentTeamId: "",
+                      leaderUserId: "",
+                      status: "启用",
+                      notes: "",
+                    });
+                  }}
+                />
+                <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
+              </div>
+            ) : null}
           </header>
 
           {message ? (
@@ -532,7 +603,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             ))}
           </section>
 
-          <section ref={importSectionRef} className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+          <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-700">
                   <FileSpreadsheet size={16} />
@@ -540,23 +611,33 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
+                    ref={fileInputRef}
                     type="file"
                     accept=".xlsx"
                     disabled={!canImport}
-                    onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
-                    className="max-w-72 text-sm text-slate-600 file:mr-3 file:h-9 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:text-sm file:font-semibold file:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    onChange={(event) => {
+                      void handleImportFileSelected(event.target.files?.[0] ?? null);
+                      event.target.value = "";
+                    }}
+                    className="hidden"
                   />
-                  <span className="inline-flex h-9 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-800">
-                    覆盖更新
-                  </span>
                   <button
                     type="button"
-                    disabled={importing || !canImport}
+                    disabled={previewing || importing || !canImport}
+                    onClick={openImportFilePicker}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FileSpreadsheet size={16} />
+                    {previewing ? "安全测试中" : "导入 Excel"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={importing || previewing || !importPreview?.canApply}
                     onClick={importUserDataExcel}
                     className="inline-flex h-9 items-center gap-2 rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <FileSpreadsheet size={16} />
-                    {importing ? "导入中" : "导入 Excel"}
+                    <CheckCircle2 size={16} />
+                    {importing ? "更新中" : "覆盖更新"}
                   </button>
                   <button
                     type="button"
@@ -571,9 +652,47 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </div>
               <div className="mt-2 text-xs text-slate-500">
                 {canImport
-                  ? "只支持通过 Excel 更新用户数据；每次导入都会覆盖当前人员、团队和外包供应商数据。导入的初始/重置密码会加密保存，admin 可在导出 Excel 时带出明文。"
+                  ? "点击导入 Excel 选择文件后会先跑安全测试预览；预览通过后，点击覆盖更新才会写入数据库。"
                   : "当前账号没有导入权限。请使用 admin 或 manager 账号导入 Excel。"}
               </div>
+              {importFile || importPreview || previewing ? (
+                <div className="mt-3 border-t border-slate-100 pt-3 text-sm">
+                  {importFile ? (
+                    <div className="flex flex-wrap items-center gap-2 text-slate-600">
+                      <span className="font-medium text-slate-800">已选择：</span>
+                      <span>{importFile.name}</span>
+                    </div>
+                  ) : null}
+                  {previewing ? (
+                    <div className="mt-2 text-slate-500">正在进行安全测试预览...</div>
+                  ) : null}
+                  {importPreview ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge
+                          value={importPreview.canApply ? "安全测试预览通过" : "安全测试预览未通过"}
+                          tone={importPreview.canApply ? "success" : "warning"}
+                        />
+                        <span className="text-xs text-slate-500">
+                          人员 {importPreview.counts.people} · 权限 {importPreview.counts.permissionRoles} · 团队 {importPreview.counts.teams} · 外包 {importPreview.counts.vendors}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 text-xs text-slate-600 max-lg:grid-cols-2 max-sm:grid-cols-1">
+                        <PreviewMetric label="登录账号" value={importPreview.checks.loginUsers} />
+                        <PreviewMetric label="有密码行" value={importPreview.checks.passwordRows} />
+                        <PreviewMetric label="短密码行" value={importPreview.checks.shortPasswordRows} />
+                        <PreviewMetric label="缺密码账号" value={importPreview.checks.activeLoginUsersMissingPassword} />
+                      </div>
+                      {importPreview.errors.length > 0 ? (
+                        <PreviewList title="必须处理" tone="warning" items={importPreview.errors} />
+                      ) : null}
+                      {importPreview.warnings.length > 0 ? (
+                        <PreviewList title="预览提示" tone="info" items={importPreview.warnings.slice(0, 8)} />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
 
           <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
@@ -1485,6 +1604,28 @@ function ActionButton({
       {icon}
       {label}
     </button>
+  );
+}
+
+function PreviewMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex h-8 items-center justify-between border-b border-slate-100">
+      <span>{label}</span>
+      <span className="font-semibold text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function PreviewList({ title, tone, items }: { title: string; tone: "info" | "warning"; items: string[] }) {
+  return (
+    <div className={clsx("text-xs leading-5", tone === "warning" ? "text-amber-800" : "text-slate-500")}>
+      <div className="font-semibold">{title}</div>
+      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
