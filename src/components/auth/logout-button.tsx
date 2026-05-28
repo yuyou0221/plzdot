@@ -3,11 +3,10 @@
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 
-export function LogoutButton() {
+export function LogoutButton({ isAvailable = true }: { isAvailable?: boolean }) {
   const router = useRouter();
-  const authEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
 
-  if (!authEnabled) {
+  if (!isAvailable) {
     return null;
   }
 

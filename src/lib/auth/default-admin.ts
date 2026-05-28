@@ -30,6 +30,7 @@ export async function ensureDefaultAdminUser() {
       passwordHash: hashPassword(password),
       passwordExportCiphertext: encryptExportablePassword(password),
       authRole: "admin",
+      permissionLevel: 0,
       userType: "内部",
       roleTitle: "系统管理员",
       status: "启用",

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
+import { requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { buildUserDataExportWorkbookBuffer } from "@/lib/user-data-export";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const auth = await requireApiRole(["admin"]);
+  const auth = await requireApiUserDataLevelZero();
   if ("response" in auth) return auth.response;
 
   try {

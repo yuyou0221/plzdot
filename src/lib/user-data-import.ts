@@ -4,8 +4,8 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { read, utils, type WorkBook } from "xlsx";
 import { encryptExportablePassword } from "@/lib/auth/password-export";
-import { hashPassword, isValidPassword } from "@/lib/auth/password";
-import { normalizeAuthRole } from "@/lib/auth/permissions";
+import { hashPassword } from "@/lib/auth/password";
+import { defaultPermissionLevelForAuthRole, normalizeAuthRole, normalizeUserPermissionLevel } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
 import {
   businessRoleList,
@@ -68,6 +68,41 @@ export type UserDataImportResult = {
   warnings: string[];
 };
 
+export type UserDataImportPreviewResult = {
+  ok: true;
+  mode: ImportMode;
+  fileName: string;
+  sheets: string[];
+  counts: {
+    people: number;
+    permissionRoles: number;
+    teams: number;
+    vendors: number;
+    total: number;
+  };
+  checks: {
+    loginUsers: number;
+    passwordRows: number;
+    shortPasswordRows: number;
+    activeAdminAfterImport: boolean;
+    activeLevelZeroAfterImport: boolean;
+    duplicateLoginNames: string[];
+    loginConflicts: number;
+    activeLoginUsersMissingPassword: number;
+  };
+  canApply: boolean;
+  warnings: string[];
+  errors: string[];
+};
+
+type ParsedUserDataWorkbook = {
+  workbook: WorkBook;
+  peopleRows: SheetRow[];
+  permissionRoleRows: SheetRow[];
+  teamRows: SheetRow[];
+  vendorRows: SheetRow[];
+};
+
 export async function importUserDataWorkbook({
   buffer,
   fileName,
@@ -78,11 +113,7 @@ export async function importUserDataWorkbook({
   importedBy: string;
 }): Promise<UserDataImportResult> {
   const mode: ImportMode = "replace";
-  const workbook = read(buffer, { type: "buffer", cellDates: true });
-  const peopleRows = workbookRows(workbook, ["人员名单", "人员", "工作表一"], 0).filter(hasAnyValue);
-  const permissionRoleRows = workbookRows(workbook, ["固定字段", "权限角色", "角色权限"], -1).filter(hasAnyValue);
-  const teamRows = workbookRows(workbook, ["团队结构", "团队", "工作表二"], 1).filter(hasAnyValue);
-  const vendorRows = workbookRows(workbook, ["外包供应商", "供应商", "工作表三"], 2).filter(hasAnyValue);
+  const { peopleRows, permissionRoleRows, teamRows, vendorRows } = parseUserDataWorkbook(buffer);
 
   if (peopleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0) {
     throw new UserDataImportValidationError("Excel 中没有识别到可导入的数据。");
@@ -136,6 +167,144 @@ export async function importUserDataWorkbook({
       warnings: state.warnings,
     };
   });
+}
+
+export async function previewUserDataWorkbook({
+  buffer,
+  fileName,
+}: {
+  buffer: Buffer;
+  fileName: string;
+}): Promise<UserDataImportPreviewResult> {
+  const mode: ImportMode = "replace";
+  const { workbook, peopleRows, permissionRoleRows, teamRows, vendorRows } = parseUserDataWorkbook(buffer);
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  if (peopleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0) {
+    throw new UserDataImportValidationError("Excel 中没有识别到可导入的数据。");
+  }
+
+  const existingUsers = await prisma.user.findMany({
+    select: { id: true, name: true, loginName: true, passwordHash: true },
+  });
+  const existingUserById = new Map(existingUsers.map((user) => [user.id, user]));
+  const existingUserByName = new Map(existingUsers.map((user) => [normalizeKey(user.name), user]));
+  const existingUserIdByLoginName = new Map(
+    existingUsers.filter((user) => user.loginName).map((user) => [normalizeKey(user.loginName ?? ""), user.id]),
+  );
+
+  let loginUsers = 0;
+  let passwordRows = 0;
+  let shortPasswordRows = 0;
+  let loginConflicts = 0;
+  let activeLoginUsersMissingPassword = 0;
+  let activeAdminAfterImport = false;
+  let activeLevelZeroAfterImport = false;
+  const loginNameCounts = new Map<string, number>();
+
+  for (const [index, row] of peopleRows.entries()) {
+    const rowNumber = index + 2;
+    const id = text(rowValue(row, ["人员ID", "人员 Id", "用户ID", "User ID"]));
+    const name = requiredText(rowValue(row, ["姓名", "人员姓名", "Name"]));
+
+    if (!name) {
+      warnings.push(`人员名单第 ${rowNumber} 行缺少姓名，导入时会跳过。`);
+      continue;
+    }
+
+    const matchedUser = id ? existingUserById.get(id) : existingUserByName.get(normalizeKey(name));
+    const matchedId = id || matchedUser?.id;
+    const status = normalizeStatus(rowValue(row, ["状态", "Status"]));
+    const loginName = text(rowValue(row, ["登录名", "Login"]));
+    const initialPassword = text(rowValue(row, ["初始/重置密码", "初始密码", "重置密码", "Password"]));
+    const migrationPasswordHash = text(rowValue(row, ["密码哈希（仅迁移用）", "密码哈希", "Password Hash"]));
+    const authRole = normalizeAuthRole(text(rowValue(row, ["权限角色", "权限", "Role"])));
+    const permissionLevel = normalizeUserPermissionLevel(
+      rowValue(row, ["权限等级", "用户权限等级", "等级", "Permission Level", "Level"]),
+      defaultPermissionLevelForAuthRole(authRole),
+    );
+
+    if (!loginName) {
+      continue;
+    }
+
+    loginUsers += 1;
+    loginNameCounts.set(loginName, (loginNameCounts.get(loginName) ?? 0) + 1);
+
+    const existingLoginOwnerId = existingUserIdByLoginName.get(normalizeKey(loginName));
+    if (existingLoginOwnerId && matchedId && existingLoginOwnerId !== matchedId) {
+      loginConflicts += 1;
+      warnings.push(`人员名单第 ${rowNumber} 行登录名 ${loginName} 已属于当前数据库中的其他人员，导入时会保留原登录名。`);
+    }
+
+    if (initialPassword) {
+      passwordRows += 1;
+      if (initialPassword.length < 8) {
+        shortPasswordRows += 1;
+      }
+    }
+
+    const hasPasswordAfterImport = Boolean(initialPassword || migrationPasswordHash || matchedUser?.passwordHash);
+
+    if (status !== "停用" && !hasPasswordAfterImport) {
+      activeLoginUsersMissingPassword += 1;
+      warnings.push(`人员名单第 ${rowNumber} 行填写了登录名但没有密码，导入后该账号暂不能登录。`);
+    }
+
+    if (status !== "停用" && authRole === "admin" && hasPasswordAfterImport) {
+      activeAdminAfterImport = true;
+    }
+    if (status !== "停用" && permissionLevel === 0 && hasPasswordAfterImport) {
+      activeLevelZeroAfterImport = true;
+    }
+  }
+
+  const duplicateLoginNames = Array.from(loginNameCounts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([loginName]) => loginName);
+
+  if (duplicateLoginNames.length > 0) {
+    errors.push(`人员名单中有重复登录名：${duplicateLoginNames.slice(0, 10).join("、")}。`);
+  }
+
+  if (!activeAdminAfterImport) {
+    errors.push("覆盖导入后将没有可登录的 admin 账号，请至少保留一个启用 admin，并填写登录名和密码。");
+  }
+  if (!activeLevelZeroAfterImport) {
+    errors.push("覆盖导入后将没有可登录的权限等级 0 账号，请至少保留一个启用的等级 0 账号，并填写登录名和密码。");
+  }
+
+  if (shortPasswordRows > 0) {
+    warnings.push(`检测到 ${shortPasswordRows} 个少于 8 位的密码；当前按 Excel 原样写入。`);
+  }
+
+  return {
+    ok: true,
+    mode,
+    fileName,
+    sheets: workbook.SheetNames,
+    counts: {
+      people: peopleRows.length,
+      permissionRoles: permissionRoleRows.length,
+      teams: teamRows.length,
+      vendors: vendorRows.length,
+      total: peopleRows.length + permissionRoleRows.length + teamRows.length + vendorRows.length,
+    },
+    checks: {
+      loginUsers,
+      passwordRows,
+      shortPasswordRows,
+      activeAdminAfterImport,
+      activeLevelZeroAfterImport,
+      duplicateLoginNames,
+      loginConflicts,
+      activeLoginUsersMissingPassword,
+    },
+    canApply: errors.length === 0,
+    warnings: warnings.slice(0, 80),
+    errors,
+  };
 }
 
 async function buildImportState(tx: Prisma.TransactionClient): Promise<MutableImportState> {
@@ -334,6 +503,10 @@ async function importPeople(tx: Prisma.TransactionClient, rows: SheetRow[], stat
     const initialPassword = text(rowValue(row, ["初始/重置密码", "初始密码", "重置密码", "Password"]));
     const migrationPasswordHash = text(rowValue(row, ["密码哈希（仅迁移用）", "密码哈希", "Password Hash"]));
     const authRole = normalizeAuthRole(text(rowValue(row, ["权限角色", "权限", "Role"])));
+    const permissionLevel = normalizeUserPermissionLevel(
+      rowValue(row, ["权限等级", "用户权限等级", "等级", "Permission Level", "Level"]),
+      defaultPermissionLevelForAuthRole(authRole),
+    );
     const notes = text(rowValue(row, ["备注", "Notes"]));
     const userType = text(rowValue(row, ["用户类型"])) ?? "内部";
     const isSchedulable = status !== "停用" && (!isModeler || Boolean(weeklyAvailableWorkdays && weeklyAvailableWorkdays > 0));
@@ -374,6 +547,7 @@ async function importPeople(tx: Prisma.TransactionClient, rows: SheetRow[], stat
           }
         : {}),
       authRole,
+      permissionLevel,
       isModeler,
       weeklyCapacityStyles: weeklyAvailableWorkdays,
       weeklyAvailableWorkdays,
@@ -530,13 +704,14 @@ async function assertActiveLoginAdminExists(tx: Prisma.TransactionClient) {
     where: {
       status: { not: "停用" },
       authRole: "admin",
+      permissionLevel: 0,
       loginName: { not: null },
       passwordHash: { not: null },
     },
   });
 
   if (activeAdminCount === 0) {
-    throw new UserDataImportValidationError("覆盖导入后将没有可登录的 admin 账号，请在人员名单中保留至少一个启用 admin，并填写登录名。");
+    throw new UserDataImportValidationError("覆盖导入后将没有可登录的 admin 且权限等级 0 账号，请在人员名单中保留至少一个启用的等级 0 管理账号，并填写登录名。");
   }
 }
 
@@ -565,6 +740,18 @@ async function ensureTeamByName(
   });
   state.teamIdByName.set(normalizeKey(name), team.id);
   return team.id;
+}
+
+function parseUserDataWorkbook(buffer: Buffer): ParsedUserDataWorkbook {
+  const workbook = read(buffer, { type: "buffer", cellDates: true });
+
+  return {
+    workbook,
+    peopleRows: workbookRows(workbook, ["人员名单", "人员", "工作表一"], 0).filter(hasAnyValue),
+    permissionRoleRows: workbookRows(workbook, ["固定字段", "权限角色", "角色权限"], -1).filter(hasAnyValue),
+    teamRows: workbookRows(workbook, ["团队结构", "团队", "工作表二"], 1).filter(hasAnyValue),
+    vendorRows: workbookRows(workbook, ["外包供应商", "供应商", "工作表三"], 2).filter(hasAnyValue),
+  };
 }
 
 function workbookRows(workbook: WorkBook, sheetNameCandidates: string[], fallbackIndex: number) {
@@ -685,11 +872,6 @@ function passwordForImport({
   state: MutableImportState;
 }) {
   if (initialPassword) {
-    if (!isValidPassword(initialPassword)) {
-      state.warnings.push(`人员名单第 ${rowNumber} 行初始/重置密码少于 8 位，已跳过密码写入。`);
-      return { passwordHash: existingPasswordHash ? undefined : null };
-    }
-
     return {
       passwordHash: hashPassword(initialPassword),
       passwordExportCiphertext: encryptExportablePassword(initialPassword) ?? undefined,

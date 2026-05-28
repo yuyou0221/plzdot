@@ -12,12 +12,15 @@ import {
   Database,
   Download,
   Edit3,
+  Eye,
   FileSpreadsheet,
   Gauge,
   PackageCheck,
   Plus,
   Save,
   Search,
+  ShieldCheck,
+  Trash2,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -43,6 +46,7 @@ type PersonDraft = {
   userType: string;
   loginName: string;
   authRole: string;
+  permissionLevel: string;
   password: string;
   isModeler: boolean;
   weeklyAvailableWorkdays: string;
@@ -96,6 +100,34 @@ type MutationResponse = {
   message?: string;
 };
 
+type ImportPreview = {
+  fileName: string;
+  counts: {
+    people: number;
+    permissionRoles: number;
+    teams: number;
+    vendors: number;
+    total: number;
+  };
+  checks: {
+    loginUsers: number;
+    passwordRows: number;
+    shortPasswordRows: number;
+    activeAdminAfterImport: boolean;
+    activeLevelZeroAfterImport: boolean;
+    duplicateLoginNames: string[];
+    loginConflicts: number;
+    activeLoginUsersMissingPassword: number;
+  };
+  canApply: boolean;
+  warnings: string[];
+  errors: string[];
+};
+
+type ImportPreviewResponse = MutationResponse & {
+  preview?: ImportPreview;
+};
+
 const tabLabels: Record<TabKey, string> = {
   people: "人员名单",
   teams: "团队结构",
@@ -114,9 +146,11 @@ const metricToneClass: Record<UserDataMetric["tone"], string> = {
 export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkbenchData; currentUser: AuthUser }) {
   const router = useRouter();
   const canManage = false;
-  const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
-  const canExportPasswords = currentUser.authRole === "admin";
-  const importSectionRef = useRef<HTMLElement | null>(null);
+  const canImport = data.viewer.canImportExcel;
+  const canExportPasswords = data.viewer.canExportPasswords;
+  const canDeleteDisabledUsers = data.viewer.canDeleteDisabledUsers;
+  const canSeeSensitiveUserFields = data.viewer.canSeeSensitiveUserFields;
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
   const [teamFilter, setTeamFilter] = useState("全部团队");
@@ -129,11 +163,16 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [vendorDraft, setVendorDraft] = useState<VendorDraft | null>(null);
   const [availabilityDraft, setAvailabilityDraft] = useState<AvailabilityDraft | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"info" | "warning">("info");
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deletingPersonId, setDeletingPersonId] = useState<string | null>(null);
+  const [fieldPolicyOpen, setFieldPolicyOpen] = useState(false);
+  const [activeSnapshotModule, setActiveSnapshotModule] = useState(data.moduleReadSnapshots[0]?.moduleName ?? "");
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
@@ -193,6 +232,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       userType: personDraft.userType,
       loginName: personDraft.loginName,
       authRole: personDraft.authRole,
+      permissionLevel: nullableNumber(personDraft.permissionLevel),
       password: personDraft.password,
       isModeler: personDraft.isModeler,
       weeklyAvailableWorkdays: nullableNumber(personDraft.weeklyAvailableWorkdays),
@@ -298,13 +338,67 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     });
   }
 
+  function openImportFilePicker() {
+    if (!canImport) {
+      notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+
+    fileInputRef.current?.click();
+  }
+
+  async function handleImportFileSelected(file: File | null) {
+    setImportFile(file);
+    setImportPreview(null);
+
+    if (!file) {
+      return;
+    }
+
+    if (!canImport) {
+      notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+
+    setPreviewing(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await fetch("/api/users/import-excel/preview", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await readMutationResponse(response)) as ImportPreviewResponse;
+
+      if (!response.ok || !result.ok || !result.preview) {
+        notify(result.message ?? "安全测试预览失败。", "warning");
+        return;
+      }
+
+      setImportPreview(result.preview);
+      notify(result.message ?? "安全测试预览完成。", result.preview.canApply ? "info" : "warning");
+    } catch {
+      notify("安全测试预览接口暂时不可用。", "warning");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   async function importUserDataExcel() {
     if (!importFile) {
-      notify("请先选择用户数据 Excel。", "warning");
+      notify("请先点击导入 Excel 选择文件。", "warning");
       return;
     }
     if (!canImport) {
       notify("当前账号没有权限导入用户数据。", "warning");
+      return;
+    }
+    if (!importPreview) {
+      notify("请先完成安全测试预览。", "warning");
+      return;
+    }
+    if (!importPreview.canApply) {
+      notify("安全测试预览未通过，不能覆盖更新。", "warning");
       return;
     }
 
@@ -325,6 +419,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       }
 
       setImportFile(null);
+      setImportPreview(null);
       notify(result.message ?? "用户数据导入完成。");
       router.refresh();
     } catch {
@@ -364,6 +459,39 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       notify("用户数据导出接口暂时不可用。", "warning");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function deleteDisabledPerson(person: UserDataPerson) {
+    if (!canDeleteDisabledUsers) {
+      notify("当前账号没有权限删除停用账号。", "warning");
+      return;
+    }
+    if (person.status !== "停用") {
+      notify("只能删除停用状态的账号。", "warning");
+      return;
+    }
+    if (!window.confirm(`确认删除停用账号「${person.name}」？删除后只能通过重新导入 Excel 恢复。`)) {
+      return;
+    }
+
+    setDeletingPersonId(person.id);
+    try {
+      const response = await fetch(`/api/users/people/${person.id}`, { method: "DELETE" });
+      const result = await readMutationResponse(response);
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "删除失败。", "warning");
+        return;
+      }
+
+      setSelectedPersonId(data.people.find((item) => item.id !== person.id)?.id ?? "");
+      notify(result.message ?? "已删除停用账号。");
+      router.refresh();
+    } catch {
+      notify("删除接口暂时不可用。", "warning");
+    } finally {
+      setDeletingPersonId(null);
     }
   }
 
@@ -412,6 +540,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       userType: "内部",
       loginName: "",
       authRole: "viewer",
+      permissionLevel: "9",
       password: "",
       isModeler: false,
       weeklyAvailableWorkdays: "",
@@ -474,40 +603,34 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 人员、团队、建模能力与外包供应商
               </div>
               <div className="mt-1 text-xs font-medium text-slate-400">
-                当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole}
+                当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole} · {data.viewer.permissionLevelLabel}
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <ActionButton
-                icon={<FileSpreadsheet size={16} />}
-                label="导入 Excel"
-                onClick={() => importSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              />
-              <ActionButton
-                icon={<Download size={16} />}
-                label={exporting ? "导出中" : "导出 Excel"}
-                disabled={!canExportPasswords || exporting}
-                onClick={exportUserDataExcel}
+                icon={fieldPolicyOpen ? <Eye size={16} /> : <ShieldCheck size={16} />}
+                label={fieldPolicyOpen ? "收起字段权限" : "字段权限 / 模块读取"}
+                onClick={() => setFieldPolicyOpen((value) => !value)}
               />
               {canManage ? (
                 <>
-                  <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
-                  <ActionButton
-                    icon={<Building2 size={16} />}
-                    label="新增团队"
-                    onClick={() => {
-                      setActiveTab("teams");
-                      setTeamDraft({
-                        name: "",
-                        teamType: "产品",
-                        parentTeamId: "",
-                        leaderUserId: "",
-                        status: "启用",
-                        notes: "",
-                      });
-                    }}
-                  />
-                  <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
+                <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
+                <ActionButton
+                  icon={<Building2 size={16} />}
+                  label="新增团队"
+                  onClick={() => {
+                    setActiveTab("teams");
+                    setTeamDraft({
+                      name: "",
+                      teamType: "产品",
+                      parentTeamId: "",
+                      leaderUserId: "",
+                      status: "启用",
+                      notes: "",
+                    });
+                  }}
+                />
+                <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
                 </>
               ) : null}
             </div>
@@ -526,13 +649,15 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             </div>
           ) : null}
 
+          {fieldPolicyOpen ? renderFieldPolicyPanel() : null}
+
           <section className="mt-5 grid grid-cols-5 gap-3 max-2xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
             {data.metrics.map((metric) => (
               <MetricCard key={metric.label} metric={metric} />
             ))}
           </section>
 
-          <section ref={importSectionRef} className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+          <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-700">
                   <FileSpreadsheet size={16} />
@@ -540,23 +665,33 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
+                    ref={fileInputRef}
                     type="file"
                     accept=".xlsx"
                     disabled={!canImport}
-                    onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
-                    className="max-w-72 text-sm text-slate-600 file:mr-3 file:h-9 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:text-sm file:font-semibold file:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    onChange={(event) => {
+                      void handleImportFileSelected(event.target.files?.[0] ?? null);
+                      event.target.value = "";
+                    }}
+                    className="hidden"
                   />
-                  <span className="inline-flex h-9 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-800">
-                    覆盖更新
-                  </span>
                   <button
                     type="button"
-                    disabled={importing || !canImport}
+                    disabled={previewing || importing || !canImport}
+                    onClick={openImportFilePicker}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FileSpreadsheet size={16} />
+                    {previewing ? "安全测试中" : "导入 Excel"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={importing || previewing || !importPreview?.canApply}
                     onClick={importUserDataExcel}
                     className="inline-flex h-9 items-center gap-2 rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <FileSpreadsheet size={16} />
-                    {importing ? "导入中" : "导入 Excel"}
+                    <CheckCircle2 size={16} />
+                    {importing ? "更新中" : "覆盖更新"}
                   </button>
                   <button
                     type="button"
@@ -571,9 +706,48 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </div>
               <div className="mt-2 text-xs text-slate-500">
                 {canImport
-                  ? "只支持通过 Excel 更新用户数据；每次导入都会覆盖当前人员、团队和外包供应商数据。导入的初始/重置密码会加密保存，admin 可在导出 Excel 时带出明文。"
-                  : "当前账号没有导入权限。请使用 admin 或 manager 账号导入 Excel。"}
+                  ? "点击导入 Excel 选择文件后会先跑安全测试预览；预览通过后，点击覆盖更新才会写入数据库。"
+                  : "当前账号没有导入权限。导入、覆盖更新和密码导出仅权限等级 0 可用。"}
               </div>
+              {importFile || importPreview || previewing ? (
+                <div className="mt-3 border-t border-slate-100 pt-3 text-sm">
+                  {importFile ? (
+                    <div className="flex flex-wrap items-center gap-2 text-slate-600">
+                      <span className="font-medium text-slate-800">已选择：</span>
+                      <span>{importFile.name}</span>
+                    </div>
+                  ) : null}
+                  {previewing ? (
+                    <div className="mt-2 text-slate-500">正在进行安全测试预览...</div>
+                  ) : null}
+                  {importPreview ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge
+                          value={importPreview.canApply ? "安全测试预览通过" : "安全测试预览未通过"}
+                          tone={importPreview.canApply ? "success" : "warning"}
+                        />
+                        <span className="text-xs text-slate-500">
+                          人员 {importPreview.counts.people} · 权限 {importPreview.counts.permissionRoles} · 团队 {importPreview.counts.teams} · 外包 {importPreview.counts.vendors}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 text-xs text-slate-600 max-lg:grid-cols-2 max-sm:grid-cols-1">
+                        <PreviewMetric label="登录账号" value={importPreview.checks.loginUsers} />
+                        <PreviewMetric label="有密码行" value={importPreview.checks.passwordRows} />
+                        <PreviewMetric label="短密码行" value={importPreview.checks.shortPasswordRows} />
+                        <PreviewMetric label="等级 0 可登录" value={importPreview.checks.activeLevelZeroAfterImport ? 1 : 0} />
+                        <PreviewMetric label="缺密码账号" value={importPreview.checks.activeLoginUsersMissingPassword} />
+                      </div>
+                      {importPreview.errors.length > 0 ? (
+                        <PreviewList title="必须处理" tone="warning" items={importPreview.errors} />
+                      ) : null}
+                      {importPreview.warnings.length > 0 ? (
+                        <PreviewList title="预览提示" tone="info" items={importPreview.warnings.slice(0, 8)} />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
 
           <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
@@ -602,6 +776,151 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       </div>
     </div>
   );
+
+  function renderFieldPolicyPanel() {
+    const activeSnapshot =
+      data.moduleReadSnapshots.find((snapshot) => snapshot.moduleName === activeSnapshotModule) ??
+      data.moduleReadSnapshots[0];
+
+    return (
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <ShieldCheck size={16} />
+              字段权限与模块读取视图
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              等级 0 可见全部字段；非等级 0 仅人力资源账号可进入本页，并隐藏账号权限类字段。
+            </p>
+          </div>
+          <StatusBadge
+            value={data.viewer.canSeeSensitiveUserFields ? "当前可见全部字段" : "当前为受限视图"}
+            tone={data.viewer.canSeeSensitiveUserFields ? "success" : "warning"}
+          />
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-3 py-2">范围</th>
+                <th className="px-3 py-2">字段</th>
+                <th className="px-3 py-2">等级 0</th>
+                <th className="px-3 py-2">人力资源</th>
+                <th className="px-3 py-2">其他模块读取</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.fieldVisibility.map((row) => (
+                <tr key={`${row.scope}-${row.field}`}>
+                  <td className="px-3 py-3 text-slate-500">{row.scope}</td>
+                  <td className="px-3 py-3 font-medium text-slate-900">{row.field}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.levelZero}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.humanResources}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.moduleRead}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-3 py-2">模块</th>
+                <th className="px-3 py-2">默认可读取</th>
+                <th className="px-3 py-2">默认不可读取</th>
+                <th className="px-3 py-2">说明</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.moduleReadModels.map((row) => (
+                <tr key={row.moduleName}>
+                  <td className="px-3 py-3 font-medium text-slate-900">{row.moduleName}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.readableFields}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.hiddenFields}</td>
+                  <td className="px-3 py-3 text-slate-500">{row.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">模块读取实际数据</div>
+              <div className="mt-1 text-xs text-slate-500">
+                这里展示当前数据库按约定提供给各模块读取的实际行和字段。
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {data.moduleReadSnapshots.map((snapshot) => (
+                <button
+                  key={snapshot.moduleName}
+                  type="button"
+                  onClick={() => setActiveSnapshotModule(snapshot.moduleName)}
+                  className={clsx(
+                    "h-8 rounded-md px-3 text-xs font-semibold",
+                    activeSnapshot?.moduleName === snapshot.moduleName
+                      ? "bg-slate-900 text-white"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100",
+                  )}
+                >
+                  {snapshot.moduleName}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {activeSnapshot ? (
+            <div className="mt-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <span>
+                  {activeSnapshot.recordName} · 共 {activeSnapshot.totalRows} 条
+                  {activeSnapshot.totalRows > activeSnapshot.rows.length ? `，当前显示前 ${activeSnapshot.rows.length} 条` : ""}
+                </span>
+                <span>{activeSnapshot.notes}</span>
+              </div>
+              <div className="overflow-x-auto border border-slate-200 bg-white">
+                <table className="w-full min-w-[920px] text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+                    <tr>
+                      {activeSnapshot.columns.map((column) => (
+                        <th key={column} className="px-3 py-2">
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {activeSnapshot.rows.map((row, rowIndex) => (
+                      <tr key={`${activeSnapshot.moduleName}-${rowIndex}`}>
+                        {row.map((value, columnIndex) => (
+                          <td key={`${activeSnapshot.moduleName}-${rowIndex}-${columnIndex}`} className="px-3 py-3 text-slate-700">
+                            {value || "-"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {activeSnapshot.rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={activeSnapshot.columns.length} className="px-3 py-8 text-center text-sm text-slate-400">
+                          暂无可读取数据
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
 
   function renderPeopleTab() {
     return (
@@ -647,7 +966,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1280px] text-left text-sm">
+            <table className={clsx("w-full text-left text-sm", canSeeSensitiveUserFields ? "min-w-[1380px]" : "min-w-[1120px]")}>
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">姓名</th>
@@ -655,8 +974,9 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                   <th className="px-3 py-2">项目小组</th>
                   <th className="px-3 py-2">岗位</th>
                   <th className="px-3 py-2">用户类型</th>
-                  <th className="px-3 py-2">登录名</th>
-                  <th className="px-3 py-2">权限</th>
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">登录名</th> : null}
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">权限</th> : null}
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">权限等级</th> : null}
                   <th className="px-3 py-2">建模师</th>
                   <th className="px-3 py-2">每周可用工作日</th>
                   <th className="px-3 py-2">可排期</th>
@@ -682,10 +1002,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     <td className="px-3 py-3">
                       <TypeBadge value={person.userType} />
                     </td>
-                    <td className="px-3 py-3 text-slate-600">{person.loginName || "-"}</td>
-                    <td className="px-3 py-3">
-                      <StatusBadge value={person.authRoleLabel} tone={person.authRole === "admin" ? "warning" : "neutral"} />
-                    </td>
+                    {canSeeSensitiveUserFields ? <td className="px-3 py-3 text-slate-600">{person.loginName || "-"}</td> : null}
+                    {canSeeSensitiveUserFields ? (
+                      <td className="px-3 py-3">
+                        <StatusBadge value={person.authRoleLabel} tone={person.authRole === "admin" ? "warning" : "neutral"} />
+                      </td>
+                    ) : null}
+                    {canSeeSensitiveUserFields ? <td className="px-3 py-3 text-slate-600">{person.permissionLevelLabel}</td> : null}
                     <td className="px-3 py-3">
                       {person.isModeler ? <StatusBadge value="是" tone="success" /> : <StatusBadge value="否" tone="neutral" />}
                     </td>
@@ -707,19 +1030,35 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     </td>
                     <td className="max-w-[220px] truncate px-3 py-3 text-slate-500">{person.notes || "-"}</td>
                     <td className="px-3 py-3 text-right">
-                      {canManage ? (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPersonDraft(personDraftFromPerson(person));
-                          }}
-                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          <Edit3 size={14} />
-                          编辑
-                        </button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPersonDraft(personDraftFromPerson(person));
+                            }}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            <Edit3 size={14} />
+                            编辑
+                          </button>
+                        ) : null}
+                        {canDeleteDisabledUsers && person.status === "停用" ? (
+                          <button
+                            type="button"
+                            disabled={deletingPersonId === person.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteDisabledPerson(person);
+                            }}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-rose-200 bg-white px-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Trash2 size={14} />
+                            {deletingPersonId === person.id ? "删除中" : "删除"}
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -767,8 +1106,9 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
           <DetailItem label="用户类型" value={selectedPerson.userType} />
-          <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} />
-          <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} />
+          {canSeeSensitiveUserFields ? <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} /> : null}
+          {canSeeSensitiveUserFields ? <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} /> : null}
+          {canSeeSensitiveUserFields ? <DetailItem label="权限等级" value={selectedPerson.permissionLevelLabel} /> : null}
           <DetailItem label="是否建模师" value={selectedPerson.isModeler ? "是" : "否"} />
           <DetailItem label="每周可用工作日" value={selectedPerson.weeklyAvailableWorkdays ?? "未填写"} />
           <DetailItem label="公司部门" value={selectedPerson.departmentTeamName} />
@@ -791,6 +1131,17 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               <ActionButton icon={<Edit3 size={16} />} label="编辑人员" onClick={() => setPersonDraft(personDraftFromPerson(selectedPerson))} />
               <ActionButton icon={<Gauge size={16} />} label="维护排期参数" onClick={() => openCapabilityEditor(selectedPerson)} />
             </>
+          ) : null}
+          {canDeleteDisabledUsers && selectedPerson.status === "停用" ? (
+            <button
+              type="button"
+              disabled={deletingPersonId === selectedPerson.id}
+              onClick={() => void deleteDisabledPerson(selectedPerson)}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={16} />
+              {deletingPersonId === selectedPerson.id ? "删除中" : "删除停用账号"}
+            </button>
           ) : null}
         </div>
       </section>
@@ -836,6 +1187,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </option>
             ))}
           </SelectField>
+          <TextInput
+            label="权限等级"
+            type="number"
+            min={0}
+            value={personDraft.permissionLevel}
+            onChange={(value) => setPersonDraft({ ...personDraft, permissionLevel: value })}
+          />
           <TextInput
             label={personDraft.id ? "重置密码" : "初始密码"}
             type="password"
@@ -1488,6 +1846,28 @@ function ActionButton({
   );
 }
 
+function PreviewMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex h-8 items-center justify-between border-b border-slate-100">
+      <span>{label}</span>
+      <span className="font-semibold text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function PreviewList({ title, tone, items }: { title: string; tone: "info" | "warning"; items: string[] }) {
+  return (
+    <div className={clsx("text-xs leading-5", tone === "warning" ? "text-amber-800" : "text-slate-500")}>
+      <div className="font-semibold">{title}</div>
+      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function Pill({ icon, label }: { icon: ReactNode; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1">
@@ -1693,6 +2073,7 @@ function personDraftFromPerson(person: UserDataPerson): PersonDraft {
     userType: person.userType,
     loginName: person.loginName,
     authRole: person.authRole,
+    permissionLevel: typeof person.permissionLevel === "number" ? String(person.permissionLevel) : "9",
     password: "",
     isModeler: person.isModeler,
     weeklyAvailableWorkdays: person.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "",
@@ -1780,10 +2161,15 @@ function formatDateTime(value: string) {
     return "刚刚";
   }
 
-  return date.toLocaleString("zh-CN", {
+  const shanghaiFormatter = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
   });
+  const parts = Object.fromEntries(shanghaiFormatter.formatToParts(date).map((part) => [part.type, part.value]));
+
+  return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
 }

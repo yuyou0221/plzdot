@@ -1,12 +1,21 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
-import { authRoleLabels } from "@/lib/auth/permissions";
+import {
+  authRoleLabels,
+  canSeeSensitiveUserData,
+  formatUserPermissionLevel,
+  isHighestPermissionLevel,
+  isHumanResourcesUser,
+  type AuthUser,
+} from "@/lib/auth/permissions";
 import type {
   UserDataPerson,
   UserDataTeam,
+  UserAvailabilityBlock,
   UserDataVendor,
   UserDataWorkbenchData,
+  UserDataViewerPolicy,
 } from "@/lib/user-data-types";
 
 const baseTeams = [
@@ -22,7 +31,7 @@ const baseTeams = [
 
 const baseProductGroups = ["忍者组", "迪no组", "丹东组", "易特凡组"];
 
-export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData> {
+export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<UserDataWorkbenchData> {
   try {
     await ensureBaseUserData();
 
@@ -53,6 +62,7 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
           loginName: true,
           passwordHash: true,
           authRole: true,
+          permissionLevel: true,
           isModeler: true,
           weeklyCapacityStyles: true,
           weeklyAvailableWorkdays: true,
@@ -128,6 +138,8 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
         loginName: user.loginName ?? "",
         authRole: user.authRole,
         authRoleLabel: authRoleLabels[user.authRole] ?? user.authRole,
+        permissionLevel: user.permissionLevel,
+        permissionLevelLabel: formatUserPermissionLevel(user.permissionLevel),
         canLogin: Boolean(user.loginName && user.passwordHash),
         isModeler: user.isModeler,
         weeklyCapacityStyles: weeklyAvailableWorkdays,
@@ -177,11 +189,17 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       notes: row.notes ?? "",
     }));
 
+    const viewer = buildViewerPolicy(currentUser);
+
     return {
       sourceLabel: "数据库",
       generatedAt: new Date().toISOString(),
+      viewer,
+      fieldVisibility: buildFieldVisibilityRows(),
+      moduleReadModels: buildModuleReadModels(),
+      moduleReadSnapshots: buildModuleReadSnapshots(people, teams, vendors, availabilityBlocks, viewer.canSeeSensitiveUserFields),
       metrics: buildMetrics(people, teams, vendors),
-      people,
+      people: people.map((person) => maskPersonForViewer(person, viewer.canSeeSensitiveUserFields)),
       teams,
       vendors,
       availabilityBlocks,
@@ -202,6 +220,10 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
     return {
       sourceLabel: "基础团队样例",
       generatedAt: new Date().toISOString(),
+      viewer: buildViewerPolicy(currentUser),
+      fieldVisibility: buildFieldVisibilityRows(),
+      moduleReadModels: buildModuleReadModels(),
+      moduleReadSnapshots: buildModuleReadSnapshots([], teams, [], [], buildViewerPolicy(currentUser).canSeeSensitiveUserFields),
       metrics: buildMetrics([], teams, []),
       people: [],
       teams,
@@ -209,6 +231,222 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       availabilityBlocks: [],
     };
   }
+}
+
+function buildViewerPolicy(currentUser: AuthUser): UserDataViewerPolicy {
+  const isLevelZero = isHighestPermissionLevel(currentUser);
+  const isHumanResources = isHumanResourcesUser(currentUser);
+
+  return {
+    permissionLevel: currentUser.permissionLevel,
+    permissionLevelLabel: formatUserPermissionLevel(currentUser.permissionLevel),
+    isLevelZero,
+    isHumanResources,
+    canSeeSensitiveUserFields: canSeeSensitiveUserData(currentUser),
+    canImportExcel: isLevelZero,
+    canExportPasswords: isLevelZero,
+    canDeleteDisabledUsers: isLevelZero,
+  };
+}
+
+function maskPersonForViewer(person: UserDataPerson, canSeeSensitiveUserFields: boolean): UserDataPerson {
+  if (canSeeSensitiveUserFields) {
+    return person;
+  }
+
+  return {
+    ...person,
+    loginName: "",
+    authRole: "",
+    authRoleLabel: "仅等级 0 可见",
+    permissionLevel: undefined,
+    permissionLevelLabel: "仅等级 0 可见",
+  };
+}
+
+function buildFieldVisibilityRows() {
+  return [
+    { scope: "人员名单", field: "姓名", levelZero: "可见", humanResources: "可见", moduleRead: "可读取" },
+    { scope: "人员名单", field: "公司部门 / 项目小组", levelZero: "可见", humanResources: "可见", moduleRead: "可读取" },
+    { scope: "人员名单", field: "岗位 / 业务角色", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "人员名单", field: "内部 / 外包", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "建模排期参数", field: "是否建模师", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "建模排期参数", field: "每周可用工作日", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "建模排期参数", field: "是否可排期 / 不可排期记录", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "账号权限", field: "登录名", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取" },
+    { scope: "账号权限", field: "权限角色 admin / manager / viewer", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取；其他模块自行判断" },
+    { scope: "账号权限", field: "权限等级", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取" },
+    { scope: "账号权限", field: "初始 / 重置密码", levelZero: "仅导入导出时可见", humanResources: "隐藏", moduleRead: "不可读取明文" },
+    { scope: "团队结构", field: "团队名称 / 类型 / 上级 / 负责人", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "外包供应商", field: "供应商名称 / 类型 / 稳定状态", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取稳定产能" },
+    { scope: "外包供应商", field: "联系人 / 联系方式 / 备注", levelZero: "可见", humanResources: "可见", moduleRead: "默认不提供给业务模块" },
+  ];
+}
+
+function buildModuleReadModels() {
+  return [
+    {
+      moduleName: "产品组工作指引",
+      readableFields: "姓名、公司部门、项目小组、岗位 / 业务角色、启停状态",
+      hiddenFields: "登录名、密码、权限等级、账号权限细节",
+      notes: "用于人员筛选、任务归属和项目小组展示；不由用户数据模块分配任务。",
+    },
+    {
+      moduleName: "建模排期",
+      readableFields: "建模师名单、每周可用工作日、是否可排期、不可排期记录、稳定外包供应商",
+      hiddenFields: "登录名、密码、权限等级、非建模必要备注",
+      notes: "用于排期候选人和产能参数；具体排期算法由建模排期模块负责。",
+    },
+    {
+      moduleName: "项目排期",
+      readableFields: "人员姓名、团队、岗位、启停状态、项目小组",
+      hiddenFields: "密码、权限等级、账号权限细节、联系方式",
+      notes: "用于项目负责人、产品研发、产品研发美术等候选数据。",
+    },
+    {
+      moduleName: "登录功能",
+      readableFields: "登录名、密码哈希、权限角色、权限等级、启停状态",
+      hiddenFields: "不向业务模块输出明文密码；明文只按等级 0 的 Excel 导出规则处理",
+      notes: "登录是用户数据模块唯一主动功能；其他模块访问判断仍由各模块自行决定。",
+    },
+  ];
+}
+
+function buildModuleReadSnapshots(
+  people: UserDataPerson[],
+  teams: UserDataTeam[],
+  vendors: UserDataVendor[],
+  availabilityBlocks: UserAvailabilityBlock[],
+  includeLoginSnapshot: boolean,
+) {
+  const activePeople = people.filter((person) => person.status !== "停用");
+  const productTeamIds = new Set(
+    teams.filter((team) => team.status !== "停用" && (team.teamType === "产品" || team.name.includes("产品"))).map((team) => team.id),
+  );
+  const availabilityCountByUserId = new Map<string, number>();
+
+  for (const block of availabilityBlocks) {
+    availabilityCountByUserId.set(block.userId, (availabilityCountByUserId.get(block.userId) ?? 0) + 1);
+  }
+
+  const productGuideRows = activePeople
+    .filter((person) => {
+      const roleText = [person.roleTitle, ...person.businessRoles].join(" ");
+      return (
+        roleText.includes("产品") ||
+        roleText.includes("总监") ||
+        (person.departmentTeamId ? productTeamIds.has(person.departmentTeamId) : false) ||
+        (person.projectGroupTeamId ? productTeamIds.has(person.projectGroupTeamId) : false)
+      );
+    })
+    .map((person) => [
+      person.name,
+      person.departmentTeamName,
+      person.projectGroupTeamName,
+      person.roleTitle,
+      person.userType,
+      person.status,
+    ]);
+
+  const modelingRows = [
+    ...activePeople
+      .filter((person) => person.isModeler)
+      .map((person) => [
+        "建模师",
+        person.name,
+        person.departmentTeamName,
+        person.projectGroupTeamName,
+        person.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "未填写",
+        person.isSchedulable ? "可排期" : "不可排期",
+        String(availabilityCountByUserId.get(person.id) ?? 0),
+      ]),
+    ...vendors
+      .filter((vendor) => vendor.status !== "停用" && vendor.stableCapacity)
+      .map((vendor) => [
+        "稳定外包",
+        vendor.name,
+        vendor.vendorType,
+        "-",
+        "-",
+        vendor.stableCapacity ? "稳定产能" : "非稳定",
+        "-",
+      ]),
+  ];
+
+  const projectScheduleRows = activePeople.map((person) => [
+    person.name,
+    person.departmentTeamName,
+    person.projectGroupTeamName,
+    person.roleTitle,
+    person.userType,
+    person.status,
+  ]);
+
+  const teamRows = teams
+    .filter((team) => team.status !== "停用")
+    .map((team) => [team.name, team.teamType, team.parentTeamName, team.leaderName, team.status]);
+
+  const snapshots = [
+    {
+      moduleName: "产品组工作指引",
+      recordName: "产品相关人员",
+      columns: ["姓名", "公司部门", "项目小组", "岗位 / 业务角色", "内部 / 外包", "状态"],
+      rows: productGuideRows,
+      totalRows: productGuideRows.length,
+      notes: "按产品相关团队、项目小组和岗位筛出；只展示任务归属需要的人员主数据。",
+    },
+    {
+      moduleName: "建模排期",
+      recordName: "建模师与稳定外包",
+      columns: ["类型", "名称", "部门 / 供应商类型", "项目小组", "每周可用工作日", "排期状态", "不可排期记录数"],
+      rows: modelingRows,
+      totalRows: modelingRows.length,
+      notes: "展示建模排期可读取的建模师产能、可排期状态和稳定外包供应商。",
+    },
+    {
+      moduleName: "项目排期",
+      recordName: "项目人员候选数据",
+      columns: ["姓名", "公司部门", "项目小组", "岗位 / 业务角色", "内部 / 外包", "状态"],
+      rows: projectScheduleRows,
+      totalRows: projectScheduleRows.length,
+      notes: "展示项目排期可读取的负责人、产品研发、产品研发美术等候选人员基础数据。",
+    },
+    {
+      moduleName: "团队结构",
+      recordName: "启用团队",
+      columns: ["团队名称", "团队类型", "上级团队", "负责人", "状态"],
+      rows: teamRows,
+      totalRows: teamRows.length,
+      notes: "展示其他模块可读取的团队主数据，不包含账号权限信息。",
+    },
+  ];
+
+  if (includeLoginSnapshot) {
+    const loginRows = people
+      .filter((person) => person.loginName)
+      .map((person) => [
+        person.name,
+        person.loginName,
+        person.authRoleLabel,
+        person.permissionLevelLabel,
+        person.canLogin ? "可登录" : "未配置密码",
+        person.status,
+      ]);
+
+    snapshots.push({
+      moduleName: "登录功能",
+      recordName: "账号数据",
+      columns: ["姓名", "登录名", "权限角色", "权限等级", "登录状态", "人员状态"],
+      rows: loginRows,
+      totalRows: loginRows.length,
+      notes: "这是用户数据模块内部登录功能读取的账号数据；不展示密码明文或密码哈希。",
+    });
+  }
+
+  return snapshots.map((snapshot) => ({
+    ...snapshot,
+    rows: snapshot.rows.slice(0, 80),
+  }));
 }
 
 async function ensureBaseUserData() {
