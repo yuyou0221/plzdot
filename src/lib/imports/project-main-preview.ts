@@ -3,7 +3,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { prisma } from "@/lib/db/prisma";
-import { suggestedLaunchDateForMonthIndex } from "@/lib/planned-launch-rules";
+import { suggestedLaunchDateForMonthIndex } from "@/lib/schedule-domain/planned-launch-rules";
 
 type ExtractedWorkbook = {
   workbook: string;

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { normalizeProjectLaunchDatesForMonths } from "@/lib/planned-launch-normalization";
-import { launchMonthKeyFromDate } from "@/lib/planned-launch-rules";
+import { normalizeProjectLaunchDatesForMonths } from "@/lib/schedule-engine/planned-launch-normalization";
+import { launchMonthKeyFromDate } from "@/lib/schedule-domain/planned-launch-rules";
 
 export const runtime = "nodejs";
 

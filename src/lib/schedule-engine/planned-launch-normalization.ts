@@ -6,7 +6,7 @@ import {
   nextLaunchMonthStart,
   parseLaunchMonthKey,
   suggestedLaunchDateForMonthIndex,
-} from "@/lib/planned-launch-rules";
+} from "@/lib/schedule-domain/planned-launch-rules";
 
 type ProjectLaunchRow = {
   id: string;
