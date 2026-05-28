@@ -243,7 +243,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
         where: { runStatus: "成功" },
         orderBy: { calculatedAt: "desc" },
       }),
-      getScheduleWorkbenchData(),
+      getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true }),
     ]);
 
     if (projects.length === 0) {

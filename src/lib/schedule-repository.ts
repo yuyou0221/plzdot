@@ -78,7 +78,15 @@ type MonthPoint = {
   month: number;
 };
 
-export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData> {
+type ScheduleWorkbenchOptions = {
+  includeTaskRows?: boolean;
+  includeProjectDetails?: boolean;
+};
+
+export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions = {}): Promise<ScheduleWorkbenchData> {
+  const includeTaskRows = options.includeTaskRows ?? true;
+  const includeProjectDetails = options.includeProjectDetails ?? true;
+
   try {
     const [projects, latestRun] = await Promise.all([
       prisma.project.findMany({ orderBy: { plannedLaunchDate: "asc" }, take: 300 }),
@@ -129,10 +137,11 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
     const { months, initialMonth } = buildMonthTimeline(projectCards);
     const calendarMonths = buildPlanningCalendarMonths();
     const calendarProjects = buildCalendarProjects(projects, resultByProjectId);
-    const scheduleTasks = buildScheduleTaskRows(taskResults, projectById, resultByProjectId);
+    const scheduleTasks = includeTaskRows ? buildScheduleTaskRows(taskResults, projectById, resultByProjectId) : [];
     const projectDetails: Record<string, ProjectDetail> = {};
 
-    for (const project of projects) {
+    if (includeProjectDetails) {
+      for (const project of projects) {
       const result = resultByProjectId.get(project.id);
       const progress = modelingByProjectId.get(project.id);
       const riskLevel = projectDisplayRiskLevel(project, result);
@@ -164,6 +173,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
             ? projectWorkTasks.slice(0, 5).map((task) => task.taskTitle)
             : ["等待生成周度任务"],
       };
+      }
     }
 
     return {
@@ -208,8 +218,13 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
 }
 
 export async function getProjectDetail(projectId: string): Promise<ProjectDetail | null> {
-  const data = await getScheduleWorkbenchData();
+  const data = await getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true });
   return data.projectDetails[projectId] ?? null;
+}
+
+export async function getScheduleTaskRows(): Promise<ScheduleTaskRow[]> {
+  const data = await getScheduleWorkbenchData({ includeTaskRows: true, includeProjectDetails: false });
+  return data.scheduleTasks;
 }
 
 export async function checkDatabaseConnection() {
