@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: `用户数据覆盖导入完成：人员新增 ${result.people.created}、更新 ${result.people.updated}、停用 ${result.deactivated.people}；团队新增 ${result.teams.created}、更新 ${result.teams.updated}、停用 ${result.deactivated.teams}；外包新增 ${result.vendors.created}、更新 ${result.vendors.updated}、停用 ${result.deactivated.vendors}。`,
+      message: `用户数据覆盖导入完成：人员新增 ${result.people.created}、更新 ${result.people.updated}、停用 ${result.deactivated.people}；权限角色新增 ${result.permissionRoles.created}、更新 ${result.permissionRoles.updated}；团队新增 ${result.teams.created}、更新 ${result.teams.updated}、停用 ${result.deactivated.teams}；外包新增 ${result.vendors.created}、更新 ${result.vendors.updated}、停用 ${result.deactivated.vendors}。`,
       result,
       outputDir: importDir,
     });

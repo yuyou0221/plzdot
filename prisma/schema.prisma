@@ -23,28 +23,29 @@ model Team {
 }
 
 model User {
-  id                   String   @id @default(uuid())
-  name                 String
-  teamId               String?
-  departmentTeamId     String?
-  projectGroupTeamId   String?
-  roleTitle            String?
-  businessRoles        Json?
-  userType             String   @default("内部")
-  loginName            String?  @unique
-  passwordHash         String?
-  authRole             String   @default("viewer")
-  mustChangePassword   Boolean  @default(false)
-  lastLoginAt          DateTime?
-  isModeler            Boolean  @default(false)
-  weeklyCapacityStyles Int?
-  weeklyAvailableWorkdays Int?
-  isSchedulable        Boolean  @default(true)
-  status               String   @default("启用")
-  contactInfo          String?
-  notes                String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                       String    @id @default(uuid())
+  name                     String
+  teamId                   String?
+  departmentTeamId         String?
+  projectGroupTeamId       String?
+  roleTitle                String?
+  businessRoles            Json?
+  userType                 String    @default("内部")
+  loginName                String?   @unique
+  passwordHash             String?
+  passwordExportCiphertext String?
+  authRole                 String    @default("viewer")
+  mustChangePassword       Boolean   @default(false)
+  lastLoginAt              DateTime?
+  isModeler                Boolean   @default(false)
+  weeklyCapacityStyles     Int?
+  weeklyAvailableWorkdays  Int?
+  isSchedulable            Boolean   @default(true)
+  status                   String    @default("启用")
+  contactInfo              String?
+  notes                    String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   @@index([teamId])
   @@index([departmentTeamId])
@@ -65,6 +66,17 @@ model ModelerCapabilityTag {
 
   @@index([userId])
   @@index([tagName])
+}
+
+model PermissionRole {
+  id        String   @id @default(uuid())
+  roleName  String   @unique
+  status    String   @default("启用")
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
 }
 
 model OutsourceVendor {

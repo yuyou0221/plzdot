@@ -3,6 +3,7 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "../src/lib/db/prisma";
+import { encryptExportablePassword } from "../src/lib/auth/password-export";
 import { hashPassword } from "../src/lib/auth/password";
 import { normalizeAuthRole } from "../src/lib/auth/permissions";
 
@@ -73,6 +74,7 @@ async function main() {
       const loginName = text(row["登录名"]);
       const initialPassword = text(row["初始密码/重置密码"]);
       const passwordHash = initialPassword ? hashPassword(initialPassword) : undefined;
+      const passwordExportCiphertext = initialPassword ? encryptExportablePassword(initialPassword) : undefined;
       const isModeler = bool(row["是否建模师"]);
       const weeklyCapacityStyles = nonNegativeInt(row["每周建模产能"]);
       const authRole = normalizeAuthRole(text(row["权限角色"]));
@@ -95,6 +97,7 @@ async function main() {
           userType: text(row["用户类型"]) || "内部",
           loginName: safeLoginName,
           passwordHash: passwordHash ?? null,
+          passwordExportCiphertext: passwordExportCiphertext ?? null,
           authRole,
           mustChangePassword: Boolean(passwordHash),
           isModeler,
@@ -109,7 +112,7 @@ async function main() {
           roleTitle: text(row["职位/角色"]),
           userType: text(row["用户类型"]) || "内部",
           loginName: safeLoginName,
-          ...(passwordHash ? { passwordHash, mustChangePassword: true } : {}),
+          ...(passwordHash ? { passwordHash, passwordExportCiphertext, mustChangePassword: true } : {}),
           authRole,
           isModeler,
           weeklyCapacityStyles,

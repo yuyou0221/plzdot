@@ -37,8 +37,14 @@ export function canEditOperations(user: Pick<AuthUser, "authRole">) {
 }
 
 export function normalizeAuthRole(value: unknown) {
-  if (value === "admin" || value === "manager" || value === "viewer") {
-    return value;
+  if (typeof value === "string") {
+    const role = value.trim();
+    const normalizedRole = role.toLowerCase();
+    if (normalizedRole === "admin" || normalizedRole === "manager" || normalizedRole === "viewer") {
+      return normalizedRole;
+    }
+
+    return role.length > 0 ? role : "viewer";
   }
 
   return "viewer";

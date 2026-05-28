@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Download,
   Edit3,
   FileSpreadsheet,
   Gauge,
@@ -114,6 +115,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const router = useRouter();
   const canManage = false;
   const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
+  const canExportPasswords = currentUser.authRole === "admin";
   const importSectionRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
@@ -131,6 +133,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [messageTone, setMessageTone] = useState<"info" | "warning">("info");
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
@@ -331,6 +334,39 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
     }
   }
 
+  async function exportUserDataExcel() {
+    if (!canExportPasswords) {
+      notify("当前账号没有权限导出密码。", "warning");
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const response = await fetch("/api/users/export-excel");
+
+      if (!response.ok) {
+        const result = await readMutationResponse(response);
+        notify(result.message ?? "用户数据导出失败。", "warning");
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `用户数据标准导出-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      notify("用户数据 Excel 已导出，包含可导出的明文密码。");
+    } catch {
+      notify("用户数据导出接口暂时不可用。", "warning");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function saveMutation({
     path,
     method,
@@ -447,6 +483,12 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 label="导入 Excel"
                 onClick={() => importSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
               />
+              <ActionButton
+                icon={<Download size={16} />}
+                label={exporting ? "导出中" : "导出 Excel"}
+                disabled={!canExportPasswords || exporting}
+                onClick={exportUserDataExcel}
+              />
               {canManage ? (
                 <>
                   <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
@@ -516,11 +558,20 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     <FileSpreadsheet size={16} />
                     {importing ? "导入中" : "导入 Excel"}
                   </button>
+                  <button
+                    type="button"
+                    disabled={exporting || !canExportPasswords}
+                    onClick={exportUserDataExcel}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Download size={16} />
+                    {exporting ? "导出中" : "导出 Excel"}
+                  </button>
                 </div>
               </div>
               <div className="mt-2 text-xs text-slate-500">
                 {canImport
-                  ? "只支持通过 Excel 更新用户数据；每次导入都会覆盖当前人员、团队和外包供应商数据。密码只用于写入哈希，不会在页面回显。"
+                  ? "只支持通过 Excel 更新用户数据；每次导入都会覆盖当前人员、团队和外包供应商数据。导入的初始/重置密码会加密保存，admin 可在导出 Excel 时带出明文。"
                   : "当前账号没有导入权限。请使用 admin 或 manager 账号导入 Excel。"}
               </div>
             </section>
@@ -1413,12 +1464,23 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
   );
 }
 
-function ActionButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+function ActionButton({
+  icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+      className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {icon}
       {label}
