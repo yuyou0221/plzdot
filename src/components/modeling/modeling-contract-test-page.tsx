@@ -101,6 +101,30 @@ type ProjectProgress = {
   projectedAllApprovedDate?: string | null;
 };
 
+type ProductGuideOutput = {
+  eventType: string;
+  targetModule: string;
+  sourceModule: string;
+  projectId: string;
+  projectName: string;
+  status: string;
+  summary: string;
+  approvedStyleCount: number;
+  totalRequiredStyles: number;
+  lastApprovedDate: string;
+  suggestedAction: string;
+  generatedAt: string;
+  generatedBy: string;
+  canCloseProductGuideModelingItem: boolean;
+  styleResults: Array<{
+    modelingTaskId: string;
+    styleCode: string;
+    styleName: string;
+    copyrightApprovedDate: string;
+    reviewRound: number;
+  }>;
+};
+
 type ApiPayload = Record<string, unknown> | null;
 
 type ScenarioId = "normal" | "task7-only" | "work-submit" | "internal-reject" | "copyright-reject" | "partial-pass";
@@ -171,6 +195,10 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
   const detailStyle = useMemo(
     () => projectStyles.find((style) => style.modelingTaskId === detailStyleId),
     [detailStyleId, projectStyles],
+  );
+  const productGuideOutput = useMemo(
+    () => buildProductGuideOutput(selectedProject, projectStyles, progress, currentUserName),
+    [currentUserName, progress, projectStyles, selectedProject],
   );
   const { seed, styles } = styleDraft;
 
@@ -411,6 +439,7 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
         steps,
         checks,
         progress: state.progress,
+        productGuideOutput: buildProductGuideOutput(fixture.project, state.styles, state.progress, currentUserName),
         styles: state.styles.map((style) => ({
           styleName: style.styleName,
           status: style.modelingStatus,
@@ -996,6 +1025,8 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
               )}
             </Panel>
 
+            <ProductGuideOutputPanel output={productGuideOutput} progress={progress} />
+
             <Panel title="接口返回">
               {errorMessage ? (
                 <div className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{errorMessage}</div>
@@ -1271,6 +1302,88 @@ function MiniProgress({ label, value }: { label: string; value: number }) {
   );
 }
 
+function ProductGuideOutputPanel({ output, progress }: { output: ProductGuideOutput | null; progress: ProjectProgress | null }) {
+  return (
+    <Panel title="给产品指引的输出">
+      {output ? (
+        <div className="space-y-3">
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-900">
+            <div className="font-semibold">{output.summary}</div>
+            <div>{output.suggestedAction}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <Metric label="输出状态" value={output.status} />
+            <Metric label="通过款式" value={`${output.approvedStyleCount}/${output.totalRequiredStyles}`} />
+            <Metric label="最后通过" value={output.lastApprovedDate || "-"} />
+            <Metric label="目标模块" value={output.targetModule} />
+          </div>
+          <pre className="max-h-[360px] overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+            {JSON.stringify(output, null, 2)}
+          </pre>
+        </div>
+      ) : (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">
+          <div>款式全部通过后，这里会生成一条模拟输出。</div>
+          <div>
+            当前状态：{progress ? `${progress.approvedStyles}/${progress.totalRequiredStyles} 款已通过，回写条件${progress.canWritebackProjectTask ? "已满足" : "未满足"}` : "暂无项目进度"}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function buildProductGuideOutput(
+  project: ModelingContractTestProject | undefined,
+  styles: ProjectStyle[],
+  progress: ProjectProgress | null,
+  generatedBy?: string | null,
+): ProductGuideOutput | null {
+  if (!project || !progress?.canWritebackProjectTask || progress.totalRequiredStyles <= 0) {
+    return null;
+  }
+
+  const requiredStyles = styles.filter((style) => style.isRequired);
+  const approvedStyles = requiredStyles.filter((style) => style.modelingStatus === "已通过");
+
+  if (requiredStyles.length === 0 || approvedStyles.length !== requiredStyles.length) {
+    return null;
+  }
+
+  const lastApprovedDate = latestDateString(
+    approvedStyles.map((style) => style.copyrightApprovedDate || style.internalApprovedDate || style.lastUpdatedAt || ""),
+  );
+  const styleResults = approvedStyles.map((style) => ({
+    modelingTaskId: style.modelingTaskId,
+    styleCode: style.styleCode || style.sourceStyleId || "",
+    styleName: style.styleName,
+    copyrightApprovedDate: style.copyrightApprovedDate || "",
+    reviewRound: style.reviewRound ?? 0,
+  }));
+
+  return {
+    eventType: "modeling.styles.allApproved",
+    targetModule: "产品组工作指引",
+    sourceModule: "建模排期",
+    projectId: project.id,
+    projectName: project.projectName,
+    status: "建模款式全部通过",
+    summary: `${project.projectName} 的 ${approvedStyles.length} 款必做建模款式已全部通过。`,
+    approvedStyleCount: approvedStyles.length,
+    totalRequiredStyles: requiredStyles.length,
+    lastApprovedDate,
+    suggestedAction: "产品组工作指引可以关闭建模验收事项，并展示建模完成事实；项目排期可接收建模完成信号。",
+    generatedAt: today(),
+    generatedBy: generatedBy || "本地测试页",
+    canCloseProductGuideModelingItem: true,
+    styleResults,
+  };
+}
+
+function latestDateString(values: string[]) {
+  return values.filter(Boolean).sort((left, right) => right.localeCompare(left))[0] ?? "";
+}
+
 function canSubmitWorkFromSimulator(style: ProjectStyle) {
   return simulatorWorkSubmittableStatuses.has(style.modelingStatus);
 }
@@ -1442,11 +1555,11 @@ function ActionButton({
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
+      <div className="mt-1 min-w-0 truncate text-lg font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
