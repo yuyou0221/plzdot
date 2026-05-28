@@ -121,6 +121,13 @@ const reviewActions = [
   { label: "送审不通过", value: "送审不通过", icon: RotateCcw },
 ] as const;
 
+type ReviewActionValue = (typeof reviewActions)[number]["value"];
+
+const internalReviewResults = new Set<ReviewActionValue>(["内部通过可送审", "内部不通过"]);
+const copyrightReviewResults = new Set<ReviewActionValue>(["送审通过", "送审不通过"]);
+const copyrightFeedbackStatuses = new Set(["待送审", "已送审", "等反馈"]);
+const simulatorWorkSubmittableStatuses = new Set(["未分配", "已排期", "建模中", "修改中", "外包中"]);
+
 const scenarioOptions: Array<{ id: ScenarioId; label: string; description: string }> = [
   { id: "normal", label: "完整通过", description: "全部款式完成内部通过和版权方通过" },
   { id: "task7-only", label: "只启动任务 7", description: "第一款进入未分配，其余款保持未启动" },
@@ -175,6 +182,14 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
       ...current,
       styles: current.styles.map((style, styleIndex) => (styleIndex === index ? { ...style, ...patch } : style)),
     }));
+  }
+
+  function selectStyleForFeedback(style: ProjectStyle) {
+    setSelectedModelingTaskId(style.modelingTaskId);
+
+    if (!feedbackContent.trim() || feedbackContent === "本地接口测试反馈") {
+      setFeedbackContent(buildFeedbackDraft(style));
+    }
   }
 
   async function createSimulatedProject() {
@@ -251,27 +266,45 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
     });
   }
 
-  async function submitReviewResult(reviewResult: (typeof reviewActions)[number]["value"]) {
-    if (!selectedProject || !selectedModelingTaskId) return;
+  async function submitReviewResult(reviewResult: ReviewActionValue) {
+    if (!selectedProject || !selectedStyle) return;
+
+    if (!canSubmitReviewAction(selectedStyle, reviewResult)) {
+      setErrorMessage(buildReviewActionDisabledReason(selectedStyle, reviewResult));
+      return;
+    }
 
     await runAction(reviewResult, async () => {
-      const data = await reviewStyle(selectedProject, selectedModelingTaskId, reviewResult, feedbackContent);
-      const state = await loadProjectState(selectedProject.id, selectedModelingTaskId);
+      const content = feedbackContent.trim() || buildDefaultReviewContent(selectedStyle, reviewResult);
+      const data = await reviewStyle(selectedProject, selectedStyle.modelingTaskId, reviewResult, content);
+      const state = await loadProjectState(selectedProject.id, selectedStyle.modelingTaskId);
       return { ok: true, reviewResult: data, progress: state.progress };
     });
   }
 
   async function submitSelectedWork() {
-    if (!selectedProject || !selectedModelingTaskId) return;
+    if (!selectedProject || !selectedStyle) return;
 
     await runAction("提交成果", async () => {
+      if (selectedStyle.modelingStatus === "未启动") {
+        throw new Error("这款还没有被任务 7/10 启动，请先点击启动任务。");
+      }
+
+      if (!canSubmitWorkFromSimulator(selectedStyle)) {
+        throw new Error(`当前状态是 ${selectedStyle.modelingStatus}，不能重复提交成果。`);
+      }
+
+      if (selectedStyle.modelingStatus !== "建模中") {
+        await markStyleModeling(selectedStyle.modelingTaskId);
+      }
+
       const data = await submitWork(
         selectedProject,
-        selectedModelingTaskId,
-        feedbackContent || "本地模拟：建模师提交成果，等待产品美术验收",
-        `https://example.local/modeling/${seed}/${selectedModelingTaskId}`,
+        selectedStyle.modelingTaskId,
+        feedbackContent.trim() || "本地模拟：建模师提交成果，等待产品美术验收",
+        `https://example.local/modeling/${seed}/${selectedStyle.modelingTaskId}`,
       );
-      const state = await loadProjectState(selectedProject.id, selectedModelingTaskId);
+      const state = await loadProjectState(selectedProject.id, selectedStyle.modelingTaskId);
       return { ok: true, submitResult: data, progress: state.progress };
     });
   }
@@ -760,7 +793,7 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
           </div>
 
           <div className="flex flex-col gap-4">
-            <Panel title="启动与审核">
+            <Panel title="启动与产品反馈">
               <div className="grid gap-3 sm:grid-cols-2">
                 <ActionButton disabled={!selectedProject} loading={loadingAction === "启动任务 7"} onClick={() => startStyles(7)}>
                   <Play className="h-4 w-4" />
@@ -776,9 +809,9 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                 </ActionButton>
               </div>
 
-              <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)]">
+              <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
                 <label className="block text-xs font-medium text-slate-500">
-                  审核对象
+                  反馈对象
                   <select
                     className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-500"
                     onChange={(event) => setSelectedModelingTaskId(event.target.value)}
@@ -792,12 +825,16 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                     ))}
                   </select>
                 </label>
-                <LabeledInput label="反馈内容" onChange={setFeedbackContent} value={feedbackContent} />
+                <LabeledTextarea label="反馈内容" onChange={setFeedbackContent} value={feedbackContent} />
               </div>
 
               {selectedStyle ? (
-                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                  当前选择：{selectedStyle.styleName}，状态 {selectedStyle.modelingStatus}
+                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
+                  <div>
+                    当前选择：<span className="font-medium text-slate-900">{selectedStyle.styleName}</span>，状态 {selectedStyle.modelingStatus}
+                  </div>
+                  <div>{buildFeedbackHint(selectedStyle)}</div>
+                  {selectedStyle.latestFeedbackSummary ? <div className="truncate">最新反馈：{selectedStyle.latestFeedbackSummary}</div> : null}
                 </div>
               ) : null}
 
@@ -807,7 +844,7 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
 
                   return (
                     <ActionButton
-                      disabled={!selectedModelingTaskId}
+                      disabled={!canSubmitReviewAction(selectedStyle, action.value)}
                       key={action.value}
                       loading={loadingAction === action.value}
                       onClick={() => submitReviewResult(action.value)}
@@ -825,12 +862,13 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                 <table className="w-full table-fixed border-collapse text-left text-sm">
                   <thead className="bg-slate-100 text-xs text-slate-500">
                     <tr>
-                      <th className="w-[26%] px-3 py-2 font-medium">款式</th>
-                      <th className="w-[16%] px-3 py-2 font-medium">来源</th>
-                      <th className="w-[16%] px-3 py-2 font-medium">状态</th>
-                      <th className="w-[14%] px-3 py-2 font-medium">任务</th>
-                      <th className="w-[14%] px-3 py-2 font-medium">内部通过</th>
-                      <th className="w-[14%] px-3 py-2 font-medium">版权通过</th>
+                      <th className="w-[22%] px-3 py-2 font-medium">款式</th>
+                      <th className="w-[12%] px-3 py-2 font-medium">来源</th>
+                      <th className="w-[13%] px-3 py-2 font-medium">状态</th>
+                      <th className="w-[11%] px-3 py-2 font-medium">任务</th>
+                      <th className="w-[18%] px-3 py-2 font-medium">最新反馈</th>
+                      <th className="w-[12%] px-3 py-2 font-medium">版权通过</th>
+                      <th className="w-[12%] px-3 py-2 font-medium">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -850,13 +888,28 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                             <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{style.modelingStatus}</span>
                           </td>
                           <td className="px-3 py-2 text-slate-600">{style.taskNo ? `任务 ${style.taskNo}` : "-"}</td>
-                          <td className="px-3 py-2 text-slate-600">{style.internalApprovedDate || "-"}</td>
+                          <td className="px-3 py-2 text-xs text-slate-600">
+                            <div className="truncate">{style.latestFeedbackSummary || style.internalApprovedDate || "-"}</div>
+                          </td>
                           <td className="px-3 py-2 text-slate-600">{style.copyrightApprovedDate || "-"}</td>
+                          <td className="px-3 py-2">
+                            <button
+                              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!canSelectForFeedback(style)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                selectStyleForFeedback(style);
+                              }}
+                              type="button"
+                            >
+                              反馈
+                            </button>
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td className="px-3 py-8 text-center text-slate-500" colSpan={6}>
+                        <td className="px-3 py-8 text-center text-slate-500" colSpan={7}>
                           暂无款式，先生成测试项目或提交款式清单。
                         </td>
                       </tr>
@@ -974,6 +1027,80 @@ function buildCheck(label: string, expected: string, actual: string, passed: boo
   return { label, expected, actual, passed };
 }
 
+function canSubmitWorkFromSimulator(style: ProjectStyle) {
+  return simulatorWorkSubmittableStatuses.has(style.modelingStatus);
+}
+
+function canSelectForFeedback(style: ProjectStyle) {
+  return style.modelingStatus === "待验收" || copyrightFeedbackStatuses.has(style.modelingStatus);
+}
+
+function canSubmitReviewAction(style: ProjectStyle | undefined, reviewResult: ReviewActionValue) {
+  if (!style) return false;
+
+  if (internalReviewResults.has(reviewResult)) {
+    return style.modelingStatus === "待验收";
+  }
+
+  if (copyrightReviewResults.has(reviewResult)) {
+    return copyrightFeedbackStatuses.has(style.modelingStatus);
+  }
+
+  return false;
+}
+
+function buildFeedbackDraft(style: ProjectStyle) {
+  if (style.modelingStatus === "待验收") {
+    return `${style.styleName} 内部检修反馈：`;
+  }
+
+  if (copyrightFeedbackStatuses.has(style.modelingStatus)) {
+    return `${style.styleName} 版权方反馈：`;
+  }
+
+  return `${style.styleName} 反馈：`;
+}
+
+function buildDefaultReviewContent(style: ProjectStyle, reviewResult: ReviewActionValue) {
+  if (reviewResult === "内部通过可送审") {
+    return `${style.styleName} 内部检修通过，可以送审。`;
+  }
+
+  if (reviewResult === "内部不通过") {
+    return `${style.styleName} 内部检修不通过，需要建模师修改。`;
+  }
+
+  if (reviewResult === "送审通过") {
+    return `${style.styleName} 版权方送审通过。`;
+  }
+
+  return `${style.styleName} 版权方送审不通过，需要修改。`;
+}
+
+function buildReviewActionDisabledReason(style: ProjectStyle, reviewResult: ReviewActionValue) {
+  if (internalReviewResults.has(reviewResult)) {
+    return `只有“待验收”的款式可以提交内部反馈。当前状态是 ${style.modelingStatus}。`;
+  }
+
+  return `只有“待送审 / 已送审 / 等反馈”的款式可以提交版权反馈。当前状态是 ${style.modelingStatus}。`;
+}
+
+function buildFeedbackHint(style: ProjectStyle) {
+  if (style.modelingStatus === "待验收") {
+    return "这款已经提交成果，可以填写产品美术反馈，并选择内部通过或内部不通过。";
+  }
+
+  if (copyrightFeedbackStatuses.has(style.modelingStatus)) {
+    return "这款处在送审阶段，可以记录版权通过或版权驳回。";
+  }
+
+  if (style.modelingStatus === "修改中") {
+    return "这款已经退回修改，需等建模师重新提交成果后再反馈。";
+  }
+
+  return "这款还没有进入可反馈状态。";
+}
+
 function Panel({
   action,
   children,
@@ -1027,6 +1154,27 @@ function LabeledInput({
   );
 }
 
+function LabeledTextarea({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="block text-xs font-medium text-slate-500">
+      {label}
+      <textarea
+        className="mt-1 min-h-[96px] w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-2 text-sm leading-5 text-slate-900 outline-none focus:border-slate-500"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      />
+    </label>
+  );
+}
+
 function ActionButton({
   children,
   disabled = false,
@@ -1040,7 +1188,7 @@ function ActionButton({
 }) {
   return (
     <button
-      className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex min-h-10 w-full min-w-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-center text-sm font-medium leading-5 text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={disabled || loading}
       onClick={onClick}
       type="button"

@@ -417,7 +417,7 @@ export async function getProjectModelingStyles(projectId: string) {
     tasks.length > 0
       ? await prisma.modelingFeedback.findMany({
           where: { modelingTaskId: { in: tasks.map((task) => task.id) } },
-          orderBy: [{ feedbackAt: "desc" }],
+          orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
           select: { modelingTaskId: true, roundNo: true, feedbackAt: true, content: true, status: true },
         })
       : [];

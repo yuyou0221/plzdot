@@ -225,7 +225,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
       realTasks.length > 0
         ? prisma.modelingFeedback.findMany({
             where: { modelingTaskId: { in: realTasks.map((task) => task.id) } },
-            orderBy: [{ feedbackAt: "desc" }],
+            orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
             take: 800,
             select: {
               modelingTaskId: true,
