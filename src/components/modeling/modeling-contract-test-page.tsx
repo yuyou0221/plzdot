@@ -6,13 +6,16 @@ import { useMemo, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
+  ClipboardList,
   Database,
+  Maximize2,
   Play,
   RefreshCw,
   RotateCcw,
   Send,
   ShieldCheck,
   Trash2,
+  X,
 } from "lucide-react";
 
 export type ModelingContractTestProject = {
@@ -154,6 +157,7 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
   const [scenarioChecks, setScenarioChecks] = useState<ScenarioCheck[]>([]);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [detailStyleId, setDetailStyleId] = useState("");
 
   const selectedProject = useMemo(
     () => projectOptions.find((project) => project.id === selectedProjectId) ?? projectOptions[0],
@@ -163,6 +167,10 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
   const selectedStyle = useMemo(
     () => projectStyles.find((style) => style.modelingTaskId === selectedModelingTaskId),
     [projectStyles, selectedModelingTaskId],
+  );
+  const detailStyle = useMemo(
+    () => projectStyles.find((style) => style.modelingTaskId === detailStyleId),
+    [detailStyleId, projectStyles],
   );
   const { seed, styles } = styleDraft;
 
@@ -190,6 +198,11 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
     if (!feedbackContent.trim() || feedbackContent === "本地接口测试反馈") {
       setFeedbackContent(buildFeedbackDraft(style));
     }
+  }
+
+  function openStyleDetail(style: ProjectStyle) {
+    selectStyleForFeedback(style);
+    setDetailStyleId(style.modelingTaskId);
   }
 
   async function createSimulatedProject() {
@@ -656,6 +669,24 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
           ) : null}
         </Panel>
 
+        {detailStyle ? (
+          <StyleDetailOverlay
+            feedbackContent={feedbackContent}
+            loadingAction={loadingAction}
+            onClose={() => setDetailStyleId("")}
+            onFeedbackChange={setFeedbackContent}
+            onReview={submitReviewResult}
+            onSelectStyle={(style) => {
+              selectStyleForFeedback(style);
+              setDetailStyleId(style.modelingTaskId);
+            }}
+            onSubmitWork={submitSelectedWork}
+            progress={progress}
+            selectedStyle={detailStyle}
+            styles={projectStyles}
+          />
+        ) : null}
+
         <section className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)_360px]">
           <div className="flex flex-col gap-4">
             <Panel title="测试项目">
@@ -866,9 +897,9 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                       <th className="w-[12%] px-3 py-2 font-medium">来源</th>
                       <th className="w-[13%] px-3 py-2 font-medium">状态</th>
                       <th className="w-[11%] px-3 py-2 font-medium">任务</th>
-                      <th className="w-[18%] px-3 py-2 font-medium">最新反馈</th>
-                      <th className="w-[12%] px-3 py-2 font-medium">版权通过</th>
-                      <th className="w-[12%] px-3 py-2 font-medium">操作</th>
+                      <th className="w-[17%] px-3 py-2 font-medium">最新反馈</th>
+                      <th className="w-[11%] px-3 py-2 font-medium">版权通过</th>
+                      <th className="w-[14%] px-3 py-2 font-medium">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -893,17 +924,30 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                           </td>
                           <td className="px-3 py-2 text-slate-600">{style.copyrightApprovedDate || "-"}</td>
                           <td className="px-3 py-2">
-                            <button
-                              className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                              disabled={!canSelectForFeedback(style)}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                selectStyleForFeedback(style);
-                              }}
-                              type="button"
-                            >
-                              反馈
-                            </button>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openStyleDetail(style);
+                                }}
+                                type="button"
+                              >
+                                <Maximize2 className="h-3.5 w-3.5" />
+                                详情
+                              </button>
+                              <button
+                                className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!canSelectForFeedback(style)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  selectStyleForFeedback(style);
+                                }}
+                                type="button"
+                              >
+                                反馈
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1025,6 +1069,206 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
 
 function buildCheck(label: string, expected: string, actual: string, passed: boolean): ScenarioCheck {
   return { label, expected, actual, passed };
+}
+
+function StyleDetailOverlay({
+  feedbackContent,
+  loadingAction,
+  onClose,
+  onFeedbackChange,
+  onReview,
+  onSelectStyle,
+  onSubmitWork,
+  progress,
+  selectedStyle,
+  styles,
+}: {
+  feedbackContent: string;
+  loadingAction: string | null;
+  onClose: () => void;
+  onFeedbackChange: (value: string) => void;
+  onReview: (reviewResult: ReviewActionValue) => void | Promise<void>;
+  onSelectStyle: (style: ProjectStyle) => void;
+  onSubmitWork: () => void | Promise<void>;
+  progress: ProjectProgress | null;
+  selectedStyle: ProjectStyle;
+  styles: ProjectStyle[];
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/55 p-3 backdrop-blur-sm sm:p-5">
+      <section className="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden rounded-lg bg-slate-50 shadow-2xl">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <ClipboardList className="h-5 w-5 text-slate-500" />
+              <h2 className="truncate text-lg font-semibold text-slate-950">{selectedStyle.styleName}</h2>
+              <StatusBadge status={selectedStyle.modelingStatus} />
+            </div>
+            <div className="mt-1 truncate text-sm text-slate-500">{selectedStyle.styleCode || selectedStyle.sourceStyleId || selectedStyle.modelingTaskId}</div>
+          </div>
+          <button
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+            onClick={onClose}
+            title="关闭详情"
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="grid min-h-0 min-w-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="min-h-0 overflow-auto border-b border-slate-200 bg-white p-4 lg:border-b-0 lg:border-r">
+            <div className="mb-3 text-sm font-semibold text-slate-900">款式看板</div>
+            <div className="space-y-2">
+              {styles.map((style) => (
+                <button
+                  className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
+                    style.modelingTaskId === selectedStyle.modelingTaskId
+                      ? "border-sky-200 bg-sky-50 text-sky-950"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                  key={style.modelingTaskId}
+                  onClick={() => onSelectStyle(style)}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium">{style.styleName}</span>
+                    <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{style.isFirstModelingStyle ? "任务 7" : "任务 10"}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-slate-500">{style.styleCode || style.sourceStyleId || "-"}</span>
+                    <span className="shrink-0 text-slate-600">{style.modelingStatus}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <div className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4">
+            <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="min-w-0 space-y-4">
+                <section className="rounded-lg border border-slate-200 bg-white p-4">
+                  <div className="mb-3 text-sm font-semibold text-slate-900">款式详情</div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <StyleInfoItem label="来源" value={selectedStyle.isFirstModelingStyle ? "第一款" : "其余款"} />
+                    <StyleInfoItem label="任务" value={selectedStyle.taskNo ? `任务 ${selectedStyle.taskNo}` : "-"} />
+                    <StyleInfoItem label="难度" value={selectedStyle.difficulty || "-"} />
+                    <StyleInfoItem label="预计天数" value={selectedStyle.estimatedWorkdays ? `${selectedStyle.estimatedWorkdays} 天` : "-"} />
+                    <StyleInfoItem label="建模师" value={selectedStyle.modelerName || "-"} />
+                    <StyleInfoItem label="外包" value={selectedStyle.isOutsourced ? selectedStyle.outsourceVendorName || "已外包" : "否"} />
+                    <StyleInfoItem label="内部通过" value={selectedStyle.internalApprovedDate || "-"} />
+                    <StyleInfoItem label="版权通过" value={selectedStyle.copyrightApprovedDate || "-"} />
+                    <StyleInfoItem label="修改轮次" value={String(selectedStyle.reviewRound ?? 0)} />
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4">
+                  <div className="mb-3 text-sm font-semibold text-slate-900">当前处理</div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">{buildFeedbackHint(selectedStyle)}</div>
+                  {selectedStyle.latestFeedbackSummary ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">
+                      最新反馈：{selectedStyle.latestFeedbackSummary}
+                    </div>
+                  ) : null}
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <ActionButton disabled={!canSubmitWorkFromSimulator(selectedStyle)} loading={loadingAction === "提交成果"} onClick={onSubmitWork}>
+                      <Send className="h-4 w-4" />
+                      提交成果
+                    </ActionButton>
+                    {reviewActions.map((action) => {
+                      const Icon = action.icon;
+
+                      return (
+                        <ActionButton
+                          disabled={!canSubmitReviewAction(selectedStyle, action.value)}
+                          key={action.value}
+                          loading={loadingAction === action.value}
+                          onClick={() => onReview(action.value)}
+                        >
+                          <Icon className="h-4 w-4" />
+                          {action.label}
+                        </ActionButton>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4">
+                  <LabeledTextarea label="反馈内容" onChange={onFeedbackChange} value={feedbackContent} />
+                </section>
+              </div>
+
+              <aside className="space-y-4">
+                <section className="rounded-lg border border-slate-200 bg-white p-4">
+                  <div className="mb-3 text-sm font-semibold text-slate-900">项目进度</div>
+                  {progress ? (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="mb-2 flex items-center justify-between text-sm">
+                          <span className="text-slate-600">完成进度</span>
+                          <span className="font-medium text-slate-900">{progress.progressPercent}%</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress.progressPercent}%` }} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <MiniProgress label="必做" value={progress.totalRequiredStyles} />
+                        <MiniProgress label="已通过" value={progress.approvedStyles} />
+                        <MiniProgress label="待验收/送审" value={progress.submittedStyles} />
+                        <MiniProgress label="未分配" value={progress.unassignedStyles} />
+                        <MiniProgress label="进行中" value={progress.inProgressStyles} />
+                        <MiniProgress label="未启动" value={progress.unstartedStyles} />
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        回写条件：{progress.canWritebackProjectTask ? "已满足" : "未满足"}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-500">暂无进度数据。</div>
+                  )}
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4">
+                  <div className="mb-3 text-sm font-semibold text-slate-900">状态流转</div>
+                  <div className="space-y-2 text-sm text-slate-600">
+                    {["未启动", "未分配", "建模中", "待验收", "待送审", "已通过"].map((status) => (
+                      <div className="flex items-center gap-2" key={status}>
+                        <span className={`h-2.5 w-2.5 rounded-full ${selectedStyle.modelingStatus === status ? "bg-sky-500" : "bg-slate-200"}`} />
+                        <span className={selectedStyle.modelingStatus === status ? "font-medium text-slate-900" : ""}>{status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{status}</span>;
+}
+
+function StyleInfoItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 min-w-0 truncate text-sm font-medium text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function MiniProgress({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
+    </div>
+  );
 }
 
 function canSubmitWorkFromSimulator(style: ProjectStyle) {
