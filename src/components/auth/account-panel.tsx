@@ -1,13 +1,15 @@
 "use client";
 
 import { UserCircle } from "lucide-react";
+import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { authRoleLabels, type AuthUser } from "@/lib/auth/permissions";
 
-type AccountPanelUser = Pick<AuthUser, "name" | "loginName" | "authRole">;
+type AccountPanelUser = Pick<AuthUser, "id" | "name" | "loginName" | "authRole">;
 
 export function AccountPanel({ currentUser }: { currentUser: AccountPanelUser }) {
   const roleLabel = authRoleLabels[currentUser.authRole] ?? currentUser.authRole;
+  const canManageOwnAccount = currentUser.id !== "auth-disabled";
 
   return (
     <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -34,7 +36,8 @@ export function AccountPanel({ currentUser }: { currentUser: AccountPanelUser })
           <span className="font-medium text-slate-700">{roleLabel}</span>
         </div>
       </div>
-      <LogoutButton />
+      <ChangePasswordForm isAvailable={canManageOwnAccount} />
+      <LogoutButton isAvailable={canManageOwnAccount} />
     </div>
   );
 }
