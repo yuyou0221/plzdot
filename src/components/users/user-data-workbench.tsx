@@ -172,6 +172,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [exporting, setExporting] = useState(false);
   const [deletingPersonId, setDeletingPersonId] = useState<string | null>(null);
   const [fieldPolicyOpen, setFieldPolicyOpen] = useState(false);
+  const [activeSnapshotModule, setActiveSnapshotModule] = useState(data.moduleReadSnapshots[0]?.moduleName ?? "");
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
@@ -777,6 +778,10 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   );
 
   function renderFieldPolicyPanel() {
+    const activeSnapshot =
+      data.moduleReadSnapshots.find((snapshot) => snapshot.moduleName === activeSnapshotModule) ??
+      data.moduleReadSnapshots[0];
+
     return (
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -841,6 +846,77 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">模块读取实际数据</div>
+              <div className="mt-1 text-xs text-slate-500">
+                这里展示当前数据库按约定提供给各模块读取的实际行和字段。
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {data.moduleReadSnapshots.map((snapshot) => (
+                <button
+                  key={snapshot.moduleName}
+                  type="button"
+                  onClick={() => setActiveSnapshotModule(snapshot.moduleName)}
+                  className={clsx(
+                    "h-8 rounded-md px-3 text-xs font-semibold",
+                    activeSnapshot?.moduleName === snapshot.moduleName
+                      ? "bg-slate-900 text-white"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100",
+                  )}
+                >
+                  {snapshot.moduleName}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {activeSnapshot ? (
+            <div className="mt-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <span>
+                  {activeSnapshot.recordName} · 共 {activeSnapshot.totalRows} 条
+                  {activeSnapshot.totalRows > activeSnapshot.rows.length ? `，当前显示前 ${activeSnapshot.rows.length} 条` : ""}
+                </span>
+                <span>{activeSnapshot.notes}</span>
+              </div>
+              <div className="overflow-x-auto border border-slate-200 bg-white">
+                <table className="w-full min-w-[920px] text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+                    <tr>
+                      {activeSnapshot.columns.map((column) => (
+                        <th key={column} className="px-3 py-2">
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {activeSnapshot.rows.map((row, rowIndex) => (
+                      <tr key={`${activeSnapshot.moduleName}-${rowIndex}`}>
+                        {row.map((value, columnIndex) => (
+                          <td key={`${activeSnapshot.moduleName}-${rowIndex}-${columnIndex}`} className="px-3 py-3 text-slate-700">
+                            {value || "-"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {activeSnapshot.rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={activeSnapshot.columns.length} className="px-3 py-8 text-center text-sm text-slate-400">
+                          暂无可读取数据
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </div>
       </section>
     );

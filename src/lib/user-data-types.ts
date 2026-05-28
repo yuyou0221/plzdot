@@ -98,12 +98,22 @@ export type UserDataModuleReadModel = {
   notes: string;
 };
 
+export type UserDataModuleReadSnapshot = {
+  moduleName: string;
+  recordName: string;
+  columns: string[];
+  rows: string[][];
+  totalRows: number;
+  notes: string;
+};
+
 export type UserDataWorkbenchData = {
   sourceLabel: string;
   generatedAt: string;
   viewer: UserDataViewerPolicy;
   fieldVisibility: UserDataFieldVisibility[];
   moduleReadModels: UserDataModuleReadModel[];
+  moduleReadSnapshots: UserDataModuleReadSnapshot[];
   metrics: UserDataMetric[];
   people: UserDataPerson[];
   teams: UserDataTeam[];

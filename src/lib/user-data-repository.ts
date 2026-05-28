@@ -12,6 +12,7 @@ import {
 import type {
   UserDataPerson,
   UserDataTeam,
+  UserAvailabilityBlock,
   UserDataVendor,
   UserDataWorkbenchData,
   UserDataViewerPolicy,
@@ -196,6 +197,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       viewer,
       fieldVisibility: buildFieldVisibilityRows(),
       moduleReadModels: buildModuleReadModels(),
+      moduleReadSnapshots: buildModuleReadSnapshots(people, teams, vendors, availabilityBlocks, viewer.canSeeSensitiveUserFields),
       metrics: buildMetrics(people, teams, vendors),
       people: people.map((person) => maskPersonForViewer(person, viewer.canSeeSensitiveUserFields)),
       teams,
@@ -221,6 +223,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       viewer: buildViewerPolicy(currentUser),
       fieldVisibility: buildFieldVisibilityRows(),
       moduleReadModels: buildModuleReadModels(),
+      moduleReadSnapshots: buildModuleReadSnapshots([], teams, [], [], buildViewerPolicy(currentUser).canSeeSensitiveUserFields),
       metrics: buildMetrics([], teams, []),
       people: [],
       teams,
@@ -307,6 +310,143 @@ function buildModuleReadModels() {
       notes: "登录是用户数据模块唯一主动功能；其他模块访问判断仍由各模块自行决定。",
     },
   ];
+}
+
+function buildModuleReadSnapshots(
+  people: UserDataPerson[],
+  teams: UserDataTeam[],
+  vendors: UserDataVendor[],
+  availabilityBlocks: UserAvailabilityBlock[],
+  includeLoginSnapshot: boolean,
+) {
+  const activePeople = people.filter((person) => person.status !== "停用");
+  const productTeamIds = new Set(
+    teams.filter((team) => team.status !== "停用" && (team.teamType === "产品" || team.name.includes("产品"))).map((team) => team.id),
+  );
+  const availabilityCountByUserId = new Map<string, number>();
+
+  for (const block of availabilityBlocks) {
+    availabilityCountByUserId.set(block.userId, (availabilityCountByUserId.get(block.userId) ?? 0) + 1);
+  }
+
+  const productGuideRows = activePeople
+    .filter((person) => {
+      const roleText = [person.roleTitle, ...person.businessRoles].join(" ");
+      return (
+        roleText.includes("产品") ||
+        roleText.includes("总监") ||
+        (person.departmentTeamId ? productTeamIds.has(person.departmentTeamId) : false) ||
+        (person.projectGroupTeamId ? productTeamIds.has(person.projectGroupTeamId) : false)
+      );
+    })
+    .map((person) => [
+      person.name,
+      person.departmentTeamName,
+      person.projectGroupTeamName,
+      person.roleTitle,
+      person.userType,
+      person.status,
+    ]);
+
+  const modelingRows = [
+    ...activePeople
+      .filter((person) => person.isModeler)
+      .map((person) => [
+        "建模师",
+        person.name,
+        person.departmentTeamName,
+        person.projectGroupTeamName,
+        person.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "未填写",
+        person.isSchedulable ? "可排期" : "不可排期",
+        String(availabilityCountByUserId.get(person.id) ?? 0),
+      ]),
+    ...vendors
+      .filter((vendor) => vendor.status !== "停用" && vendor.stableCapacity)
+      .map((vendor) => [
+        "稳定外包",
+        vendor.name,
+        vendor.vendorType,
+        "-",
+        "-",
+        vendor.stableCapacity ? "稳定产能" : "非稳定",
+        "-",
+      ]),
+  ];
+
+  const projectScheduleRows = activePeople.map((person) => [
+    person.name,
+    person.departmentTeamName,
+    person.projectGroupTeamName,
+    person.roleTitle,
+    person.userType,
+    person.status,
+  ]);
+
+  const teamRows = teams
+    .filter((team) => team.status !== "停用")
+    .map((team) => [team.name, team.teamType, team.parentTeamName, team.leaderName, team.status]);
+
+  const snapshots = [
+    {
+      moduleName: "产品组工作指引",
+      recordName: "产品相关人员",
+      columns: ["姓名", "公司部门", "项目小组", "岗位 / 业务角色", "内部 / 外包", "状态"],
+      rows: productGuideRows,
+      totalRows: productGuideRows.length,
+      notes: "按产品相关团队、项目小组和岗位筛出；只展示任务归属需要的人员主数据。",
+    },
+    {
+      moduleName: "建模排期",
+      recordName: "建模师与稳定外包",
+      columns: ["类型", "名称", "部门 / 供应商类型", "项目小组", "每周可用工作日", "排期状态", "不可排期记录数"],
+      rows: modelingRows,
+      totalRows: modelingRows.length,
+      notes: "展示建模排期可读取的建模师产能、可排期状态和稳定外包供应商。",
+    },
+    {
+      moduleName: "项目排期",
+      recordName: "项目人员候选数据",
+      columns: ["姓名", "公司部门", "项目小组", "岗位 / 业务角色", "内部 / 外包", "状态"],
+      rows: projectScheduleRows,
+      totalRows: projectScheduleRows.length,
+      notes: "展示项目排期可读取的负责人、产品研发、产品研发美术等候选人员基础数据。",
+    },
+    {
+      moduleName: "团队结构",
+      recordName: "启用团队",
+      columns: ["团队名称", "团队类型", "上级团队", "负责人", "状态"],
+      rows: teamRows,
+      totalRows: teamRows.length,
+      notes: "展示其他模块可读取的团队主数据，不包含账号权限信息。",
+    },
+  ];
+
+  if (includeLoginSnapshot) {
+    const loginRows = people
+      .filter((person) => person.loginName)
+      .map((person) => [
+        person.name,
+        person.loginName,
+        person.authRoleLabel,
+        person.permissionLevelLabel,
+        person.canLogin ? "可登录" : "未配置密码",
+        person.status,
+      ]);
+
+    snapshots.push({
+      moduleName: "登录功能",
+      recordName: "账号数据",
+      columns: ["姓名", "登录名", "权限角色", "权限等级", "登录状态", "人员状态"],
+      rows: loginRows,
+      totalRows: loginRows.length,
+      notes: "这是用户数据模块内部登录功能读取的账号数据；不展示密码明文或密码哈希。",
+    });
+  }
+
+  return snapshots.map((snapshot) => ({
+    ...snapshot,
+    rows: snapshot.rows.slice(0, 80),
+  }));
 }
 
 async function ensureBaseUserData() {
