@@ -18,6 +18,7 @@ import {
   Plus,
   Save,
   Search,
+  Trash2,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -143,6 +144,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const canManage = false;
   const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
   const canExportPasswords = currentUser.authRole === "admin";
+  const canDeleteDisabledUsers = currentUser.authRole === "admin";
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
@@ -163,6 +165,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deletingPersonId, setDeletingPersonId] = useState<string | null>(null);
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
@@ -448,6 +451,39 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       notify("用户数据导出接口暂时不可用。", "warning");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function deleteDisabledPerson(person: UserDataPerson) {
+    if (!canDeleteDisabledUsers) {
+      notify("当前账号没有权限删除停用账号。", "warning");
+      return;
+    }
+    if (person.status !== "停用") {
+      notify("只能删除停用状态的账号。", "warning");
+      return;
+    }
+    if (!window.confirm(`确认删除停用账号「${person.name}」？删除后只能通过重新导入 Excel 恢复。`)) {
+      return;
+    }
+
+    setDeletingPersonId(person.id);
+    try {
+      const response = await fetch(`/api/users/people/${person.id}`, { method: "DELETE" });
+      const result = await readMutationResponse(response);
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "删除失败。", "warning");
+        return;
+      }
+
+      setSelectedPersonId(data.people.find((item) => item.id !== person.id)?.id ?? "");
+      notify(result.message ?? "已删除停用账号。");
+      router.refresh();
+    } catch {
+      notify("删除接口暂时不可用。", "warning");
+    } finally {
+      setDeletingPersonId(null);
     }
   }
 
@@ -826,19 +862,35 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     </td>
                     <td className="max-w-[220px] truncate px-3 py-3 text-slate-500">{person.notes || "-"}</td>
                     <td className="px-3 py-3 text-right">
-                      {canManage ? (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPersonDraft(personDraftFromPerson(person));
-                          }}
-                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          <Edit3 size={14} />
-                          编辑
-                        </button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPersonDraft(personDraftFromPerson(person));
+                            }}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            <Edit3 size={14} />
+                            编辑
+                          </button>
+                        ) : null}
+                        {canDeleteDisabledUsers && person.status === "停用" ? (
+                          <button
+                            type="button"
+                            disabled={deletingPersonId === person.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteDisabledPerson(person);
+                            }}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-rose-200 bg-white px-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Trash2 size={14} />
+                            {deletingPersonId === person.id ? "删除中" : "删除"}
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -910,6 +962,17 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               <ActionButton icon={<Edit3 size={16} />} label="编辑人员" onClick={() => setPersonDraft(personDraftFromPerson(selectedPerson))} />
               <ActionButton icon={<Gauge size={16} />} label="维护排期参数" onClick={() => openCapabilityEditor(selectedPerson)} />
             </>
+          ) : null}
+          {canDeleteDisabledUsers && selectedPerson.status === "停用" ? (
+            <button
+              type="button"
+              disabled={deletingPersonId === selectedPerson.id}
+              onClick={() => void deleteDisabledPerson(selectedPerson)}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={16} />
+              {deletingPersonId === selectedPerson.id ? "删除中" : "删除停用账号"}
+            </button>
           ) : null}
         </div>
       </section>
