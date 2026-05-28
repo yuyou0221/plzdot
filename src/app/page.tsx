@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const currentUser = await requireCurrentUser("/");
-  const data = await getScheduleWorkbenchData();
+  const data = await getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: false });
 
   return <ScheduleWorkbench currentUser={currentUser} data={data} />;
 }
