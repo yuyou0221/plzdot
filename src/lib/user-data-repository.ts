@@ -1,12 +1,20 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
-import { authRoleLabels } from "@/lib/auth/permissions";
+import {
+  authRoleLabels,
+  canSeeSensitiveUserData,
+  formatUserPermissionLevel,
+  isHighestPermissionLevel,
+  isHumanResourcesUser,
+  type AuthUser,
+} from "@/lib/auth/permissions";
 import type {
   UserDataPerson,
   UserDataTeam,
   UserDataVendor,
   UserDataWorkbenchData,
+  UserDataViewerPolicy,
 } from "@/lib/user-data-types";
 
 const baseTeams = [
@@ -22,7 +30,7 @@ const baseTeams = [
 
 const baseProductGroups = ["忍者组", "迪no组", "丹东组", "易特凡组"];
 
-export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData> {
+export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<UserDataWorkbenchData> {
   try {
     await ensureBaseUserData();
 
@@ -53,6 +61,7 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
           loginName: true,
           passwordHash: true,
           authRole: true,
+          permissionLevel: true,
           isModeler: true,
           weeklyCapacityStyles: true,
           weeklyAvailableWorkdays: true,
@@ -128,6 +137,8 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
         loginName: user.loginName ?? "",
         authRole: user.authRole,
         authRoleLabel: authRoleLabels[user.authRole] ?? user.authRole,
+        permissionLevel: user.permissionLevel,
+        permissionLevelLabel: formatUserPermissionLevel(user.permissionLevel),
         canLogin: Boolean(user.loginName && user.passwordHash),
         isModeler: user.isModeler,
         weeklyCapacityStyles: weeklyAvailableWorkdays,
@@ -177,11 +188,16 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       notes: row.notes ?? "",
     }));
 
+    const viewer = buildViewerPolicy(currentUser);
+
     return {
       sourceLabel: "数据库",
       generatedAt: new Date().toISOString(),
+      viewer,
+      fieldVisibility: buildFieldVisibilityRows(),
+      moduleReadModels: buildModuleReadModels(),
       metrics: buildMetrics(people, teams, vendors),
-      people,
+      people: people.map((person) => maskPersonForViewer(person, viewer.canSeeSensitiveUserFields)),
       teams,
       vendors,
       availabilityBlocks,
@@ -202,6 +218,9 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
     return {
       sourceLabel: "基础团队样例",
       generatedAt: new Date().toISOString(),
+      viewer: buildViewerPolicy(currentUser),
+      fieldVisibility: buildFieldVisibilityRows(),
+      moduleReadModels: buildModuleReadModels(),
       metrics: buildMetrics([], teams, []),
       people: [],
       teams,
@@ -209,6 +228,85 @@ export async function getUserDataWorkbenchData(): Promise<UserDataWorkbenchData>
       availabilityBlocks: [],
     };
   }
+}
+
+function buildViewerPolicy(currentUser: AuthUser): UserDataViewerPolicy {
+  const isLevelZero = isHighestPermissionLevel(currentUser);
+  const isHumanResources = isHumanResourcesUser(currentUser);
+
+  return {
+    permissionLevel: currentUser.permissionLevel,
+    permissionLevelLabel: formatUserPermissionLevel(currentUser.permissionLevel),
+    isLevelZero,
+    isHumanResources,
+    canSeeSensitiveUserFields: canSeeSensitiveUserData(currentUser),
+    canImportExcel: isLevelZero,
+    canExportPasswords: isLevelZero,
+    canDeleteDisabledUsers: isLevelZero,
+  };
+}
+
+function maskPersonForViewer(person: UserDataPerson, canSeeSensitiveUserFields: boolean): UserDataPerson {
+  if (canSeeSensitiveUserFields) {
+    return person;
+  }
+
+  return {
+    ...person,
+    loginName: "",
+    authRole: "",
+    authRoleLabel: "仅等级 0 可见",
+    permissionLevel: undefined,
+    permissionLevelLabel: "仅等级 0 可见",
+  };
+}
+
+function buildFieldVisibilityRows() {
+  return [
+    { scope: "人员名单", field: "姓名", levelZero: "可见", humanResources: "可见", moduleRead: "可读取" },
+    { scope: "人员名单", field: "公司部门 / 项目小组", levelZero: "可见", humanResources: "可见", moduleRead: "可读取" },
+    { scope: "人员名单", field: "岗位 / 业务角色", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "人员名单", field: "内部 / 外包", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "建模排期参数", field: "是否建模师", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "建模排期参数", field: "每周可用工作日", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "建模排期参数", field: "是否可排期 / 不可排期记录", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取" },
+    { scope: "账号权限", field: "登录名", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取" },
+    { scope: "账号权限", field: "权限角色 admin / manager / viewer", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取；其他模块自行判断" },
+    { scope: "账号权限", field: "权限等级", levelZero: "可见", humanResources: "隐藏", moduleRead: "登录功能内部读取" },
+    { scope: "账号权限", field: "初始 / 重置密码", levelZero: "仅导入导出时可见", humanResources: "隐藏", moduleRead: "不可读取明文" },
+    { scope: "团队结构", field: "团队名称 / 类型 / 上级 / 负责人", levelZero: "可见", humanResources: "可见", moduleRead: "按模块需要读取" },
+    { scope: "外包供应商", field: "供应商名称 / 类型 / 稳定状态", levelZero: "可见", humanResources: "可见", moduleRead: "建模排期可读取稳定产能" },
+    { scope: "外包供应商", field: "联系人 / 联系方式 / 备注", levelZero: "可见", humanResources: "可见", moduleRead: "默认不提供给业务模块" },
+  ];
+}
+
+function buildModuleReadModels() {
+  return [
+    {
+      moduleName: "产品组工作指引",
+      readableFields: "姓名、公司部门、项目小组、岗位 / 业务角色、启停状态",
+      hiddenFields: "登录名、密码、权限等级、账号权限细节",
+      notes: "用于人员筛选、任务归属和项目小组展示；不由用户数据模块分配任务。",
+    },
+    {
+      moduleName: "建模排期",
+      readableFields: "建模师名单、每周可用工作日、是否可排期、不可排期记录、稳定外包供应商",
+      hiddenFields: "登录名、密码、权限等级、非建模必要备注",
+      notes: "用于排期候选人和产能参数；具体排期算法由建模排期模块负责。",
+    },
+    {
+      moduleName: "项目排期",
+      readableFields: "人员姓名、团队、岗位、启停状态、项目小组",
+      hiddenFields: "密码、权限等级、账号权限细节、联系方式",
+      notes: "用于项目负责人、产品研发、产品研发美术等候选数据。",
+    },
+    {
+      moduleName: "登录功能",
+      readableFields: "登录名、密码哈希、权限角色、权限等级、启停状态",
+      hiddenFields: "不向业务模块输出明文密码；明文只按等级 0 的 Excel 导出规则处理",
+      notes: "登录是用户数据模块唯一主动功能；其他模块访问判断仍由各模块自行决定。",
+    },
+  ];
 }
 
 async function ensureBaseUserData() {

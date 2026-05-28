@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
+import { requireApiRole, requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import { userDataExcelOnlyResponse } from "@/lib/user-data-excel-only";
 
@@ -13,7 +13,7 @@ export async function PATCH() {
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireApiRole(["admin"]);
+  const auth = await requireApiUserDataLevelZero();
   if ("response" in auth) return auth.response;
 
   const { id } = await params;

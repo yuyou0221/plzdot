@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { read, utils, type WorkBook } from "xlsx";
 import { encryptExportablePassword } from "@/lib/auth/password-export";
 import { hashPassword } from "@/lib/auth/password";
-import { normalizeAuthRole } from "@/lib/auth/permissions";
+import { defaultPermissionLevelForAuthRole, normalizeAuthRole, normalizeUserPermissionLevel } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
 import {
   businessRoleList,
@@ -85,6 +85,7 @@ export type UserDataImportPreviewResult = {
     passwordRows: number;
     shortPasswordRows: number;
     activeAdminAfterImport: boolean;
+    activeLevelZeroAfterImport: boolean;
     duplicateLoginNames: string[];
     loginConflicts: number;
     activeLoginUsersMissingPassword: number;
@@ -199,6 +200,7 @@ export async function previewUserDataWorkbook({
   let loginConflicts = 0;
   let activeLoginUsersMissingPassword = 0;
   let activeAdminAfterImport = false;
+  let activeLevelZeroAfterImport = false;
   const loginNameCounts = new Map<string, number>();
 
   for (const [index, row] of peopleRows.entries()) {
@@ -218,6 +220,10 @@ export async function previewUserDataWorkbook({
     const initialPassword = text(rowValue(row, ["初始/重置密码", "初始密码", "重置密码", "Password"]));
     const migrationPasswordHash = text(rowValue(row, ["密码哈希（仅迁移用）", "密码哈希", "Password Hash"]));
     const authRole = normalizeAuthRole(text(rowValue(row, ["权限角色", "权限", "Role"])));
+    const permissionLevel = normalizeUserPermissionLevel(
+      rowValue(row, ["权限等级", "用户权限等级", "等级", "Permission Level", "Level"]),
+      defaultPermissionLevelForAuthRole(authRole),
+    );
 
     if (!loginName) {
       continue;
@@ -249,6 +255,9 @@ export async function previewUserDataWorkbook({
     if (status !== "停用" && authRole === "admin" && hasPasswordAfterImport) {
       activeAdminAfterImport = true;
     }
+    if (status !== "停用" && permissionLevel === 0 && hasPasswordAfterImport) {
+      activeLevelZeroAfterImport = true;
+    }
   }
 
   const duplicateLoginNames = Array.from(loginNameCounts.entries())
@@ -261,6 +270,9 @@ export async function previewUserDataWorkbook({
 
   if (!activeAdminAfterImport) {
     errors.push("覆盖导入后将没有可登录的 admin 账号，请至少保留一个启用 admin，并填写登录名和密码。");
+  }
+  if (!activeLevelZeroAfterImport) {
+    errors.push("覆盖导入后将没有可登录的权限等级 0 账号，请至少保留一个启用的等级 0 账号，并填写登录名和密码。");
   }
 
   if (shortPasswordRows > 0) {
@@ -284,6 +296,7 @@ export async function previewUserDataWorkbook({
       passwordRows,
       shortPasswordRows,
       activeAdminAfterImport,
+      activeLevelZeroAfterImport,
       duplicateLoginNames,
       loginConflicts,
       activeLoginUsersMissingPassword,
@@ -490,6 +503,10 @@ async function importPeople(tx: Prisma.TransactionClient, rows: SheetRow[], stat
     const initialPassword = text(rowValue(row, ["初始/重置密码", "初始密码", "重置密码", "Password"]));
     const migrationPasswordHash = text(rowValue(row, ["密码哈希（仅迁移用）", "密码哈希", "Password Hash"]));
     const authRole = normalizeAuthRole(text(rowValue(row, ["权限角色", "权限", "Role"])));
+    const permissionLevel = normalizeUserPermissionLevel(
+      rowValue(row, ["权限等级", "用户权限等级", "等级", "Permission Level", "Level"]),
+      defaultPermissionLevelForAuthRole(authRole),
+    );
     const notes = text(rowValue(row, ["备注", "Notes"]));
     const userType = text(rowValue(row, ["用户类型"])) ?? "内部";
     const isSchedulable = status !== "停用" && (!isModeler || Boolean(weeklyAvailableWorkdays && weeklyAvailableWorkdays > 0));
@@ -530,6 +547,7 @@ async function importPeople(tx: Prisma.TransactionClient, rows: SheetRow[], stat
           }
         : {}),
       authRole,
+      permissionLevel,
       isModeler,
       weeklyCapacityStyles: weeklyAvailableWorkdays,
       weeklyAvailableWorkdays,
@@ -686,13 +704,14 @@ async function assertActiveLoginAdminExists(tx: Prisma.TransactionClient) {
     where: {
       status: { not: "停用" },
       authRole: "admin",
+      permissionLevel: 0,
       loginName: { not: null },
       passwordHash: { not: null },
     },
   });
 
   if (activeAdminCount === 0) {
-    throw new UserDataImportValidationError("覆盖导入后将没有可登录的 admin 账号，请在人员名单中保留至少一个启用 admin，并填写登录名。");
+    throw new UserDataImportValidationError("覆盖导入后将没有可登录的 admin 且权限等级 0 账号，请在人员名单中保留至少一个启用的等级 0 管理账号，并填写登录名。");
   }
 }
 

@@ -15,6 +15,7 @@ const peopleColumns = [
   "状态",
   "登录名",
   "权限角色",
+  "权限等级",
   "初始/重置密码",
   "备注",
 ];
@@ -55,6 +56,7 @@ export async function buildUserDataExportWorkbookBuffer({ includePlainPasswords 
       状态: user.status,
       登录名: user.loginName ?? "",
       权限角色: user.authRole,
+      权限等级: user.permissionLevel,
       "初始/重置密码": includePlainPasswords ? decryptExportablePassword(user.passwordExportCiphertext) : "",
       备注: user.notes ?? "",
     };

@@ -12,12 +12,14 @@ import {
   Database,
   Download,
   Edit3,
+  Eye,
   FileSpreadsheet,
   Gauge,
   PackageCheck,
   Plus,
   Save,
   Search,
+  ShieldCheck,
   Trash2,
   UserRound,
   UsersRound,
@@ -44,6 +46,7 @@ type PersonDraft = {
   userType: string;
   loginName: string;
   authRole: string;
+  permissionLevel: string;
   password: string;
   isModeler: boolean;
   weeklyAvailableWorkdays: string;
@@ -111,6 +114,7 @@ type ImportPreview = {
     passwordRows: number;
     shortPasswordRows: number;
     activeAdminAfterImport: boolean;
+    activeLevelZeroAfterImport: boolean;
     duplicateLoginNames: string[];
     loginConflicts: number;
     activeLoginUsersMissingPassword: number;
@@ -142,9 +146,10 @@ const metricToneClass: Record<UserDataMetric["tone"], string> = {
 export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkbenchData; currentUser: AuthUser }) {
   const router = useRouter();
   const canManage = false;
-  const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
-  const canExportPasswords = currentUser.authRole === "admin";
-  const canDeleteDisabledUsers = currentUser.authRole === "admin";
+  const canImport = data.viewer.canImportExcel;
+  const canExportPasswords = data.viewer.canExportPasswords;
+  const canDeleteDisabledUsers = data.viewer.canDeleteDisabledUsers;
+  const canSeeSensitiveUserFields = data.viewer.canSeeSensitiveUserFields;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("people");
   const [search, setSearch] = useState("");
@@ -166,6 +171,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [deletingPersonId, setDeletingPersonId] = useState<string | null>(null);
+  const [fieldPolicyOpen, setFieldPolicyOpen] = useState(false);
 
   const visibleSearch = search.trim();
   const filteredPeople = useMemo(() => {
@@ -225,6 +231,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       userType: personDraft.userType,
       loginName: personDraft.loginName,
       authRole: personDraft.authRole,
+      permissionLevel: nullableNumber(personDraft.permissionLevel),
       password: personDraft.password,
       isModeler: personDraft.isModeler,
       weeklyAvailableWorkdays: nullableNumber(personDraft.weeklyAvailableWorkdays),
@@ -532,6 +539,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       userType: "内部",
       loginName: "",
       authRole: "viewer",
+      permissionLevel: "9",
       password: "",
       isModeler: false,
       weeklyAvailableWorkdays: "",
@@ -594,11 +602,17 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                 人员、团队、建模能力与外包供应商
               </div>
               <div className="mt-1 text-xs font-medium text-slate-400">
-                当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole}
+                当前账号：{currentUser.name} · {authRoleOptions.find((role) => role.value === currentUser.authRole)?.label ?? currentUser.authRole} · {data.viewer.permissionLevelLabel}
               </div>
             </div>
-            {canManage ? (
-              <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
+              <ActionButton
+                icon={fieldPolicyOpen ? <Eye size={16} /> : <ShieldCheck size={16} />}
+                label={fieldPolicyOpen ? "收起字段权限" : "字段权限 / 模块读取"}
+                onClick={() => setFieldPolicyOpen((value) => !value)}
+              />
+              {canManage ? (
+                <>
                 <ActionButton icon={<Plus size={16} />} label="新增人员" onClick={openNewPerson} />
                 <ActionButton
                   icon={<Building2 size={16} />}
@@ -616,8 +630,9 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                   }}
                 />
                 <ActionButton icon={<PackageCheck size={16} />} label="新增外包" onClick={openNewVendor} />
-              </div>
-            ) : null}
+                </>
+              ) : null}
+            </div>
           </header>
 
           {message ? (
@@ -632,6 +647,8 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               {message}
             </div>
           ) : null}
+
+          {fieldPolicyOpen ? renderFieldPolicyPanel() : null}
 
           <section className="mt-5 grid grid-cols-5 gap-3 max-2xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
             {data.metrics.map((metric) => (
@@ -689,7 +706,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               <div className="mt-2 text-xs text-slate-500">
                 {canImport
                   ? "点击导入 Excel 选择文件后会先跑安全测试预览；预览通过后，点击覆盖更新才会写入数据库。"
-                  : "当前账号没有导入权限。请使用 admin 或 manager 账号导入 Excel。"}
+                  : "当前账号没有导入权限。导入、覆盖更新和密码导出仅权限等级 0 可用。"}
               </div>
               {importFile || importPreview || previewing ? (
                 <div className="mt-3 border-t border-slate-100 pt-3 text-sm">
@@ -717,6 +734,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                         <PreviewMetric label="登录账号" value={importPreview.checks.loginUsers} />
                         <PreviewMetric label="有密码行" value={importPreview.checks.passwordRows} />
                         <PreviewMetric label="短密码行" value={importPreview.checks.shortPasswordRows} />
+                        <PreviewMetric label="等级 0 可登录" value={importPreview.checks.activeLevelZeroAfterImport ? 1 : 0} />
                         <PreviewMetric label="缺密码账号" value={importPreview.checks.activeLoginUsersMissingPassword} />
                       </div>
                       {importPreview.errors.length > 0 ? (
@@ -757,6 +775,76 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
       </div>
     </div>
   );
+
+  function renderFieldPolicyPanel() {
+    return (
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <ShieldCheck size={16} />
+              字段权限与模块读取视图
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              等级 0 可见全部字段；非等级 0 仅人力资源账号可进入本页，并隐藏账号权限类字段。
+            </p>
+          </div>
+          <StatusBadge
+            value={data.viewer.canSeeSensitiveUserFields ? "当前可见全部字段" : "当前为受限视图"}
+            tone={data.viewer.canSeeSensitiveUserFields ? "success" : "warning"}
+          />
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-3 py-2">范围</th>
+                <th className="px-3 py-2">字段</th>
+                <th className="px-3 py-2">等级 0</th>
+                <th className="px-3 py-2">人力资源</th>
+                <th className="px-3 py-2">其他模块读取</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.fieldVisibility.map((row) => (
+                <tr key={`${row.scope}-${row.field}`}>
+                  <td className="px-3 py-3 text-slate-500">{row.scope}</td>
+                  <td className="px-3 py-3 font-medium text-slate-900">{row.field}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.levelZero}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.humanResources}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.moduleRead}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-3 py-2">模块</th>
+                <th className="px-3 py-2">默认可读取</th>
+                <th className="px-3 py-2">默认不可读取</th>
+                <th className="px-3 py-2">说明</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.moduleReadModels.map((row) => (
+                <tr key={row.moduleName}>
+                  <td className="px-3 py-3 font-medium text-slate-900">{row.moduleName}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.readableFields}</td>
+                  <td className="px-3 py-3 text-slate-600">{row.hiddenFields}</td>
+                  <td className="px-3 py-3 text-slate-500">{row.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  }
 
   function renderPeopleTab() {
     return (
@@ -802,7 +890,7 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1280px] text-left text-sm">
+            <table className={clsx("w-full text-left text-sm", canSeeSensitiveUserFields ? "min-w-[1380px]" : "min-w-[1120px]")}>
               <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
                 <tr>
                   <th className="px-3 py-2">姓名</th>
@@ -810,8 +898,9 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                   <th className="px-3 py-2">项目小组</th>
                   <th className="px-3 py-2">岗位</th>
                   <th className="px-3 py-2">用户类型</th>
-                  <th className="px-3 py-2">登录名</th>
-                  <th className="px-3 py-2">权限</th>
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">登录名</th> : null}
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">权限</th> : null}
+                  {canSeeSensitiveUserFields ? <th className="px-3 py-2">权限等级</th> : null}
                   <th className="px-3 py-2">建模师</th>
                   <th className="px-3 py-2">每周可用工作日</th>
                   <th className="px-3 py-2">可排期</th>
@@ -837,10 +926,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
                     <td className="px-3 py-3">
                       <TypeBadge value={person.userType} />
                     </td>
-                    <td className="px-3 py-3 text-slate-600">{person.loginName || "-"}</td>
-                    <td className="px-3 py-3">
-                      <StatusBadge value={person.authRoleLabel} tone={person.authRole === "admin" ? "warning" : "neutral"} />
-                    </td>
+                    {canSeeSensitiveUserFields ? <td className="px-3 py-3 text-slate-600">{person.loginName || "-"}</td> : null}
+                    {canSeeSensitiveUserFields ? (
+                      <td className="px-3 py-3">
+                        <StatusBadge value={person.authRoleLabel} tone={person.authRole === "admin" ? "warning" : "neutral"} />
+                      </td>
+                    ) : null}
+                    {canSeeSensitiveUserFields ? <td className="px-3 py-3 text-slate-600">{person.permissionLevelLabel}</td> : null}
                     <td className="px-3 py-3">
                       {person.isModeler ? <StatusBadge value="是" tone="success" /> : <StatusBadge value="否" tone="neutral" />}
                     </td>
@@ -938,8 +1030,9 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
 
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
           <DetailItem label="用户类型" value={selectedPerson.userType} />
-          <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} />
-          <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} />
+          {canSeeSensitiveUserFields ? <DetailItem label="登录名" value={selectedPerson.loginName || "未开通"} /> : null}
+          {canSeeSensitiveUserFields ? <DetailItem label="权限角色" value={selectedPerson.authRoleLabel} /> : null}
+          {canSeeSensitiveUserFields ? <DetailItem label="权限等级" value={selectedPerson.permissionLevelLabel} /> : null}
           <DetailItem label="是否建模师" value={selectedPerson.isModeler ? "是" : "否"} />
           <DetailItem label="每周可用工作日" value={selectedPerson.weeklyAvailableWorkdays ?? "未填写"} />
           <DetailItem label="公司部门" value={selectedPerson.departmentTeamName} />
@@ -1018,6 +1111,13 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
               </option>
             ))}
           </SelectField>
+          <TextInput
+            label="权限等级"
+            type="number"
+            min={0}
+            value={personDraft.permissionLevel}
+            onChange={(value) => setPersonDraft({ ...personDraft, permissionLevel: value })}
+          />
           <TextInput
             label={personDraft.id ? "重置密码" : "初始密码"}
             type="password"
@@ -1897,6 +1997,7 @@ function personDraftFromPerson(person: UserDataPerson): PersonDraft {
     userType: person.userType,
     loginName: person.loginName,
     authRole: person.authRole,
+    permissionLevel: typeof person.permissionLevel === "number" ? String(person.permissionLevel) : "9",
     password: "",
     isModeler: person.isModeler,
     weeklyAvailableWorkdays: person.weeklyAvailableWorkdays ? String(person.weeklyAvailableWorkdays) : "",

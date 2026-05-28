@@ -22,6 +22,8 @@ export type UserDataPerson = {
   loginName: string;
   authRole: string;
   authRoleLabel: string;
+  permissionLevel?: number;
+  permissionLevelLabel: string;
   canLogin: boolean;
   isModeler: boolean;
   weeklyCapacityStyles?: number;
@@ -70,9 +72,38 @@ export type UserAvailabilityBlock = {
   notes: string;
 };
 
+export type UserDataViewerPolicy = {
+  permissionLevel: number;
+  permissionLevelLabel: string;
+  isLevelZero: boolean;
+  isHumanResources: boolean;
+  canSeeSensitiveUserFields: boolean;
+  canImportExcel: boolean;
+  canExportPasswords: boolean;
+  canDeleteDisabledUsers: boolean;
+};
+
+export type UserDataFieldVisibility = {
+  scope: string;
+  field: string;
+  levelZero: string;
+  humanResources: string;
+  moduleRead: string;
+};
+
+export type UserDataModuleReadModel = {
+  moduleName: string;
+  readableFields: string;
+  hiddenFields: string;
+  notes: string;
+};
+
 export type UserDataWorkbenchData = {
   sourceLabel: string;
   generatedAt: string;
+  viewer: UserDataViewerPolicy;
+  fieldVisibility: UserDataFieldVisibility[];
+  moduleReadModels: UserDataModuleReadModel[];
   metrics: UserDataMetric[];
   people: UserDataPerson[];
   teams: UserDataTeam[];
