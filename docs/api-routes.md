@@ -153,6 +153,60 @@ projectTeamId
 }
 ```
 
+## POST /api/schedule/task-fact-events
+
+用途：接收产品组工作指引输出的标准任务事实事件。
+
+当前行为：
+
+```text
+1. 仅 admin / manager 可用。
+2. 接收单条 ProjectTaskFactEvent；也兼容 { event } 或单条 { events: [...] } 包装。
+3. 使用 eventId 做幂等，重复事件不重复写入。
+4. 使用 projectId + taskNo 定位 ProjectTask；任务不存在时按 TaskRule 初始化。
+5. 写入 ProjectTask 任务事实字段。
+6. 写入 ProgressUpdate。
+7. 写入 ProjectTaskFactEventLog。
+8. 返回 needsRecalculation=true，提示后续应由统一排期内核重新测算。
+9. 不写入 ScheduleProjectResult / ScheduleTaskResult，不计算风险、延期、预测上线和里程碑状态。
+```
+
+请求示例：
+
+```json
+{
+  "eventId": "uuid",
+  "eventType": "task_completed",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 7,
+  "taskKey": "#7",
+  "taskName": "精细建模确认风格",
+  "occurredAt": "2026-05-29T10:30:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualFinishDate": "2026-05-29",
+    "status": "已完成",
+    "note": "版权方已确认通过"
+  }
+}
+```
+
+支持的事件：
+
+```text
+task_started
+task_expected_finish_updated
+task_submitted_for_review
+task_completed
+task_blocked
+task_unblocked
+task_paused
+task_resumed
+task_note_updated
+```
+
 ## POST /api/imports/preview
 
 用途：生成 Excel 导入预览，不写入数据库。
