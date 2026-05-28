@@ -24,7 +24,7 @@ import {
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
 import { ScheduleProjectImportPanel } from "@/components/schedule/schedule-project-import-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import {
   type CalendarProject,
   type Metric,
@@ -105,6 +105,7 @@ const planningViewLabel: Record<PlanningView, string> = {
 
 export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ScheduleWorkbenchData }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [search, setSearch] = useState("");
   const [milestone, setMilestone] = useState<Milestone | "全部里程碑">("全部里程碑");
   const [riskOnly, setRiskOnly] = useState(false);
@@ -243,13 +244,15 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               建模排期
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
             </button>
-            <button
-              onClick={() => router.push("/users")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              用户数据
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
-            </button>
+            {canOpenUserData ? (
+              <button
+                onClick={() => router.push("/users")}
+                className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+              >
+                用户数据
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
+              </button>
+            ) : null}
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
   ProductGuideItem,
@@ -118,6 +118,7 @@ const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [artFilter, setArtFilter] = useState("all");
@@ -380,7 +381,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
             <SideNavButton label="项目排期" badge="P0" onClick={() => router.push("/")} />
             <SideNavButton label="产品组工作指引" badge="P0" active />
             <SideNavButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
-            <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} />
+            {canOpenUserData ? <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} /> : null}
             <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
           <AccountPanel currentUser={currentUser} />

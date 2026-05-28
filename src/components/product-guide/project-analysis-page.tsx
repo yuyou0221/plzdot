@@ -10,7 +10,7 @@ import {
   Palette,
 } from "lucide-react";
 import { AccountPanel } from "@/components/auth/account-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import type {
   ProjectAnalysisData,
   ProjectAnalysisMetric,
@@ -42,6 +42,8 @@ const metricClass: Record<ProjectAnalysisMetric["tone"], string> = {
 };
 
 export function ProjectAnalysisPage({ currentUser, data }: { currentUser: AuthUser; data: ProjectAnalysisData }) {
+  const canOpenUserData = canAccessUserData(currentUser);
+
   return (
     <div className="min-h-screen bg-[#f3f6f8] text-slate-950">
       <div className="grid min-h-screen grid-cols-[240px_minmax(0,1fr)] max-xl:grid-cols-1">
@@ -54,7 +56,7 @@ export function ProjectAnalysisPage({ currentUser, data }: { currentUser: AuthUs
             <NavLink href="/" label="项目排期" badge="P0" />
             <NavLink href="/product-guide" label="产品组工作指引" badge="P0" active />
             <NavLink href="/modeling" label="建模排期" badge="P0" />
-            <NavLink href="/users" label="用户数据" badge="基础" />
+            {canOpenUserData ? <NavLink href="/users" label="用户数据" badge="基础" /> : null}
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>
