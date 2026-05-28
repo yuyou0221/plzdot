@@ -49,6 +49,7 @@ type GuideActionKind = "complete" | "progress" | "expected-finish" | "block" | "
 
 type TaskActionForm = {
   taskStatus: string;
+  actualStartDate: string;
   actualFinishDate: string;
   expectedFinishDate: string;
   submittedAt: string;
@@ -129,7 +130,7 @@ const milestoneCardClass: Record<ProductGuideMilestoneRiskLevel, string> = {
 
 const weeklyTaskGridClass =
   "grid-cols-[minmax(120px,0.95fr)_minmax(180px,1.45fr)_96px_minmax(170px,1.2fr)] max-xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]";
-const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂停", "取消"];
+const taskStatusOptions = ["未开始", "进行中", "暂停", "取消"];
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
@@ -279,7 +280,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
 
   async function saveTaskAction(action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") {
     if (!selectedItem?.taskId) {
-      notify("当前指引没有关联项目任务，不能直接写入任务进度。", "warning");
+      notify("当前指引没有关联项目任务，不能提交任务事实事件。", "warning");
       return;
     }
 
@@ -292,6 +293,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       action === "complete"
         ? {
             action,
+            actualStartDate: taskForm.actualStartDate,
             actualFinishDate: taskForm.actualFinishDate,
             note: taskForm.note,
           }
@@ -299,6 +301,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           ? {
               action,
               status: taskForm.taskStatus,
+              actualStartDate: taskForm.actualStartDate,
               note: taskForm.note,
             }
         : action === "expected-finish"
@@ -311,17 +314,21 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           ? {
               action,
               blockReason: taskForm.blockReason,
+              expectedFinishDate: taskForm.expectedFinishDate,
               note: taskForm.note,
             }
             : action === "submit-review"
               ? {
                   action,
+                  actualStartDate: taskForm.actualStartDate,
                   submittedAt: taskForm.submittedAt,
+                  expectedFinishDate: taskForm.expectedFinishDate,
                   reviewTarget: taskForm.reviewTarget,
                   note: taskForm.note,
                 }
               : {
                   action,
+                  expectedFinishDate: taskForm.expectedFinishDate,
                   note: taskForm.note,
                 };
 
@@ -1561,6 +1568,12 @@ function TaskCompleteForm({
     <div className="grid gap-3">
       <div className="text-sm font-semibold text-slate-900">标记任务已完成</div>
       <LabeledInput
+        label="实际开始日期"
+        type="date"
+        value={form.actualStartDate}
+        onChange={(value) => setForm({ ...form, actualStartDate: value })}
+      />
+      <LabeledInput
         label="实际完成日期"
         type="date"
         value={form.actualFinishDate}
@@ -1607,6 +1620,14 @@ function ProgressUpdateForm({
           ))}
         </select>
       </label>
+      {form.taskStatus === "进行中" ? (
+        <LabeledInput
+          label="实际开始日期"
+          type="date"
+          value={form.actualStartDate}
+          onChange={(value) => setForm({ ...form, actualStartDate: value })}
+        />
+      ) : null}
       <LabeledTextarea
         label="当前进度"
         value={form.note}
@@ -1679,6 +1700,12 @@ function BlockForm({
         placeholder="可补充下一步处理方式"
         onChange={(value) => setForm({ ...form, note: value })}
       />
+      <LabeledInput
+        label="预计恢复 / 完成日期"
+        type="date"
+        value={form.expectedFinishDate}
+        onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
+      />
       <FormActions saving={saving} submitLabel="保存阻塞原因" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
@@ -1705,6 +1732,12 @@ function UnblockForm({
         value={form.note}
         placeholder="建议说明卡点如何解除，以及下一步由谁推进"
         onChange={(value) => setForm({ ...form, note: value })}
+      />
+      <LabeledInput
+        label="预计完成日期"
+        type="date"
+        value={form.expectedFinishDate}
+        onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
       />
       <FormActions saving={saving} submitLabel="保存解除记录" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
@@ -1755,6 +1788,14 @@ function SubmitReviewForm({
         value={form.submittedAt}
         onChange={(value) => setForm({ ...form, submittedAt: value })}
       />
+      {!isModelingReview ? (
+        <LabeledInput
+          label="预计反馈 / 完成日期"
+          type="date"
+          value={form.expectedFinishDate}
+          onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
+        />
+      ) : null}
       {!isModelingReview ? (
         <LabeledInput
           label="送审对象"
@@ -2203,6 +2244,7 @@ function modelingTaskIdFromItem(item: ProductGuideItem) {
 function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
   return {
     taskStatus: normalizeTaskStatus(item?.statusLabel),
+    actualStartDate: todayString(),
     actualFinishDate: todayString(),
     expectedFinishDate: item?.forecastFinishDate ?? item?.plannedFinishDate ?? todayString(),
     submittedAt: todayString(),
