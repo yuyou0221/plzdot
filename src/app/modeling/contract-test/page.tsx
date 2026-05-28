@@ -87,10 +87,14 @@ export default async function ModelingContractTestRoute() {
     })
     .filter((project): project is ModelingContractTestProject => Boolean(project));
 
-  return <ModelingContractTestPage currentUserName={currentUser.name} projects={projectOptions} />;
+  return <ModelingContractTestPage currentUserName={currentUser.name} initialDate={formatDate(new Date())} initialSeed={buildSeed()} projects={projectOptions} />;
 }
 
 function formatDate(value: Date | null) {
   if (!value) return "";
   return value.toISOString().slice(0, 10);
+}
+
+function buildSeed() {
+  return String(Date.now()).slice(-8);
 }
