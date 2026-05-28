@@ -70,7 +70,9 @@ export default async function ModelingContractTestRoute() {
     .map((project) => {
       const tasks = tasksByProjectId.get(project.id);
 
-      if (!tasks?.task7 || !tasks.task10) {
+      const isTestProject = project.projectCode?.startsWith("MT-TEST-") || project.projectName.startsWith("[建模测试]");
+
+      if (!isTestProject || !tasks?.task7 || !tasks.task10) {
         return null;
       }
 
@@ -87,14 +89,10 @@ export default async function ModelingContractTestRoute() {
     })
     .filter((project): project is ModelingContractTestProject => Boolean(project));
 
-  return <ModelingContractTestPage currentUserName={currentUser.name} initialDate={formatDate(new Date())} initialSeed={buildSeed()} projects={projectOptions} />;
+  return <ModelingContractTestPage currentUserName={currentUser.name} initialDate={formatDate(new Date())} initialSeed="local-draft" projects={projectOptions} />;
 }
 
 function formatDate(value: Date | null) {
   if (!value) return "";
   return value.toISOString().slice(0, 10);
-}
-
-function buildSeed() {
-  return String(Date.now()).slice(-8);
 }

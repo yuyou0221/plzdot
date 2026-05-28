@@ -505,7 +505,7 @@ export async function getProjectModelingProgress(projectId: string) {
   }).length;
   const submittedStyles = requiredTasks.filter((task) => {
     const status = normalizeStatus(task.status, task.isOutsourced);
-    return status === "已送审" || status === "等反馈";
+    return status === "待验收" || status === "已送审" || status === "等反馈";
   }).length;
   const waitingSubmissionStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "待送审").length;
   const outsourcedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "外包中" || task.isOutsourced).length;
@@ -680,6 +680,7 @@ function normalizeStatus(value: string, isOutsourced: boolean): ModelingTaskStat
 
   if (value.includes("未启动")) return "未启动";
   if (value.includes("未分配")) return "未分配";
+  if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
   if (value.includes("待送审")) return "待送审";
   if (value.includes("已送审") || value.includes("送审")) return "已送审";
   if (value.includes("等反馈") || value.includes("反馈")) return "等反馈";

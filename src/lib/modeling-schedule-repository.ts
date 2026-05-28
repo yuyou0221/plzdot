@@ -21,6 +21,7 @@ const statusColumns: ModelingTaskStatus[] = [
   "已排期",
   "建模中",
   "修改中",
+  "待验收",
   "待送审",
   "已送审",
   "等反馈",
@@ -30,8 +31,8 @@ const statusColumns: ModelingTaskStatus[] = [
   "取消",
 ];
 
-const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "已送审", "等反馈", "外包中", "暂停"]);
-const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
+const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "待验收", "已送审", "等反馈", "外包中", "暂停"]);
+const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["待验收", "已送审", "等反馈"]);
 const defaultVirtualModelers: ModelerCapacity[] = [
   {
     id: "virtual-modeler-a",
@@ -617,7 +618,7 @@ function buildRealTasks(
       blockedDays: isCompletedBySchedule
         ? 0
         : (task.blockedDays ?? (reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(task.lastFeedbackAt)) : 0)),
-      blockType: isCompletedBySchedule ? undefined : (task.blockType ?? (reviewBlockedStatuses.has(status) ? "送审 / 反馈" : undefined)),
+      blockType: isCompletedBySchedule ? undefined : (task.blockType ?? (reviewBlockedStatuses.has(status) ? (status === "待验收" ? "待产品美术验收" : "送审 / 反馈") : undefined)),
       latestFeedback: isCompletedBySchedule ? undefined : latestFeedback?.content,
       feedbackStatus: isCompletedBySchedule ? undefined : latestFeedback?.status,
       isVirtual: false,
@@ -698,8 +699,8 @@ function buildVirtualTasks(
           staleDays: daysSince(lastUpdatedAt),
           isStale: !isCompletedBySchedule && status === "建模中" && daysSince(lastUpdatedAt) > 3,
           blockedDays: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(lastFeedbackAt)) : 0,
-          blockType: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "等反馈" ? "等版权方反馈" : "送审中") : undefined,
-          latestFeedback: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? "虚拟反馈：待补充检修问题与版权方意见。" : undefined,
+          blockType: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "待验收" ? "待产品美术验收" : status === "等反馈" ? "等版权方反馈" : "送审中") : undefined,
+          latestFeedback: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "待验收" ? "虚拟提交：建模师已提交成果，等待产品美术验收。" : "虚拟反馈：待补充检修问题与版权方意见。") : undefined,
           feedbackStatus: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? "待处理" : undefined,
           isVirtual: true,
           canDragAssign: status === "未分配" && !isCompletedBySchedule,
@@ -766,7 +767,7 @@ function buildProjectSummaries(
         const totalStyles = projectTasks.length;
         const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
         const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
-        const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
+        const submittedStyles = projectTasks.filter((task) => task.status === "待验收" || task.status === "已送审" || task.status === "等反馈").length;
         const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
         const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
@@ -806,7 +807,7 @@ function buildProjectSummaries(
       const totalStyles = projectTasks.length;
       const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
       const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "建模中" || task.status === "修改中").length;
-      const submittedStyles = projectTasks.filter((task) => task.status === "已送审" || task.status === "等反馈").length;
+      const submittedStyles = projectTasks.filter((task) => task.status === "待验收" || task.status === "已送审" || task.status === "等反馈").length;
       const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
       const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
@@ -851,9 +852,9 @@ function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): M
       tone: overloadedModelerCount > 0 ? "danger" : "neutral",
     },
     {
-      label: "修改 / 送审卡住",
+      label: "待验收 / 送审卡住",
       value: stuckTasks.length,
-      helper: "已送审、等反馈或修改阻塞",
+      helper: "待验收、已送审、等反馈或修改阻塞",
       tone: stuckTasks.length > 0 ? "danger" : "info",
     },
   ];
@@ -877,6 +878,7 @@ function normalizeStatus(value: string, isOutsourced: boolean): ModelingTaskStat
   if (value.includes("排期")) return "已排期";
   if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
+  if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
   if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";

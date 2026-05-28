@@ -117,6 +117,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "已排期",
   "建模中",
   "修改中",
+  "待验收",
   "待送审",
   "已送审",
   "等反馈",
@@ -178,7 +179,7 @@ export async function previewModelingImport(workbookPath: string, fileName: stri
       errorCount: issueCounts.error,
       warningCount: issueCounts.warning,
       infoCount: issueCounts.info,
-      requiresRecalculation: styleRows.some((row) => ["待送审", "已送审", "等反馈", "已通过", "修改中"].includes(row.status)),
+      requiresRecalculation: styleRows.some((row) => ["待验收", "待送审", "已送审", "等反馈", "已通过", "修改中"].includes(row.status)),
     },
     globalIssues: workbook.feedbackSheet
       ? []
@@ -787,6 +788,7 @@ function normalizeStatus(value: unknown, isOutsourced: boolean): ModelingTaskSta
   if (text.includes("排期")) return "已排期";
   if (text.includes("修改")) return "修改中";
   if (text.includes("建模中") || text.includes("进行中")) return "建模中";
+  if (text.includes("待验收") || text.includes("待内审") || text.includes("待审核")) return "待验收";
   if (text.includes("待送审")) return "待送审";
   if (text.includes("送审")) return "已送审";
   if (text.includes("反馈")) return "等反馈";

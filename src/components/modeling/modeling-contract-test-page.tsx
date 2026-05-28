@@ -100,7 +100,7 @@ type ProjectProgress = {
 
 type ApiPayload = Record<string, unknown> | null;
 
-type ScenarioId = "normal" | "task7-only" | "internal-reject" | "copyright-reject" | "partial-pass";
+type ScenarioId = "normal" | "task7-only" | "work-submit" | "internal-reject" | "copyright-reject" | "partial-pass";
 
 type ScenarioCheck = {
   label: string;
@@ -124,6 +124,7 @@ const reviewActions = [
 const scenarioOptions: Array<{ id: ScenarioId; label: string; description: string }> = [
   { id: "normal", label: "完整通过", description: "全部款式完成内部通过和版权方通过" },
   { id: "task7-only", label: "只启动任务 7", description: "第一款进入未分配，其余款保持未启动" },
+  { id: "work-submit", label: "提交待验收", description: "建模师提交第一款成果，产品组可见待验收" },
   { id: "internal-reject", label: "内部驳回", description: "第一款进入修改中并生成内部反馈" },
   { id: "copyright-reject", label: "版权驳回", description: "第一款待送审后被版权方驳回" },
   { id: "partial-pass", label: "部分通过", description: "第一款通过，但项目不能回写完成" },
@@ -260,6 +261,21 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
     });
   }
 
+  async function submitSelectedWork() {
+    if (!selectedProject || !selectedModelingTaskId) return;
+
+    await runAction("提交成果", async () => {
+      const data = await submitWork(
+        selectedProject,
+        selectedModelingTaskId,
+        feedbackContent || "本地模拟：建模师提交成果，等待产品美术验收",
+        `https://example.local/modeling/${seed}/${selectedModelingTaskId}`,
+      );
+      const state = await loadProjectState(selectedProject.id, selectedModelingTaskId);
+      return { ok: true, submitResult: data, progress: state.progress };
+    });
+  }
+
   async function refreshProjectState(projectId = selectedProject?.id) {
     if (!projectId) return;
 
@@ -300,24 +316,38 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
 
       if (scenarioId === "normal") {
         for (const style of submittedStyles) {
+          await markStyleModeling(style.modelingTaskId);
+          await submitWork(fixture.project, style.modelingTaskId, `${style.styleName} 建模成果已提交`, `https://example.local/modeling/${fixture.seed}/${style.modelingTaskId}`);
           await reviewStyle(fixture.project, style.modelingTaskId, "内部通过可送审", `${style.styleName} 内部通过`);
           await reviewStyle(fixture.project, style.modelingTaskId, "送审通过", `${style.styleName} 版权方通过`);
         }
         steps.push({ name: "全部款式过审", status: "完成" });
       }
 
+      if (scenarioId === "work-submit") {
+        await markStyleModeling(firstTask.modelingTaskId);
+        await submitWork(fixture.project, firstTask.modelingTaskId, "第一款建模成果已提交，等待产品美术检修", `https://example.local/modeling/${fixture.seed}/first-style`);
+        steps.push({ name: "建模师提交第一款成果", status: "待验收" });
+      }
+
       if (scenarioId === "internal-reject") {
+        await markStyleModeling(firstTask.modelingTaskId);
+        await submitWork(fixture.project, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${fixture.seed}/first-style`);
         await reviewStyle(fixture.project, firstTask.modelingTaskId, "内部不通过", "内部检修发现比例问题，退回修改");
         steps.push({ name: "内部驳回第一款", status: "完成" });
       }
 
       if (scenarioId === "copyright-reject") {
+        await markStyleModeling(firstTask.modelingTaskId);
+        await submitWork(fixture.project, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${fixture.seed}/first-style`);
         await reviewStyle(fixture.project, firstTask.modelingTaskId, "内部通过可送审", "内部通过，待送审");
         await reviewStyle(fixture.project, firstTask.modelingTaskId, "送审不通过", "版权方反馈表情需要调整");
         steps.push({ name: "版权方驳回第一款", status: "完成" });
       }
 
       if (scenarioId === "partial-pass") {
+        await markStyleModeling(firstTask.modelingTaskId);
+        await submitWork(fixture.project, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${fixture.seed}/first-style`);
         await reviewStyle(fixture.project, firstTask.modelingTaskId, "内部通过可送审", "第一款内部通过");
         await reviewStyle(fixture.project, firstTask.modelingTaskId, "送审通过", "第一款版权方通过");
         steps.push({ name: "只通过第一款", status: `剩余 ${remainingTasks.length} 款未通过` });
@@ -435,6 +465,20 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
     });
   }
 
+  async function submitWork(project: ModelingContractTestProject, modelingTaskId: string, content: string, deliverableUrl: string) {
+    return postJson(`/api/modeling/tasks/${modelingTaskId}/work-submissions`, {
+      projectId: project.id,
+      content,
+      deliverableUrl,
+    });
+  }
+
+  async function markStyleModeling(modelingTaskId: string) {
+    return patchJson(`/api/modeling/tasks/${modelingTaskId}`, {
+      status: "建模中",
+    });
+  }
+
   async function loadProjectState(projectId: string, preferredTaskId = "") {
     const [styleData, progressData] = await Promise.all([
       getJson(`/api/modeling/projects/${projectId}/styles`),
@@ -489,15 +533,23 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
               <p className="mt-1 text-sm text-slate-500">用模拟项目压测款式清单、任务启动、审核结果和进度回传。</p>
             </div>
           </div>
-          <button
-            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={Boolean(loadingAction)}
-            onClick={() => refreshProjectState()}
-            type="button"
-          >
-            <RefreshCw className={`h-4 w-4 ${loadingAction === "刷新数据" ? "animate-spin" : ""}`} />
-            刷新
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100"
+              href="/modeling"
+            >
+              进入建模排期
+            </Link>
+            <button
+              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={Boolean(loadingAction)}
+              onClick={() => refreshProjectState()}
+              type="button"
+            >
+              <RefreshCw className={`h-4 w-4 ${loadingAction === "刷新数据" ? "animate-spin" : ""}`} />
+              刷新
+            </button>
+          </div>
         </header>
 
         <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
@@ -718,6 +770,10 @@ export function ModelingContractTestPage({ currentUserName, initialDate, initial
                   <Play className="h-4 w-4" />
                   启动任务 10
                 </ActionButton>
+                <ActionButton disabled={!selectedProject || !selectedModelingTaskId} loading={loadingAction === "提交成果"} onClick={() => submitSelectedWork()}>
+                  <Send className="h-4 w-4" />
+                  提交成果
+                </ActionButton>
               </div>
 
               <div className="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,280px)]">
@@ -890,6 +946,14 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
     ];
   }
 
+  if (scenarioId === "work-submit") {
+    return [
+      buildCheck("第一款状态", "待验收", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "待验收"),
+      buildCheck("待验收统计", "大于 0", `${progress.submittedStyles} 款`, progress.submittedStyles > 0),
+      buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+    ];
+  }
+
   if (scenarioId === "copyright-reject") {
     return [
       buildCheck("第一款状态", "修改中", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "修改中"),
@@ -1006,6 +1070,17 @@ async function postJson(path: string, body: Record<string, unknown>) {
     cache: "no-store",
     headers: { "Content-Type": "application/json" },
     method: "POST",
+  });
+
+  return parseJsonResponse(response);
+}
+
+async function patchJson(path: string, body: Record<string, unknown>) {
+  const response = await fetch(path, {
+    body: JSON.stringify(body),
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
   });
 
   return parseJsonResponse(response);

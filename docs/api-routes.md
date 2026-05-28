@@ -272,6 +272,7 @@ POST /api/product-guide/modeling-tasks
 
 ```text
 PATCH /api/modeling/tasks/:id
+POST /api/modeling/tasks/:id/work-submissions
 POST /api/modeling/style-submissions
 POST /api/modeling/style-start-events
 POST /api/modeling/review-results
@@ -286,8 +287,9 @@ GET /api/modeling/projects/:projectId/progress
 2. 可保存 modelerId、isOutsourced、outsourceVendorId、plannedStartDate、plannedFinishDate、actualStartDate、actualFinishDate、remainingWorkdays、status。
 3. 可用 feedbackContent / feedbackType 记录 ModelingFeedback。
 4. 状态改为“已通过”时会写入实际完成日期和实际工作日。
-5. 每次保存会重算 ProjectModelingProgress。
-6. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
+5. 建模师提交成果后状态进入“待验收”，写入 ModelingFeedback，供产品组工作指引读取。
+6. 每次保存会重算 ProjectModelingProgress。
+7. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
 ```
 
 ### POST /api/modeling/style-submissions
@@ -331,6 +333,21 @@ GET /api/modeling/projects/:projectId/progress
 送审不通过 -> 修改中，生成版权方反馈
 ```
 
+### POST /api/modeling/tasks/:id/work-submissions
+
+用途：建模师提交款式建模成果，回传给产品组工作指引等待产品美术检修。
+
+核心规则：
+
+```text
+1. 接收 content、deliverableUrl / deliverableUrls。
+2. 只允许真实 ModelingTask；虚拟款式会被拒绝。
+3. 未启动、未分配、已通过、取消状态不能提交成果。
+4. 提交后 status=待验收，remainingWorkdays=0。
+5. 写入 ModelingFeedback，feedbackType=建模师提交，status=待产品美术验收。
+6. viewer 角色只能提交分配给自己的款式；admin / manager 可提交全部款式。
+```
+
 ### GET /api/modeling/projects/:projectId/styles
 
 用途：给产品组工作指引读取项目下款式建模状态。
@@ -338,7 +355,7 @@ GET /api/modeling/projects/:projectId/progress
 返回内容包括：
 
 ```text
-modelingTaskId、款式编号、款式名称、是否第一款、建模状态、建模师、外包供应商、内部通过日期、版权方过审日期、最新反馈、修改轮次、是否卡住、参考图 URL。
+modelingTaskId、款式编号、款式名称、是否第一款、建模状态、建模师、外包供应商、内部通过日期、版权方过审日期、最新反馈、修改轮次、是否卡住、参考图 URL。建模师提交成果后，最新反馈会包含成果说明和成果链接。
 ```
 
 ### GET /api/modeling/projects/:projectId/progress

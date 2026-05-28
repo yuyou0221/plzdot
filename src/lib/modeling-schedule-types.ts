@@ -4,6 +4,7 @@ export type ModelingTaskStatus =
   | "已排期"
   | "建模中"
   | "修改中"
+  | "待验收"
   | "待送审"
   | "已送审"
   | "等反馈"
@@ -142,6 +143,11 @@ export type ModelingTaskUpdateRequest = {
   feedbackType?: string | null;
   feedbackContent?: string | null;
   blockType?: string | null;
+};
+
+export type ModelingWorkSubmissionRequest = {
+  content: string;
+  deliverableUrl?: string | null;
 };
 
 export type ModelingWritebackDraft = {

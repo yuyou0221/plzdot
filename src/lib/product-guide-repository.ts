@@ -619,7 +619,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       const status = normalizeModelingStatus(modelingTask.status, modelingTask.isOutsourced);
       const staleDays = daysSince(modelingTask.lastUpdatedAt);
       const isStale = status === "建模中" && staleDays > 3;
-      const needsArtReview = status === "已送审" || status === "等反馈" || status.includes("修改");
+      const needsArtReview = status === "待验收" || status === "已送审" || status === "等反馈" || status.includes("修改");
       const isUnassigned = status === "未分配";
       const isBlocked = needsArtReview || Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 0);
 
@@ -971,7 +971,7 @@ function buildModelingProgressItem({
   const suggestion =
     kind === "unassigned"
       ? "该项目建模款式仍有未分配，请确认是否需要外包。"
-      : "该款式卡在送审 / 修改，请产品美术确认下一步反馈。";
+      : "该款式等待产品美术验收，请确认内部通过、退回修改或后续送审。";
   const count = kind === "unassigned" ? progress.unassignedStyles : progress.submittedStyles;
 
   return {
@@ -999,7 +999,7 @@ function buildModelingProgressItem({
     isStale: daysSince(progress.lastCalculatedAt) > 3,
     isBlocked: kind === "submitted",
     requiresArtReview: true,
-    waitingLicensor: kind === "submitted",
+    waitingLicensor: false,
     dueDate: formatDate(progress.projectedAllApprovedDate),
     dueBucket: dueBucket(progress.projectedAllApprovedDate),
     reasonTags: [kind === "unassigned" ? "未分配款式" : "等待产品美术验收", "建模进度"],
@@ -1030,7 +1030,7 @@ function buildModelingTaskItem({
 }): ProductGuideItem {
   const projectRefs = projectReference(project, maps);
   const owner = status === "未分配" ? projectRefs.productOwner : projectRefs.artOwner;
-  const needsArtReview = status === "已送审" || status === "等反馈" || status.includes("修改");
+  const needsArtReview = status === "待验收" || status === "已送审" || status === "等反馈" || status.includes("修改");
   const isWaitingLicensor = status === "等反馈" || isWaitingLicensorText(modelingTask.blockType ?? "");
   const riskLevel: ProductGuideRiskLevel =
     Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 3) || isWaitingLicensor ? "risk" : isStale ? "watch" : "watch";
@@ -1038,7 +1038,9 @@ function buildModelingTaskItem({
     status === "未分配"
       ? "该项目建模款式仍有未分配，请确认是否需要外包。"
       : needsArtReview
-        ? "该款式卡在送审 / 修改，请产品美术确认下一步反馈。"
+        ? status === "待验收"
+          ? "该款式已由建模师提交成果，请产品美术检修并给出内部审核结果。"
+          : "该款式卡在送审 / 修改，请产品美术确认下一步反馈。"
         : "请确认建模进度并补录最新更新时间。";
   const styleName = modelingTask.styleName || modelingTask.styleCode;
 
@@ -1592,7 +1594,7 @@ function modelingSummary(projectId: string, maps: ContextMaps) {
     return "暂无建模款式进度。";
   }
 
-  return `建模 ${progress.approvedStyles}/${progress.totalRequiredStyles} 款通过，${progress.inProgressStyles} 款进行中，${progress.submittedStyles} 款送审，${progress.outsourcedStyles} 款外包，${progress.unassignedStyles} 款未分配。`;
+  return `建模 ${progress.approvedStyles}/${progress.totalRequiredStyles} 款通过，${progress.inProgressStyles} 款进行中，${progress.submittedStyles} 款待验收/送审，${progress.outsourcedStyles} 款外包，${progress.unassignedStyles} 款未分配。`;
 }
 
 function riskCopyForLevel(projectName: string, riskLevel: ProductGuideRiskLevel, isStale: boolean) {
@@ -1860,6 +1862,7 @@ function normalizeModelingStatus(value: string, isOutsourced: boolean) {
   }
 
   if (value.includes("未分配")) return "未分配";
+  if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
   if (value.includes("修改") || value.includes("返修")) return "修改中";

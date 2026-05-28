@@ -37,6 +37,7 @@ import type {
   ModelingTaskStatus,
   ModelingTaskUpdateRequest,
   ModelingTaskUpdateResponse,
+  ModelingWorkSubmissionRequest,
   OutsourceVendorOption,
 } from "@/lib/modeling-schedule-types";
 
@@ -49,10 +50,10 @@ type CapacityRow = ModelerCapacity & {
 type ModelingView = "milestones" | "management-board" | "style-board" | "profile";
 type StyleBoardMode = "active" | "approved";
 
-const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "已送审", "等反馈", "外包中", "暂停"]);
-const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const statusOptions: ModelingTaskStatus[] = ["未启动", "未分配", "已排期", "建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
+const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "待验收", "已送审", "等反馈", "外包中", "暂停"]);
+const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["待验收", "已送审", "等反馈"]);
+const statusOptions: ModelingTaskStatus[] = ["未启动", "未分配", "已排期", "建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
 
 const statusMeta: Record<
   ModelingTaskStatus,
@@ -92,6 +93,12 @@ const statusMeta: Record<
     dotClass: "bg-orange-500",
     cardClass: "border-orange-200 bg-orange-50",
     columnClass: "border-orange-200 bg-orange-50/70",
+  },
+  待验收: {
+    title: "待验收",
+    dotClass: "bg-fuchsia-500",
+    cardClass: "border-fuchsia-200 bg-fuchsia-50",
+    columnClass: "border-fuchsia-200 bg-fuchsia-50/70",
   },
   待送审: {
     title: "待送审",
@@ -361,6 +368,54 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
     }
   }
 
+  async function submitTaskWork(task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) {
+    if (task.isVirtual) {
+      setOperationMessage({ tone: "warning", text: "虚拟款式不能提交成果，请先录入真实款式。" });
+      return;
+    }
+
+    if (!isOriginalArtApproved(task)) {
+      setOperationMessage({ tone: "danger", text: "原画未过审的款式不能提交建模成果。" });
+      return;
+    }
+
+    setSavingTaskId(task.id);
+    setOperationMessage(null);
+
+    try {
+      const response = await fetch(`/api/modeling/tasks/${task.id}/work-submissions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = (await response.json()) as ModelingTaskUpdateResponse;
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "提交建模成果失败。");
+      }
+
+      if (result.task) {
+        const updatedTask = result.task;
+        setSavedTasksById((current) => ({ ...current, [updatedTask.id]: updatedTask }));
+        setSelectedTaskId(updatedTask.id);
+      }
+
+      if (result.projectSummary) {
+        const updatedProject = result.projectSummary;
+        setSavedProjectSummariesById((current) => ({ ...current, [updatedProject.projectId]: updatedProject }));
+      }
+
+      setOperationMessage({ tone: "success", text: result.message });
+    } catch (error) {
+      setOperationMessage({
+        tone: "danger",
+        text: error instanceof Error && error.message ? error.message : "提交建模成果失败。",
+      });
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
   function handleStyleBoardModeChange(nextMode: StyleBoardMode) {
     setStyleBoardMode(nextMode);
     setSelectedStyleTaskIds({});
@@ -467,6 +522,14 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => router.push("/modeling/contract-test")}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                <Workflow size={16} />
+                模拟器
+              </button>
               <button
                 type="button"
                 onClick={() => router.push("/imports?importType=modeling")}
@@ -657,6 +720,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                         vendors={data.vendors}
                         saving={selectedTask ? savingTaskId === selectedTask.id : false}
                         onSave={saveTaskUpdate}
+                        onSubmitWork={submitTaskWork}
                       />
                     </div>
                   </aside>
@@ -694,6 +758,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                         vendors={data.vendors}
                         saving={selectedTask ? savingTaskId === selectedTask.id : false}
                         onSave={saveTaskUpdate}
+                        onSubmitWork={submitTaskWork}
                       />
                     </div>
                   </aside>
@@ -1592,16 +1657,20 @@ function TaskDetailPanel({
   vendors,
   saving,
   onSave,
+  onSubmitWork,
 }: {
   task?: ModelingTaskCard;
   vendors: OutsourceVendorOption[];
   saving: boolean;
   onSave: (task: ModelingTaskCard, payload: ModelingTaskUpdateRequest) => Promise<void>;
+  onSubmitWork: (task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) => Promise<void>;
 }) {
   const realVendors = useMemo(() => vendors.filter((vendor) => !vendor.isVirtual), [vendors]);
   const [nextStatus, setNextStatus] = useState<ModelingTaskStatus>(task?.status ?? "未分配");
   const [vendorId, setVendorId] = useState(task?.outsourceVendorId ?? realVendors[0]?.id ?? "");
   const [feedbackContent, setFeedbackContent] = useState("");
+  const [submissionContent, setSubmissionContent] = useState("");
+  const [submissionUrl, setSubmissionUrl] = useState("");
   const [actualFinishDate, setActualFinishDate] = useState(task?.actualFinishDate ?? todayDateString());
 
   if (!task) {
@@ -1615,6 +1684,10 @@ function TaskDetailPanel({
   const currentTask = task;
   const disabled = saving || currentTask.isVirtual;
   const canSaveFeedback = !disabled && feedbackContent.trim().length > 0;
+  const canSubmitWork =
+    !disabled &&
+    !["未启动", "未分配", "待验收", "待送审", "已送审", "等反馈", "已通过", "取消"].includes(currentTask.status) &&
+    (submissionContent.trim().length > 0 || submissionUrl.trim().length > 0);
 
   function handleSaveStatus() {
     const payload: ModelingTaskUpdateRequest = { status: nextStatus };
@@ -1657,6 +1730,17 @@ function TaskDetailPanel({
     void onSave(currentTask, payload);
   }
 
+  function handleSubmitWork() {
+    if (!canSubmitWork) {
+      return;
+    }
+
+    void onSubmitWork(currentTask, {
+      content: submissionContent.trim(),
+      deliverableUrl: submissionUrl.trim() || undefined,
+    });
+  }
+
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
       <SectionTitle icon={<UserRound size={18} />} title="款式详情" helper={task.status} compact />
@@ -1684,7 +1768,7 @@ function TaskDetailPanel({
 
       {reviewBlockedStatuses.has(task.status) || task.blockType ? (
         <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
-          <div className="font-semibold">{task.blockType ?? "送审 / 等反馈"}</div>
+          <div className="font-semibold">{task.blockType ?? (task.status === "待验收" ? "待产品美术验收" : "送审 / 等反馈")}</div>
           <div className="mt-1 leading-5">{task.latestFeedback ?? "等待补充本轮检修问题和版权方反馈。"}</div>
         </div>
       ) : null}
@@ -1759,6 +1843,38 @@ function TaskDetailPanel({
               <PackageCheck size={15} />
               外包
             </button>
+          </div>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-fuchsia-100 bg-fuchsia-50/60 p-3">
+          <label className="text-xs font-semibold text-fuchsia-800">建模师提交成果</label>
+          <textarea
+            value={submissionContent}
+            onChange={(event) => setSubmissionContent(event.target.value)}
+            disabled={disabled}
+            rows={3}
+            placeholder="填写本次提交的内容、文件位置、注意事项或需要产品美术检修的问题"
+            className="min-h-[84px] resize-none rounded-lg border border-fuchsia-100 bg-white px-3 py-2 text-sm leading-5 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 disabled:bg-slate-100"
+          />
+          <input
+            type="url"
+            value={submissionUrl}
+            onChange={(event) => setSubmissionUrl(event.target.value)}
+            disabled={disabled}
+            placeholder="成果链接，可填网盘、图包或文件地址"
+            className="h-10 rounded-lg border border-fuchsia-100 bg-white px-3 text-sm outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 disabled:bg-slate-100"
+          />
+          <button
+            type="button"
+            onClick={handleSubmitWork}
+            disabled={!canSubmitWork}
+            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-fuchsia-700 px-3 text-sm font-semibold text-white transition hover:bg-fuchsia-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+            提交给产品美术验收
+          </button>
+          <div className="text-xs leading-5 text-fuchsia-900">
+            提交后状态会变为“待验收”，产品组工作指引会看到该款式和提交内容。
           </div>
         </div>
 
@@ -1944,9 +2060,9 @@ function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]
       tone: overloadedModelerCount > 0 ? "danger" : "neutral",
     },
     {
-      label: "修改 / 送审卡住款式数",
+      label: "待验收 / 送审卡住款式数",
       value: stuckTasks.length,
-      helper: "已送审、等反馈或修改阻塞",
+      helper: "待验收、已送审、等反馈或修改阻塞",
       tone: stuckTasks.length > 0 ? "danger" : "info",
     },
   ];

@@ -2,6 +2,7 @@ import "server-only";
 
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import type { AuthUser } from "@/lib/auth/permissions";
 import type { ModelingTaskStatus, ModelingWritebackDraft } from "@/lib/modeling-schedule-types";
 
 const validStatuses = new Set<ModelingTaskStatus>([
@@ -10,6 +11,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "已排期",
   "建模中",
   "修改中",
+  "待验收",
   "待送审",
   "已送审",
   "等反馈",
@@ -18,8 +20,8 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "暂停",
   "取消",
 ]);
-const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["已送审", "等反馈"]);
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
+const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["待验收", "已送审", "等反馈"]);
+const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
 
 export class ModelingTaskUpdateError extends Error {
   statusCode: number;
@@ -29,6 +31,95 @@ export class ModelingTaskUpdateError extends Error {
     this.name = "ModelingTaskUpdateError";
     this.statusCode = statusCode;
   }
+}
+
+export async function submitModelingWork(taskId: string, payload: Record<string, unknown>, actor: AuthUser) {
+  if (!taskId || taskId.startsWith("virtual-")) {
+    throw new ModelingTaskUpdateError("虚拟款式不能提交成果，请先录入真实款式。", 400);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.modelingTask.findUnique({ where: { id: taskId } });
+
+    if (!existing) {
+      throw new ModelingTaskUpdateError("没有找到这条建模款式。", 404);
+    }
+
+    if (actor.authRole === "viewer" && existing.modelerId !== actor.id) {
+      throw new ModelingTaskUpdateError("只能提交分配给自己的建模款式。", 403);
+    }
+
+    const currentStatus = normalizeExistingStatus(existing.status, existing.isOutsourced);
+    if (currentStatus === "未启动" || currentStatus === "未分配" || currentStatus === "已通过" || currentStatus === "取消") {
+      throw new ModelingTaskUpdateError("当前状态不能提交建模成果，请先完成分配并进入建模流程。", 400);
+    }
+
+    if (!isOriginalArtApproved(existing.originalArtStatus, existing.originalArtApprovedDate)) {
+      throw new ModelingTaskUpdateError("原画未过审的款式不能提交建模成果。", 400);
+    }
+
+    const content = optionalText(payload.content);
+    const deliverableUrls = parseStringList(payload.deliverableUrls);
+    const singleUrl = optionalText(payload.deliverableUrl);
+    if (singleUrl) {
+      deliverableUrls.unshift(singleUrl);
+    }
+
+    const uniqueUrls = [...new Set(deliverableUrls.filter(Boolean))];
+    if (!content && uniqueUrls.length === 0) {
+      throw new ModelingTaskUpdateError("请填写成果说明或成果链接。", 400);
+    }
+
+    const now = new Date();
+    const today = startOfDay(now);
+    const latestFeedback = await tx.modelingFeedback.findFirst({
+      where: { modelingTaskId: taskId },
+      orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }],
+      select: { roundNo: true },
+    });
+    const roundNo = Math.max(existing.reviewRound ?? 0, latestFeedback?.roundNo ?? 0) + 1;
+    const submitterName = actor.name || "建模师";
+    const feedbackContent = buildWorkSubmissionContent(content, uniqueUrls);
+
+    await tx.modelingFeedback.create({
+      data: {
+        modelingTaskId: taskId,
+        feedbackType: "建模师提交",
+        roundNo,
+        feedbackByUserId: actor.id === "auth-disabled" ? undefined : actor.id,
+        feedbackByName: submitterName,
+        feedbackAt: now,
+        content: feedbackContent,
+        attachmentUrl: uniqueUrls[0],
+        status: "待产品美术验收",
+      },
+    });
+
+    const updated = await tx.modelingTask.update({
+      where: { id: taskId },
+      data: {
+        status: "待验收",
+        actualStartDate: existing.actualStartDate ?? existing.plannedStartDate ?? today,
+        remainingWorkdays: 0,
+        reviewRound: roundNo,
+        lastFeedbackAt: now,
+        lastUpdatedAt: now,
+        lastUpdatedBy: submitterName,
+        blockedSince: null,
+        blockedDays: 0,
+        blockType: null,
+      },
+    });
+
+    const writebackDraft = await refreshProjectModelingProgress(tx, updated.projectId, updated.projectTaskId);
+
+    return {
+      projectId: updated.projectId,
+      projectTaskId: updated.projectTaskId,
+      message: "已提交建模成果，等待产品美术验收。",
+      writebackDraft,
+    };
+  });
 }
 
 export async function updateModelingTask(taskId: string, payload: Record<string, unknown>) {
@@ -235,6 +326,14 @@ function applyStatusEffects(
     data.blockType = status === "修改中" ? (options.blockType ?? "修改中") : null;
   }
 
+  if (status === "待验收") {
+    data.actualStartDate = options.actualStartDate ?? existing.actualStartDate ?? existing.plannedStartDate ?? today;
+    data.remainingWorkdays = 0;
+    data.blockedSince = null;
+    data.blockedDays = 0;
+    data.blockType = null;
+  }
+
   if (status === "待送审") {
     data.internalApprovedDate = today;
     data.remainingWorkdays = 0;
@@ -292,7 +391,7 @@ export async function refreshProjectModelingProgress(
   }).length;
   const submittedStyles = requiredTasks.filter((task) => {
     const status = normalizeExistingStatus(task.status, task.isOutsourced);
-    return status === "已送审" || status === "等反馈";
+    return status === "待验收" || status === "已送审" || status === "等反馈";
   }).length;
   const outsourcedStyles = requiredTasks.filter((task) => normalizeExistingStatus(task.status, task.isOutsourced) === "外包中" || task.isOutsourced).length;
   const unassignedStyles = requiredTasks.filter((task) => normalizeExistingStatus(task.status, task.isOutsourced) === "未分配" && !task.modelerId && !task.isOutsourced).length;
@@ -375,6 +474,7 @@ function normalizeExistingStatus(value: string, isOutsourced: boolean): Modeling
   if (value.includes("排期")) return "已排期";
   if (value.includes("修改")) return "修改中";
   if (value.includes("建模中") || value.includes("进行中")) return "建模中";
+  if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
   if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
@@ -397,6 +497,7 @@ function isOriginalArtApproved(status: string, approvedDate: Date | null) {
 }
 
 function defaultFeedbackType(status: ModelingTaskStatus) {
+  if (status === "待验收") return "建模师提交";
   if (status === "待送审") return "内部通过";
   if (status === "已送审") return "送审记录";
   if (status === "等反馈") return "版权方反馈";
@@ -404,6 +505,28 @@ function defaultFeedbackType(status: ModelingTaskStatus) {
   if (status === "建模中") return "修改意见";
   if (status === "已通过") return "通过记录";
   return "检修反馈";
+}
+
+function buildWorkSubmissionContent(content: string | null, urls: string[]) {
+  const lines = [];
+  if (content) {
+    lines.push(content);
+  }
+
+  if (urls.length > 0) {
+    lines.push("成果链接：");
+    lines.push(...urls.map((url) => `- ${url}`));
+  }
+
+  return lines.join("\n");
+}
+
+function parseStringList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
 }
 
 function buildSuccessMessage(
