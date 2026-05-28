@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { read, utils, type WorkBook } from "xlsx";
 import { encryptExportablePassword } from "@/lib/auth/password-export";
-import { hashPassword, isValidPassword } from "@/lib/auth/password";
+import { hashPassword } from "@/lib/auth/password";
 import { normalizeAuthRole } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
 import {
@@ -685,11 +685,6 @@ function passwordForImport({
   state: MutableImportState;
 }) {
   if (initialPassword) {
-    if (!isValidPassword(initialPassword)) {
-      state.warnings.push(`人员名单第 ${rowNumber} 行初始/重置密码少于 8 位，已跳过密码写入。`);
-      return { passwordHash: existingPasswordHash ? undefined : null };
-    }
-
     return {
       passwordHash: hashPassword(initialPassword),
       passwordExportCiphertext: encryptExportablePassword(initialPassword) ?? undefined,
