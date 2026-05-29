@@ -29,6 +29,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       message: result.message,
       task,
       projectSummary,
+      reviewRequest: result.reviewRequest,
+      productGuideEvent: result.productGuideEvent,
       writebackDraft: result.writebackDraft,
     });
   } catch (error) {

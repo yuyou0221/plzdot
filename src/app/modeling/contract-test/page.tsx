@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
-import { ModelingContractTestPage, type ModelingContractTestProject } from "@/components/modeling/modeling-contract-test-page";
+import {
+  ModelingContractTestPage,
+  type ModelingContractTestModeler,
+  type ModelingContractTestProject,
+} from "@/components/modeling/modeling-contract-test-page";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { prisma } from "@/lib/db/prisma";
 
@@ -89,7 +93,26 @@ export default async function ModelingContractTestRoute() {
     })
     .filter((project): project is ModelingContractTestProject => Boolean(project));
 
-  return <ModelingContractTestPage currentUserName={currentUser.name} initialDate={formatDate(new Date())} initialSeed="local-draft" projects={projectOptions} />;
+  const testModelers: ModelingContractTestModeler[] = await prisma.user.findMany({
+    where: {
+      isModeler: true,
+      status: { not: "停用" },
+      name: { in: ["冷茂华", "孟凡菲"] },
+    },
+    select: { id: true, name: true },
+    orderBy: [{ name: "asc" }],
+  });
+
+  return (
+    <ModelingContractTestPage
+      currentUserName={currentUser.name}
+      currentUserRole={currentUser.authRole}
+      initialDate={formatDate(new Date())}
+      initialSeed="local-draft"
+      projects={projectOptions}
+      testModelers={testModelers}
+    />
+  );
 }
 
 function formatDate(value: Date | null) {

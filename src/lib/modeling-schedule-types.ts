@@ -1,7 +1,10 @@
 export type ModelingTaskStatus =
+  | "待确认"
+  | "退回补充"
   | "未启动"
   | "未分配"
   | "已排期"
+  | "排队中"
   | "建模中"
   | "修改中"
   | "待验收"
@@ -56,6 +59,11 @@ export type ModelingTaskCard = {
   actualFinishDate?: string;
   internalApprovedDate?: string;
   copyrightApprovedDate?: string;
+  actualWorkMinutes: number;
+  activeWorkStartedAt?: string;
+  remainingWorkdays?: number | null;
+  notes?: string;
+  feedbackCount: number;
   reviewRound: number;
   lastFeedbackAt?: string;
   lastUpdatedAt?: string;
@@ -132,7 +140,6 @@ export type ModelingMilestoneOverview = {
 
 export type ModelingTaskUpdateRequest = {
   modelerId?: string | null;
-  status?: ModelingTaskStatus;
   isOutsourced?: boolean;
   outsourceVendorId?: string | null;
   plannedStartDate?: string | null;
@@ -140,9 +147,39 @@ export type ModelingTaskUpdateRequest = {
   actualStartDate?: string | null;
   actualFinishDate?: string | null;
   remainingWorkdays?: number | null;
+  notes?: string | null;
   feedbackType?: string | null;
   feedbackContent?: string | null;
+  feedbackAttachments?: ModelingFeedbackAttachments | null;
   blockType?: string | null;
+};
+
+export type ModelingTaskUpdateEventType =
+  | "assign_modeler"
+  | "clear_modeler"
+  | "mark_outsourced"
+  | "clear_outsource"
+  | "update_schedule_fields"
+  | "update_modeler_inputs";
+
+export type ModelingTodoItem = {
+  id: string;
+  type: "style-list-confirmation";
+  title: string;
+  projectId: string;
+  projectName: string;
+  styleCount: number;
+  status: "待处理";
+  actionLabel: string;
+  helper: string;
+  styleNames: string[];
+  lastUpdatedAt?: string | null;
+};
+
+export type ModelingFeedbackAttachments = {
+  imageUrl?: string | null;
+  pdfUrl?: string | null;
+  pptUrl?: string | null;
 };
 
 export type ModelingWorkSubmissionRequest = {
@@ -162,7 +199,9 @@ export type ModelingWritebackDraft = {
 export type ModelingTaskUpdateResponse = {
   ok: boolean;
   message: string;
+  eventType?: ModelingTaskUpdateEventType;
   task?: ModelingTaskCard;
+  updatedTasks?: ModelingTaskCard[];
   projectSummary?: ProjectModelingSummary;
   writebackDraft?: ModelingWritebackDraft;
 };
@@ -170,6 +209,7 @@ export type ModelingTaskUpdateResponse = {
 export type ModelingScheduleData = {
   sourceLabel: string;
   generatedAt: string;
+  todos: ModelingTodoItem[];
   milestoneOverview: ModelingMilestoneOverview;
   metrics: ModelingMetric[];
   tasks: ModelingTaskCard[];

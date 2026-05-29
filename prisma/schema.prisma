@@ -326,7 +326,10 @@ model ModelingTask {
   internalApprovedDate    DateTime? @db.Date
   copyrightApprovedDate   DateTime? @db.Date
   actualWorkdays          Int?
+  actualWorkMinutes       Int       @default(0)
+  activeWorkStartedAt     DateTime?
   remainingWorkdays       Int?
+  notes                   String?
   status                  String    @default("未分配")
   reviewRound             Int?
   lastFeedbackAt          DateTime?
@@ -360,6 +363,7 @@ model ModelingFeedback {
   content          String
   severity         String    @default("普通")
   attachmentUrl    String?
+  submissionSnapshot Json?
   resolvedAt       DateTime?
   resolvedBy       String?
   status           String    @default("待处理")
@@ -387,6 +391,29 @@ model ProjectModelingProgress {
 
   @@index([projectId])
   @@index([projectTaskId])
+}
+
+model ModelingProductGuideEvent {
+  id             String    @id @default(uuid())
+  eventType      String
+  sourceModule   String    @default("modeling-schedule")
+  targetModule   String    @default("product-guide")
+  projectId      String
+  projectTaskId  String?
+  modelingTaskId String?
+  payload        Json
+  status         String    @default("pending")
+  generatedBy    String?
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([eventType])
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([modelingTaskId])
+  @@index([targetModule, status])
+  @@index([createdAt])
 }
 
 model WorkTask {

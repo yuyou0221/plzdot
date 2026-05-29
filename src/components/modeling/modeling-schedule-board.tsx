@@ -1,10 +1,11 @@
 "use client";
 
 import type { DragEvent as ReactDragEvent, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  BellRing,
   Boxes,
   CalendarRange,
   CheckCircle2,
@@ -16,24 +17,24 @@ import {
   Loader2,
   Maximize2,
   PackageCheck,
-  PenLine,
   Save,
   Search,
   Send,
   UserRound,
-  UsersRound,
   Workflow,
   X,
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
 import type { AuthUser } from "@/lib/auth/permissions";
+import { canDisplayModelingFieldValue, isModelingTestFieldValue } from "@/lib/modeling-test-fields";
 import type {
   ModelerCapacity,
   ModelingMilestoneCard,
   ModelingMilestoneOverview,
   ModelingMilestoneRiskLevel,
   ModelingMetric,
+  ModelingTodoItem,
   ProjectModelingSummary,
   ModelingScheduleData,
   ModelingTaskCard,
@@ -50,13 +51,15 @@ type CapacityRow = ModelerCapacity & {
   staleTasks: ModelingTaskCard[];
   isOverloaded: boolean;
 };
-type ModelingView = "milestones" | "management-board" | "style-board" | "profile";
+type ModelingView = "milestones" | "style-board" | "profile";
 type StyleBoardMode = "active" | "approved";
 
-const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "建模中", "修改中", "待验收", "已送审", "等反馈", "外包中", "暂停"]);
+const activeQueueStatuses = new Set<ModelingTaskStatus>(["已排期", "排队中", "建模中", "修改中", "待验收", "已送审", "等反馈", "外包中", "暂停"]);
 const reviewBlockedStatuses = new Set<ModelingTaskStatus>(["待验收", "已送审", "等反馈"]);
-const statusOptions: ModelingTaskStatus[] = ["未启动", "未分配", "已排期", "建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
-const formalModelingStatuses = new Set<ModelingTaskStatus>(["建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中"]);
+const statusOptions: ModelingTaskStatus[] = ["待确认", "退回补充", "未启动", "未分配", "已排期", "排队中", "建模中", "修改中", "待验收", "待送审", "已送审", "等反馈", "已通过", "外包中", "暂停", "取消"];
+const productReviewManagedStatuses = new Set<ModelingTaskStatus>(["待验收", "待送审", "已送审", "等反馈", "已通过"]);
+const preConfirmationStatuses = new Set<ModelingTaskStatus>(["待确认", "退回补充"]);
+const workTimerRefreshMs = 5 * 60 * 1000;
 
 const statusMeta: Record<
   ModelingTaskStatus,
@@ -67,6 +70,18 @@ const statusMeta: Record<
     columnClass: string;
   }
 > = {
+  待确认: {
+    title: "待确认",
+    dotClass: "bg-amber-500",
+    cardClass: "border-amber-200 bg-amber-50",
+    columnClass: "border-amber-200 bg-amber-50/70",
+  },
+  退回补充: {
+    title: "退回补充",
+    dotClass: "bg-rose-500",
+    cardClass: "border-rose-200 bg-rose-50",
+    columnClass: "border-rose-200 bg-rose-50/70",
+  },
   未启动: {
     title: "未启动",
     dotClass: "bg-stone-400",
@@ -84,6 +99,12 @@ const statusMeta: Record<
     dotClass: "bg-sky-500",
     cardClass: "border-sky-200 bg-sky-50",
     columnClass: "border-sky-200 bg-sky-50/70",
+  },
+  排队中: {
+    title: "排队中",
+    dotClass: "bg-teal-500",
+    cardClass: "border-teal-200 bg-teal-50",
+    columnClass: "border-teal-200 bg-teal-50/70",
   },
   建模中: {
     title: "建模中",
@@ -183,8 +204,21 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
   const [operationMessage, setOperationMessage] = useState<{ tone: "success" | "warning" | "danger"; text: string } | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  const [selectedStyleTaskIds, setSelectedStyleTaskIds] = useState<Record<string, true>>({});
   const [detailTaskId, setDetailTaskId] = useState("");
+  const [confirmationProjectId, setConfirmationProjectId] = useState("");
+  const [clockNow, setClockNow] = useState<number | null>(null);
+  const canViewTestFields = currentUser.authRole === "admin";
+
+  useEffect(() => {
+    const syncClock = () => setClockNow(Date.now());
+    const startupTimerId = window.setTimeout(syncClock, 0);
+    const timerId = window.setInterval(syncClock, workTimerRefreshMs);
+
+    return () => {
+      window.clearTimeout(startupTimerId);
+      window.clearInterval(timerId);
+    };
+  }, []);
 
   const modelerById = useMemo(() => new Map(data.modelers.map((modeler) => [modeler.id, modeler])), [data.modelers]);
   const visibleSearch = search.trim();
@@ -254,20 +288,17 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
   );
   const selectedTaskPool = isApprovedStyleView ? approvedTasks : tasks;
   const selectedTask = selectedTaskPool.find((task) => task.id === selectedTaskId) ?? selectedTaskPool[0];
+  const activeTodos = data.todos;
   const detailTask = detailTaskId ? allTasks.find((task) => task.id === detailTaskId) : undefined;
   const detailProjectTasks = detailTask ? allTasks.filter((task) => task.projectId === detailTask.projectId) : [];
   const detailProjectSummary = detailTask ? projectSummaries.find((project) => project.projectId === detailTask.projectId) : undefined;
-  const capacityRows = useMemo(() => buildCapacityRows(data.modelers, tasks), [data.modelers, tasks]);
+  const confirmationProjectTasks = confirmationProjectId ? allTasks.filter((task) => task.projectId === confirmationProjectId) : [];
+  const confirmationTodo = confirmationProjectId ? activeTodos.find((todo) => todo.projectId === confirmationProjectId) : undefined;
   const styleCapacityRows = useMemo(
     () => buildCapacityRows(data.modelers, styleBoardMode === "approved" ? approvedTasks : tasks),
     [approvedTasks, data.modelers, styleBoardMode, tasks],
   );
   const filteredStyleTasks = styleBoardMode === "approved" ? filteredApprovedTasks : filteredTasks;
-  const selectableStyleTaskIds = useMemo(
-    () => filteredStyleTasks.filter((task) => !task.isVirtual).map((task) => task.id),
-    [filteredStyleTasks],
-  );
-  const selectedStyleTaskCount = selectableStyleTaskIds.filter((taskId) => selectedStyleTaskIds[taskId]).length;
   const filteredProjectSummaries = useMemo(() => {
     return projectSummaries.filter((project) => !visibleSearch || project.projectName.includes(visibleSearch));
   }, [projectSummaries, visibleSearch]);
@@ -329,11 +360,6 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
   async function saveTaskUpdate(task: ModelingTaskCard, payload: ModelingTaskUpdateRequest) {
     if (task.isVirtual) {
       setOperationMessage({ tone: "warning", text: "虚拟款式不能保存，请先由产品组工作指引录入真实款式。" });
-      return;
-    }
-
-    if (payload.status && formalModelingStatuses.has(payload.status) && !isOriginalArtApproved(task)) {
-      setOperationMessage({ tone: "danger", text: "原画未过审的款式不能进入正式建模、外包、送审或通过状态。" });
       return;
     }
 
@@ -405,6 +431,17 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
         const updatedTask = result.task;
         setSavedTasksById((current) => ({ ...current, [updatedTask.id]: updatedTask }));
         setSelectedTaskId(updatedTask.id);
+        setClockNow(Date.now());
+      }
+
+      if (result.updatedTasks && result.updatedTasks.length > 0) {
+        setSavedTasksById((current) =>
+          result.updatedTasks!.reduce<Record<string, ModelingTaskCard>>(
+            (next, updatedTask) => ({ ...next, [updatedTask.id]: updatedTask }),
+            current,
+          ),
+        );
+        setClockNow(Date.now());
       }
 
       if (result.projectSummary) {
@@ -412,6 +449,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
         setSavedProjectSummariesById((current) => ({ ...current, [updatedProject.projectId]: updatedProject }));
       }
 
+      setClockNow(Date.now());
       setOperationMessage({ tone: "success", text: result.message });
     } catch (error) {
       setOperationMessage({
@@ -423,41 +461,108 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
     }
   }
 
-  function handleStyleBoardModeChange(nextMode: StyleBoardMode) {
-    setStyleBoardMode(nextMode);
-    setSelectedStyleTaskIds({});
-  }
-
-  function handleToggleStyleTaskSelection(task: ModelingTaskCard) {
+  async function submitWorkTimer(task: ModelingTaskCard, action: "start") {
     if (task.isVirtual) {
-      setOperationMessage({ tone: "warning", text: "虚拟款式不能进入批量选择，请先录入真实款式。" });
+      setOperationMessage({ tone: "warning", text: "虚拟款式不能记录工时，请先录入真实款式。" });
       return;
     }
 
-    setSelectedStyleTaskIds((current) => {
-      if (current[task.id]) {
-        return omitKey(current, task.id);
+    if (!isOriginalArtApproved(task)) {
+      setOperationMessage({ tone: "danger", text: "原画未过审的款式不能开始建模计时。" });
+      return;
+    }
+
+    setSavingTaskId(task.id);
+    setOperationMessage(null);
+
+    try {
+      const response = await fetch(`/api/modeling/tasks/${task.id}/work-timer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const result = (await response.json()) as ModelingTaskUpdateResponse;
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "记录建模工时失败。");
       }
 
-      return { ...current, [task.id]: true };
-    });
-  }
-
-  function handleSetStyleTaskSelection(taskIds: string[], selected: boolean) {
-    setSelectedStyleTaskIds((current) => {
-      if (selected) {
-        return taskIds.reduce<Record<string, true>>((next, taskId) => {
-          next[taskId] = true;
-          return next;
-        }, { ...current });
+      if (result.task) {
+        const updatedTask = result.task;
+        setSavedTasksById((current) => ({ ...current, [updatedTask.id]: updatedTask }));
+        setSelectedTaskId(updatedTask.id);
       }
 
-      return taskIds.reduce<Record<string, true>>((next, taskId) => omitKey(next, taskId), current);
-    });
+      if (result.updatedTasks && result.updatedTasks.length > 0) {
+        setSavedTasksById((current) =>
+          result.updatedTasks!.reduce<Record<string, ModelingTaskCard>>(
+            (next, updatedTask) => ({ ...next, [updatedTask.id]: updatedTask }),
+            current,
+          ),
+        );
+      }
+
+      if (result.projectSummary) {
+        const updatedProject = result.projectSummary;
+        setSavedProjectSummariesById((current) => ({ ...current, [updatedProject.projectId]: updatedProject }));
+      }
+
+      setClockNow(Date.now());
+      setOperationMessage({ tone: "success", text: result.message });
+    } catch (error) {
+      setOperationMessage({
+        tone: "danger",
+        text: error instanceof Error && error.message ? error.message : "记录建模工时失败。",
+      });
+    } finally {
+      setSavingTaskId(null);
+    }
   }
 
-  function handleSelectAllVisibleStyleTasks() {
-    handleSetStyleTaskSelection(selectableStyleTaskIds, true);
+  async function submitStyleListConfirmation(task: ModelingTaskCard, action: "confirm" | "return", note?: string) {
+    if (task.isVirtual) {
+      setOperationMessage({ tone: "warning", text: "虚拟款式不能确认，请先接收真实款式清单。" });
+      return;
+    }
+
+    if (!preConfirmationStatuses.has(task.status)) {
+      setOperationMessage({ tone: "warning", text: "当前款式不在待确认或退回补充状态。" });
+      return;
+    }
+
+    setSavingTaskId(task.id);
+    setOperationMessage(null);
+
+    try {
+      const response = await fetch("/api/modeling/style-confirmations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: task.projectId,
+          action,
+          note,
+        }),
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string };
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "提交款式清单确认失败。");
+      }
+
+      setOperationMessage({ tone: action === "confirm" ? "success" : "warning", text: result.message || "款式清单确认已提交。" });
+      router.refresh();
+    } catch (error) {
+      setOperationMessage({
+        tone: "danger",
+        text: error instanceof Error && error.message ? error.message : "提交款式清单确认失败。",
+      });
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
+  function handleStyleBoardModeChange(nextMode: StyleBoardMode) {
+    setStyleBoardMode(nextMode);
   }
 
   function openTaskDetail(task: ModelingTaskCard) {
@@ -465,23 +570,47 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
     setDetailTaskId(task.id);
   }
 
+  function openTodo(todo: ModelingTodoItem) {
+    setView("style-board");
+    setStyleBoardMode("active");
+    setSearch(todo.projectName);
+    setConfirmationProjectId(todo.projectId);
+    setDetailTaskId("");
+  }
+
   return (
     <div className="min-h-screen bg-[#f3f6f8] text-slate-950">
       {detailTask ? (
         <RealTaskDetailOverlay
-          key={`${detailTask.id}:${detailTask.status}:${detailTask.outsourceVendorId ?? ""}:${detailTask.actualFinishDate ?? ""}`}
+                key={`${detailTask.id}:${detailTask.status}:${detailTask.outsourceVendorId ?? ""}:${detailTask.actualFinishDate ?? ""}:${detailTask.activeWorkStartedAt ?? ""}:${detailTask.actualWorkMinutes}:${detailTask.feedbackCount}:${detailTask.remainingWorkdays ?? ""}:${detailTask.notes ?? ""}`}
           task={detailTask}
           projectTasks={detailProjectTasks}
           projectSummary={detailProjectSummary}
           vendors={data.vendors}
           saving={savingTaskId === detailTask.id}
+          clockNow={clockNow}
+          canViewTestFields={canViewTestFields}
           onClose={() => setDetailTaskId("")}
           onSelectTask={(task) => {
             setSelectedTaskId(task.id);
             setDetailTaskId(task.id);
           }}
+          currentUser={currentUser}
           onSave={saveTaskUpdate}
           onSubmitWork={submitTaskWork}
+          onWorkTimer={submitWorkTimer}
+          onConfirmStyleList={submitStyleListConfirmation}
+        />
+      ) : null}
+      {confirmationTodo && confirmationProjectTasks.length > 0 ? (
+        <ProjectStyleListConfirmationOverlay
+          canViewTestFields={canViewTestFields}
+          canConfirm={currentUser.authRole === "admin" || currentUser.authRole === "manager"}
+          projectTasks={confirmationProjectTasks}
+          savingTaskId={savingTaskId}
+          todo={confirmationTodo}
+          onClose={() => setConfirmationProjectId("")}
+          onConfirm={(task, action, note) => submitStyleListConfirmation(task, action, note)}
         />
       ) : null}
       <div className="grid min-h-screen grid-cols-[240px_minmax(0,1fr)] max-xl:grid-cols-1">
@@ -540,13 +669,11 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
               <div className="mt-2 text-sm text-slate-500">
                 {view === "milestones"
                   ? `${data.milestoneOverview.currentMonthLabel} / 之前未完成 / ${data.milestoneOverview.nextMonthLabel} 建模里程碑`
-                  : view === "management-board"
-                    ? "管理层看板 · 总经理可见 · 本周任务、未分配、外包、卡审与耗时"
-                    : view === "profile"
-                      ? "个人信息 · 查看当前建模师名下款式"
-                      : styleBoardMode === "approved"
-                        ? "款式看板 · 已通过款式归档 · 按建模师分组"
-                        : "款式看板副本 · 本周任务、未分配、外包、卡审与耗时"}
+                  : view === "profile"
+                    ? "个人信息 · 查看当前建模师名下款式"
+                    : styleBoardMode === "approved"
+                      ? "款式看板 · 已通过款式归档 · 按建模师分组"
+                      : "款式看板 · 按建模师分组，未分配单独显示"}
               </div>
             </div>
 
@@ -576,15 +703,6 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                   )}
                 >
                   里程碑
-                </button>
-                <button
-                  onClick={() => setView("management-board")}
-                  className={clsx(
-                    "rounded-md px-3 text-sm font-semibold",
-                    view === "management-board" ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
-                  )}
-                >
-                  管理层看板
                 </button>
                 <button
                   onClick={() => setView("style-board")}
@@ -623,12 +741,19 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
             </div>
           </header>
 
+          {activeTodos.length > 0 ? (
+            <ModelingTodoBanner
+              todos={activeTodos}
+              onOpenTodo={openTodo}
+            />
+          ) : null}
+
           {view === "milestones" ? (
             <MilestoneOverviewView
               overview={filteredMilestoneOverview}
               onOpenStyleBoard={(projectName) => {
                 setSearch(projectName);
-                setView("management-board");
+                setView("style-board");
               }}
             />
           ) : view === "profile" ? (
@@ -672,129 +797,42 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                 </div>
               ) : null}
 
-              {view === "management-board" ? (
-                <section className="mt-5 grid grid-cols-[300px_minmax(0,1fr)_340px] gap-4 max-2xl:grid-cols-[280px_minmax(0,1fr)] max-xl:grid-cols-1">
-                  <div className="min-w-0">
-                    <SectionTitle icon={<UsersRound size={18} />} title="建模师产能" helper="本周任务 / 排队款式 / 超载 / 产能" />
-                    <div className="mt-3 grid gap-3">
-                      {capacityRows.map((modeler) => (
-                        <ModelerCapacityCard
-                          key={modeler.id}
-                          modeler={modeler}
-                          showCapacity
-                          onDrop={(event) => handleDropOnModeler(event, modeler.id)}
-                        />
-                      ))}
-                    </div>
+              <section className="mt-5 grid grid-cols-[minmax(0,1fr)_340px] gap-4 max-xl:grid-cols-1">
+                <StyleBoardByModeler
+                  modelers={styleCapacityRows}
+                  tasks={filteredStyleTasks}
+                  mode={styleBoardMode}
+                  activeCount={tasks.length}
+                  approvedCount={approvedTasks.length}
+                  selectedTaskId={selectedTask?.id}
+                  draftAssignments={draftAssignments}
+                  onModeChange={handleStyleBoardModeChange}
+                  onDropOnModeler={handleDropOnModeler}
+                  onSelectTask={setSelectedTaskId}
+                  onOpenTaskDetail={openTaskDetail}
+                  onDragStart={handleDragStart}
+                  onDragEnd={() => setDraggingTaskId(null)}
+                />
+
+                <aside className="min-w-0">
+                  <div className="grid gap-4">
+                    <ProjectProgressPanel projects={filteredProjectSummaries} />
+                    <TaskDetailPanel
+                      key={`${selectedTask?.id ?? "empty-task"}:${selectedTask?.status ?? ""}:${selectedTask?.outsourceVendorId ?? ""}:${selectedTask?.actualFinishDate ?? ""}:${selectedTask?.activeWorkStartedAt ?? ""}:${selectedTask?.actualWorkMinutes ?? 0}:${selectedTask?.feedbackCount ?? 0}:${selectedTask?.remainingWorkdays ?? ""}:${selectedTask?.notes ?? ""}`}
+                      task={selectedTask}
+                      vendors={data.vendors}
+                      currentUser={currentUser}
+                      saving={selectedTask ? savingTaskId === selectedTask.id : false}
+                      clockNow={clockNow}
+                      canViewTestFields={canViewTestFields}
+                      onSave={saveTaskUpdate}
+                      onSubmitWork={submitTaskWork}
+                      onWorkTimer={submitWorkTimer}
+                      onConfirmStyleList={submitStyleListConfirmation}
+                    />
                   </div>
-
-                  <div className="min-w-0">
-                    <SectionTitle icon={<Boxes size={18} />} title="款式任务看板" helper={`当前显示 ${filteredTasks.length} 款`} />
-                    <div className="mt-3 overflow-x-auto pb-2">
-                      <div className="grid min-w-[2300px] grid-cols-10 gap-3">
-                        {data.statusColumns.map((status) => {
-                          const columnTasks = filteredTasks.filter((task) => task.status === status);
-
-                          return (
-                            <div
-                              key={status}
-                              className={clsx("rounded-lg border p-2", statusMeta[status].columnClass)}
-                              onDragOver={(event) => {
-                                if (status === "未分配") {
-                                  event.preventDefault();
-                                }
-                              }}
-                            >
-                              <div className="mb-2 flex items-center justify-between gap-2 px-1">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                                  <span className={clsx("h-2.5 w-2.5 rounded-full", statusMeta[status].dotClass)} />
-                                  {statusMeta[status].title}
-                                </div>
-                                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
-                                  {columnTasks.length}
-                                </span>
-                              </div>
-                              <div className="grid gap-2">
-                                {columnTasks.length > 0 ? (
-                                  columnTasks.map((task) => (
-                                    <TaskCard
-                                      key={task.id}
-                                      task={task}
-                                      selected={selectedTask?.id === task.id}
-                                      isDraft={Boolean(draftAssignments[task.id])}
-                                      onClick={() => setSelectedTaskId(task.id)}
-                                      onOpenDetail={() => openTaskDetail(task)}
-                                      onDragStart={(event) => handleDragStart(event, task)}
-                                      onDragEnd={() => setDraggingTaskId(null)}
-                                    />
-                                  ))
-                                ) : (
-                                  <div className="rounded-md border border-dashed border-slate-200 bg-white/70 px-3 py-6 text-center text-xs text-slate-400">
-                                    暂无款式
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  <aside className="min-w-0 max-2xl:col-span-2 max-xl:col-span-1">
-                    <div className="grid gap-4">
-                      <ProjectProgressPanel projects={filteredProjectSummaries} />
-                      <TaskDetailPanel
-                        key={`${selectedTask?.id ?? "empty-task"}:${selectedTask?.status ?? ""}:${selectedTask?.outsourceVendorId ?? ""}:${selectedTask?.actualFinishDate ?? ""}`}
-                        task={selectedTask}
-                        vendors={data.vendors}
-                        saving={selectedTask ? savingTaskId === selectedTask.id : false}
-                        onSave={saveTaskUpdate}
-                        onSubmitWork={submitTaskWork}
-                      />
-                    </div>
-                  </aside>
-                </section>
-              ) : (
-                <section className="mt-5 grid grid-cols-[minmax(0,1fr)_340px] gap-4 max-xl:grid-cols-1">
-                  <StyleBoardByModeler
-                    modelers={styleCapacityRows}
-                    tasks={filteredStyleTasks}
-                    mode={styleBoardMode}
-                    activeCount={tasks.length}
-                    approvedCount={approvedTasks.length}
-                    selectedTaskId={selectedTask?.id}
-                    selectedTaskIds={selectedStyleTaskIds}
-                    selectedCount={selectedStyleTaskCount}
-                    selectableCount={selectableStyleTaskIds.length}
-                    draftAssignments={draftAssignments}
-                    onModeChange={handleStyleBoardModeChange}
-                    onDropOnModeler={handleDropOnModeler}
-                    onSelectTask={setSelectedTaskId}
-                    onOpenTaskDetail={openTaskDetail}
-                    onToggleTaskSelection={handleToggleStyleTaskSelection}
-                    onSetTaskSelection={handleSetStyleTaskSelection}
-                    onSelectAllVisible={handleSelectAllVisibleStyleTasks}
-                    onClearSelection={() => setSelectedStyleTaskIds({})}
-                    onDragStart={handleDragStart}
-                    onDragEnd={() => setDraggingTaskId(null)}
-                  />
-
-                  <aside className="min-w-0">
-                    <div className="grid gap-4">
-                      <ProjectProgressPanel projects={filteredProjectSummaries} />
-                      <TaskDetailPanel
-                        key={`${selectedTask?.id ?? "empty-task"}:${selectedTask?.status ?? ""}:${selectedTask?.outsourceVendorId ?? ""}:${selectedTask?.actualFinishDate ?? ""}`}
-                        task={selectedTask}
-                        vendors={data.vendors}
-                        saving={selectedTask ? savingTaskId === selectedTask.id : false}
-                        onSave={saveTaskUpdate}
-                        onSubmitWork={submitTaskWork}
-                      />
-                    </div>
-                  </aside>
-                </section>
-              )}
+                </aside>
+              </section>
             </>
           )}
         </main>
@@ -809,6 +847,188 @@ function MetricCard({ metric }: { metric: ModelingMetric }) {
       <div className="text-sm font-medium text-slate-500">{metric.label}</div>
       <div className="mt-2 text-3xl font-semibold tracking-tight">{metric.value}</div>
       <div className="mt-2 text-sm leading-5 text-slate-500">{metric.helper}</div>
+    </div>
+  );
+}
+
+function ModelingTodoBanner({
+  todos,
+  onOpenTodo,
+}: {
+  todos: ModelingTodoItem[];
+  onOpenTodo: (todo: ModelingTodoItem) => void;
+}) {
+  return (
+    <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="mt-0.5 rounded-full bg-amber-100 p-2 text-amber-700">
+            <BellRing size={18} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-amber-950">建模任务待办</div>
+            <div className="mt-1 text-sm leading-6 text-amber-900">
+              {todos.length === 1 ? todos[0].helper : `当前有 ${todos.length} 个项目的款式清单等待建模侧确认。`}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {todos.slice(0, 3).map((todo) => (
+            <button
+              key={todo.id}
+              type="button"
+              onClick={() => onOpenTodo(todo)}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-white px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+            >
+              <ClipboardList size={14} />
+              打开清单
+              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs">{todo.styleCount} 款</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProjectStyleListConfirmationOverlay({
+  canViewTestFields,
+  canConfirm,
+  projectTasks,
+  savingTaskId,
+  todo,
+  onClose,
+  onConfirm,
+}: {
+  canViewTestFields: boolean;
+  canConfirm: boolean;
+  projectTasks: ModelingTaskCard[];
+  savingTaskId: string | null;
+  todo: ModelingTodoItem;
+  onClose: () => void;
+  onConfirm: (task: ModelingTaskCard, action: "confirm" | "return", note?: string) => Promise<void>;
+}) {
+  const [returnNote, setReturnNote] = useState("");
+  const confirmableTasks = projectTasks.filter((task) => preConfirmationStatuses.has(task.status));
+  const actionTask = confirmableTasks[0];
+  const saving = Boolean(actionTask && savingTaskId === actionTask.id);
+  const sortedTasks = [...projectTasks].sort(compareStyleListTasks);
+
+  function handleConfirm() {
+    if (!canConfirm || !actionTask || saving) {
+      return;
+    }
+
+    void onConfirm(actionTask, "confirm");
+  }
+
+  function handleReturn() {
+    const note = returnNote.trim();
+
+    if (!canConfirm || !actionTask || saving || !note) {
+      return;
+    }
+
+    void onConfirm(actionTask, "return", note);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/55 p-3 backdrop-blur-sm sm:p-5">
+      <section className="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden rounded-lg bg-slate-50 shadow-2xl">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <ClipboardList className="h-5 w-5 text-amber-600" />
+              <h2 className="truncate text-lg font-semibold text-slate-950">款式清单待确认</h2>
+              <span className="rounded bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">{todo.styleCount} 款待确认</span>
+            </div>
+            <div className="mt-1 truncate text-sm text-slate-500">{todo.projectName}</div>
+          </div>
+          <button
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-100"
+            onClick={onClose}
+            title="关闭清单"
+            type="button"
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <main className="min-h-0 flex-1 overflow-auto p-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="rounded-lg border border-slate-200 bg-white p-4">
+              <SectionTitle icon={<Boxes size={18} />} title="本次提交款式" helper={`${sortedTasks.length} 款`} compact />
+              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+                <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                  <thead className="bg-slate-100 text-xs text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">序号</th>
+                      <th className="px-3 py-2 font-medium">款式</th>
+                      <th className="px-3 py-2 font-medium">任务</th>
+                      <th className="px-3 py-2 font-medium">难度</th>
+                      <th className="px-3 py-2 font-medium">预计天数</th>
+                      <th className="px-3 py-2 font-medium">原画状态</th>
+                      <th className="px-3 py-2 font-medium">当前状态</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {sortedTasks.map((task) => (
+                      <tr key={task.id} className={preConfirmationStatuses.has(task.status) ? "bg-amber-50/45" : ""}>
+                        <td className="px-3 py-3 text-slate-600">{task.styleSequence || "-"}</td>
+                        <td className="px-3 py-3">
+                          <div className="font-semibold text-slate-900">{task.styleName}</div>
+                          <ModelingTestFieldLine canViewTestFields={canViewTestFields} sourceStyleId={task.sourceStyleId} styleCode={task.styleCode} />
+                        </td>
+                        <td className="px-3 py-3 text-slate-600">{task.isFirstModelingStyle ? "任务 7 · 第一款" : "任务 10 · 其余款"}</td>
+                        <td className="px-3 py-3 text-slate-600">{task.difficulty}</td>
+                        <td className="px-3 py-3 text-slate-600">{task.estimatedWorkdays} 天</td>
+                        <td className="px-3 py-3 text-slate-600">{task.originalArtStatus}</td>
+                        <td className="px-3 py-3">
+                          <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{task.status}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <aside className="space-y-4">
+              <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="text-sm font-semibold text-amber-950">整批确认</div>
+                <div className="mt-2 text-sm leading-6 text-amber-900">
+                  确认后，待确认款式会统一进入“未启动”。退回补充会要求产品组补齐信息，本批款式不进入正式排期。
+                </div>
+                <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirm}
+                    disabled={!canConfirm || !actionTask || saving}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                    确认整批清单
+                  </button>
+                  <textarea
+                    className="min-h-24 w-full resize-none rounded-md border border-amber-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                    onChange={(event) => setReturnNote(event.target.value)}
+                    placeholder="退回补充时必须填写原因。"
+                    value={returnNote}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleReturn}
+                    disabled={!canConfirm || !actionTask || saving || returnNote.trim().length === 0}
+                    className="inline-flex h-10 items-center justify-center rounded-md border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    退回补充
+                  </button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </main>
+      </section>
     </div>
   );
 }
@@ -943,94 +1163,6 @@ function MilestoneCard({ card, onOpenStyleBoard }: { card: ModelingMilestoneCard
         </div>
       ) : null}
     </button>
-  );
-}
-
-function ModelerCapacityCard({
-  modeler,
-  showCapacity,
-  onDrop,
-}: {
-  modeler: CapacityRow;
-  showCapacity: boolean;
-  onDrop: (event: ReactDragEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div
-      data-modeler-drop-id={modeler.id}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={onDrop}
-      className={clsx(
-        "rounded-lg border bg-white p-3 transition",
-        modeler.isOverloaded ? "border-rose-300 shadow-sm shadow-rose-100" : "border-slate-200",
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="break-words text-sm font-semibold text-slate-900">{modeler.name}</div>
-            {modeler.isVirtual ? (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">待补充人员名</span>
-            ) : null}
-            {!modeler.isSchedulable ? (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">不可排期</span>
-            ) : null}
-          </div>
-          <div className="mt-1 text-xs text-slate-500">{modeler.roleTitle}</div>
-        </div>
-        <div
-          className={clsx(
-            "rounded-md px-2 py-1 text-right text-xs font-semibold",
-            modeler.isOverloaded ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600",
-          )}
-        >
-          {modeler.queueTasks.length} 款
-        </div>
-      </div>
-
-      {modeler.specialtyTags.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {modeler.specialtyTags.slice(0, 3).map((tag) => (
-            <span key={tag} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-              {tag}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      <div className={clsx("mt-3 grid gap-2 text-center text-xs", showCapacity ? "grid-cols-3" : "grid-cols-2")}>
-        <MiniStat label="本周" value={modeler.weekTasks.length} />
-        <MiniStat label="排队" value={modeler.queueTasks.length} />
-        {showCapacity ? <MiniStat label="工作日" value={modeler.weeklyAvailableWorkdays} /> : null}
-      </div>
-
-      {modeler.isOverloaded ? (
-        <div className="mt-3 flex items-center gap-2 rounded-md bg-rose-50 px-2 py-1.5 text-xs font-medium text-rose-700">
-          <AlertTriangle size={14} />
-          排队超过每周可用工作日，已超载
-        </div>
-      ) : null}
-
-      {modeler.staleTasks.length > 0 ? (
-        <div className="mt-2 flex items-center gap-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-800">
-          <Clock3 size={14} />
-          {modeler.staleTasks.length} 款建模中超过 3 天未更新
-        </div>
-      ) : null}
-
-      <div className="mt-3 grid gap-2">
-        {modeler.weekTasks.slice(0, 4).map((task) => (
-          <div
-            key={task.id}
-            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left text-xs hover:border-slate-300 hover:bg-white"
-          >
-            <div className="truncate font-medium text-slate-800">{task.styleName}</div>
-            <div className="mt-0.5 truncate text-slate-500">{task.projectName}</div>
-          </div>
-        ))}
-        {modeler.weekTasks.length === 0 ? <div className="rounded-md bg-slate-50 px-2 py-2 text-xs text-slate-400">本周暂无任务</div> : null}
-      </div>
-    </div>
   );
 }
 
@@ -1242,18 +1374,11 @@ function StyleBoardByModeler({
   activeCount,
   approvedCount,
   selectedTaskId,
-  selectedTaskIds,
-  selectedCount,
-  selectableCount,
   draftAssignments,
   onModeChange,
   onDropOnModeler,
   onSelectTask,
   onOpenTaskDetail,
-  onToggleTaskSelection,
-  onSetTaskSelection,
-  onSelectAllVisible,
-  onClearSelection,
   onDragStart,
   onDragEnd,
 }: {
@@ -1263,25 +1388,17 @@ function StyleBoardByModeler({
   activeCount: number;
   approvedCount: number;
   selectedTaskId?: string;
-  selectedTaskIds: Record<string, true>;
-  selectedCount: number;
-  selectableCount: number;
   draftAssignments: Record<string, string>;
   onModeChange: (mode: StyleBoardMode) => void;
   onDropOnModeler: (event: ReactDragEvent<HTMLDivElement>, modelerId: string) => void;
   onSelectTask: (taskId: string) => void;
   onOpenTaskDetail: (task: ModelingTaskCard) => void;
-  onToggleTaskSelection: (task: ModelingTaskCard) => void;
-  onSetTaskSelection: (taskIds: string[], selected: boolean) => void;
-  onSelectAllVisible: () => void;
-  onClearSelection: () => void;
   onDragStart: (event: ReactDragEvent<HTMLElement>, task: ModelingTaskCard) => void;
   onDragEnd: () => void;
 }) {
   const isApprovedMode = mode === "approved";
   const unassignedTasks = tasks.filter((task) => !task.modelerId && !task.isOutsourced);
   const outsourcedTasks = tasks.filter((task) => task.isOutsourced && task.status !== "未分配");
-  const allVisibleSelected = selectableCount > 0 && selectedCount === selectableCount;
 
   return (
     <section className="min-w-0">
@@ -1317,29 +1434,8 @@ function StyleBoardByModeler({
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-        <div className="text-sm font-medium text-slate-600">
-          当前结果 {selectableCount} 款
-          {selectedCount > 0 ? <span className="ml-2 text-rose-700">已选择 {selectedCount} 款</span> : null}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={allVisibleSelected ? onClearSelection : onSelectAllVisible}
-            disabled={selectableCount === 0}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-          >
-            {allVisibleSelected ? "取消全选" : "全选当前结果"}
-          </button>
-          {selectedCount > 0 ? (
-            <button
-              type="button"
-              onClick={onClearSelection}
-              className="h-8 rounded-md border border-rose-200 bg-rose-50 px-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
-            >
-              清空选择
-            </button>
-          ) : null}
-        </div>
+        <div className="text-sm font-medium text-slate-600">当前结果 {tasks.length} 款</div>
+        <div className="text-xs font-medium text-slate-400">单款查看与操作</div>
       </div>
       <div className="mt-3 grid gap-3">
         <StyleBoardRow
@@ -1347,13 +1443,10 @@ function StyleBoardByModeler({
           helper={isApprovedMode ? "已通过但负责人待补充" : "等待产品总监分配"}
           tasks={unassignedTasks}
           selectedTaskId={selectedTaskId}
-          selectedTaskIds={selectedTaskIds}
           draftAssignments={draftAssignments}
           tone="warning"
           onSelectTask={onSelectTask}
           onOpenTaskDetail={onOpenTaskDetail}
-          onToggleTaskSelection={onToggleTaskSelection}
-          onSetTaskSelection={onSetTaskSelection}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
         />
@@ -1368,14 +1461,11 @@ function StyleBoardByModeler({
               helper={isApprovedMode ? `${modelerTasks.length} 款已通过` : `${modelerTasks.length} 款${modeler.isOverloaded ? " · 超载" : ""}`}
               tasks={modelerTasks}
               selectedTaskId={selectedTaskId}
-              selectedTaskIds={selectedTaskIds}
               draftAssignments={draftAssignments}
               tone={!isApprovedMode && modeler.isOverloaded ? "danger" : "neutral"}
               onDrop={isApprovedMode ? undefined : (event) => onDropOnModeler(event, modeler.id)}
               onSelectTask={onSelectTask}
               onOpenTaskDetail={onOpenTaskDetail}
-              onToggleTaskSelection={onToggleTaskSelection}
-              onSetTaskSelection={onSetTaskSelection}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}
             />
@@ -1388,13 +1478,10 @@ function StyleBoardByModeler({
             helper={isApprovedMode ? `${outsourcedTasks.length} 款已通过` : `${outsourcedTasks.length} 款`}
             tasks={outsourcedTasks}
             selectedTaskId={selectedTaskId}
-            selectedTaskIds={selectedTaskIds}
             draftAssignments={draftAssignments}
             tone="info"
             onSelectTask={onSelectTask}
             onOpenTaskDetail={onOpenTaskDetail}
-            onToggleTaskSelection={onToggleTaskSelection}
-            onSetTaskSelection={onSetTaskSelection}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
           />
@@ -1409,14 +1496,11 @@ function StyleBoardRow({
   helper,
   tasks,
   selectedTaskId,
-  selectedTaskIds,
   draftAssignments,
   tone,
   onDrop,
   onSelectTask,
   onOpenTaskDetail,
-  onToggleTaskSelection,
-  onSetTaskSelection,
   onDragStart,
   onDragEnd,
 }: {
@@ -1424,14 +1508,11 @@ function StyleBoardRow({
   helper: string;
   tasks: ModelingTaskCard[];
   selectedTaskId?: string;
-  selectedTaskIds: Record<string, true>;
   draftAssignments: Record<string, string>;
   tone: "neutral" | "warning" | "danger" | "info";
   onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void;
   onSelectTask: (taskId: string) => void;
   onOpenTaskDetail: (task: ModelingTaskCard) => void;
-  onToggleTaskSelection: (task: ModelingTaskCard) => void;
-  onSetTaskSelection: (taskIds: string[], selected: boolean) => void;
   onDragStart: (event: ReactDragEvent<HTMLElement>, task: ModelingTaskCard) => void;
   onDragEnd: () => void;
 }) {
@@ -1441,9 +1522,6 @@ function StyleBoardRow({
     danger: "border-rose-200 bg-rose-50/75",
     info: "border-cyan-200 bg-cyan-50/70",
   }[tone];
-  const selectableTaskIds = tasks.filter((task) => !task.isVirtual).map((task) => task.id);
-  const selectedCount = selectableTaskIds.filter((taskId) => selectedTaskIds[taskId]).length;
-  const allSelected = selectableTaskIds.length > 0 && selectedCount === selectableTaskIds.length;
 
   return (
     <div
@@ -1454,21 +1532,6 @@ function StyleBoardRow({
       <div className="min-w-0">
         <div className="break-words text-sm font-semibold text-slate-900">{title}</div>
         <div className="mt-1 text-xs font-medium text-slate-500">{helper}</div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => onSetTaskSelection(selectableTaskIds, !allSelected)}
-            disabled={selectableTaskIds.length === 0}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-          >
-            {allSelected ? "取消本行" : "选择本行"}
-          </button>
-          {selectedCount > 0 ? (
-            <span className="inline-flex h-8 items-center rounded-md bg-white px-2 text-xs font-semibold text-rose-700">
-              已选 {selectedCount}
-            </span>
-          ) : null}
-        </div>
       </div>
 
       <div className="min-w-0 overflow-x-auto pb-1">
@@ -1479,11 +1542,9 @@ function StyleBoardRow({
                 key={task.id}
                 task={task}
                 selected={selectedTaskId === task.id}
-                checked={Boolean(selectedTaskIds[task.id])}
                 isDraft={Boolean(draftAssignments[task.id])}
                 onClick={() => onSelectTask(task.id)}
                 onOpenDetail={() => onOpenTaskDetail(task)}
-                onToggleSelected={() => onToggleTaskSelection(task)}
                 onDragStart={(event) => onDragStart(event, task)}
                 onDragEnd={onDragEnd}
               />
@@ -1502,26 +1563,21 @@ function StyleBoardRow({
 function CompactTaskCard({
   task,
   selected,
-  checked,
   isDraft,
   onClick,
   onOpenDetail,
-  onToggleSelected,
   onDragStart,
   onDragEnd,
 }: {
   task: ModelingTaskCard;
   selected: boolean;
-  checked: boolean;
   isDraft: boolean;
   onClick: () => void;
   onOpenDetail: () => void;
-  onToggleSelected: () => void;
   onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
 }) {
   const draggable = task.canDragAssign;
-  const selectable = !task.isVirtual;
 
   return (
     <div
@@ -1542,28 +1598,11 @@ function CompactTaskCard({
         "min-h-[116px] w-[178px] shrink-0 cursor-pointer rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm",
         statusMeta[task.status].cardClass,
         selected ? "ring-2 ring-rose-300" : "",
-        checked ? "border-rose-300 bg-rose-50/70" : "",
       )}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 break-words text-sm font-semibold text-slate-900">{task.styleName}</div>
-        <button
-          type="button"
-          aria-label={checked ? "取消选择款式" : "选择款式"}
-          aria-pressed={checked}
-          disabled={!selectable}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleSelected();
-          }}
-          className={clsx(
-            "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition",
-            checked ? "border-rose-500 bg-rose-600 text-white" : "border-slate-300 bg-white text-transparent hover:border-rose-300",
-            !selectable ? "cursor-not-allowed border-slate-200 bg-slate-100" : "",
-          )}
-        >
-          <CheckCircle2 size={15} />
-        </button>
+        {draggable ? <GripVertical className="shrink-0 text-slate-300" size={16} /> : null}
       </div>
       <div className="mt-1 truncate text-xs text-slate-500">{task.projectName}</div>
       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1586,101 +1625,6 @@ function CompactTaskCard({
           详情
         </button>
       </div>
-    </div>
-  );
-}
-
-function TaskCard({
-  task,
-  selected,
-  isDraft,
-  onClick,
-  onOpenDetail,
-  onDragStart,
-  onDragEnd,
-}: {
-  task: ModelingTaskCard;
-  selected: boolean;
-  isDraft: boolean;
-  onClick: () => void;
-  onOpenDetail: () => void;
-  onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
-  onDragEnd: () => void;
-}) {
-  const draggable = task.canDragAssign;
-
-  return (
-    <div
-      data-modeling-task-id={task.id}
-      role="button"
-      tabIndex={0}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={onClick}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onClick();
-        }
-      }}
-      className={clsx(
-        "min-h-[168px] cursor-pointer rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm",
-        statusMeta[task.status].cardClass,
-        selected ? "ring-2 ring-rose-300" : "",
-      )}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="break-words text-sm font-semibold text-slate-900">{task.styleName}</div>
-          <div className="mt-1 break-words text-xs text-slate-500">{task.projectName}</div>
-        </div>
-        {draggable ? <GripVertical className="shrink-0 text-slate-300" size={16} /> : null}
-      </div>
-
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {task.isVirtual ? (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">虚拟</span>
-        ) : null}
-        {isDraft ? (
-          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">草稿</span>
-        ) : null}
-        {task.isOutsourced ? (
-          <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-700">外包</span>
-        ) : null}
-        {task.reviewRound > 0 ? (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">第 {task.reviewRound} 轮</span>
-        ) : null}
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <MiniStat label="预估" value={`${task.estimatedWorkdays} 天`} />
-        <MiniStat label="已耗" value={`${task.consumedWorkdays} 天`} />
-      </div>
-
-      <div className="mt-3 grid gap-1 text-xs text-slate-500">
-        <div className="truncate">负责人：{task.modelerName ?? task.outsourceVendorName ?? "待分配"}</div>
-        <div className="truncate">难度：{task.difficulty}</div>
-      </div>
-
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpenDetail();
-        }}
-        className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-      >
-        <Maximize2 size={13} />
-        详情
-      </button>
-
-      {task.isStale ? (
-        <div className="mt-2 flex items-center gap-1.5 rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
-          <AlertTriangle size={13} />
-          {task.staleDays} 天未更新
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1734,24 +1678,35 @@ function RealTaskDetailOverlay({
   projectSummary,
   vendors,
   saving,
+  clockNow,
+  canViewTestFields,
+  currentUser,
   onClose,
   onSelectTask,
   onSave,
   onSubmitWork,
+  onWorkTimer,
+  onConfirmStyleList,
 }: {
   task: ModelingTaskCard;
   projectTasks: ModelingTaskCard[];
   projectSummary?: ProjectModelingSummary;
   vendors: OutsourceVendorOption[];
   saving: boolean;
+  clockNow: number | null;
+  canViewTestFields: boolean;
+  currentUser: AuthUser;
   onClose: () => void;
   onSelectTask: (task: ModelingTaskCard) => void;
   onSave: (task: ModelingTaskCard, payload: ModelingTaskUpdateRequest) => Promise<void>;
   onSubmitWork: (task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) => Promise<void>;
+  onWorkTimer: (task: ModelingTaskCard, action: "start") => Promise<void>;
+  onConfirmStyleList: (task: ModelingTaskCard, action: "confirm" | "return", note?: string) => Promise<void>;
 }) {
   const approvedCount = projectSummary?.approvedStyles ?? projectTasks.filter((item) => item.status === "已通过").length;
   const totalCount = projectSummary?.totalStyles ?? projectTasks.length;
   const progressPercent = projectSummary?.progressPercent ?? (totalCount > 0 ? Math.round((approvedCount / totalCount) * 100) : 0);
+  const workSummary = buildWorkTimeSummary(task, clockNow);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/55 p-3 backdrop-blur-sm sm:p-5">
@@ -1794,7 +1749,7 @@ function RealTaskDetailOverlay({
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="break-words text-sm font-semibold text-slate-900">{item.styleName}</div>
-                        <div className="mt-1 truncate text-xs text-slate-500">{item.styleCode || item.sourceStyleId || "待补充编号"}</div>
+                        <ModelingTestFieldLine canViewTestFields={canViewTestFields} sourceStyleId={item.sourceStyleId} styleCode={item.styleCode} />
                       </div>
                       <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
                         {item.isFirstModelingStyle ? "任务 7" : "任务 10"}
@@ -1820,15 +1775,23 @@ function RealTaskDetailOverlay({
               <section className="rounded-lg border border-slate-200 bg-white p-4">
                 <SectionTitle icon={<UserRound size={18} />} title="款式概览" helper={task.status} compact />
                 <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
-                  <DetailItem label="款式编号" value={task.styleCode || "待补充"} />
+                  <ModelingTestFieldDetailItem canViewTestFields={canViewTestFields} sourceStyleId={task.sourceStyleId} styleCode={task.styleCode} />
                   <DetailItem label="原画状态" value={task.originalArtStatus} />
                   <DetailItem label="负责人" value={task.modelerName ?? task.outsourceVendorName ?? "待分配"} />
                   <DetailItem label="难度" value={task.difficulty} />
                   <DetailItem label="预估工期" value={`${task.estimatedWorkdays} 天`} />
                   <DetailItem label="已消耗" value={`${task.consumedWorkdays} 天`} />
+                  <DetailItem label="剩余工时" value={task.remainingWorkdays === null || task.remainingWorkdays === undefined ? "待填写" : `${task.remainingWorkdays} 天`} />
+                  <DetailItem label="累计工时" value={formatWorkTimeSummary(workSummary)} />
+                  <DetailItem label="反馈次数" value={`${task.feedbackCount} 次`} />
                   <DetailItem label="实际开始" value={task.actualStartDate ?? "待定"} />
                   <DetailItem label="实际完成" value={task.actualFinishDate ?? "待定"} />
                 </div>
+                {task.notes ? (
+                  <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+                    备注：{task.notes}
+                  </div>
+                ) : null}
                 {task.latestFeedback ? (
                   <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">
                     最新反馈：{task.latestFeedback}
@@ -1837,12 +1800,17 @@ function RealTaskDetailOverlay({
               </section>
 
               <TaskDetailPanel
-                key={`${task.id}:${task.status}:${task.outsourceVendorId ?? ""}:${task.actualFinishDate ?? ""}`}
+                key={`${task.id}:${task.status}:${task.outsourceVendorId ?? ""}:${task.actualFinishDate ?? ""}:${task.activeWorkStartedAt ?? ""}:${task.actualWorkMinutes}:${task.feedbackCount}:${task.remainingWorkdays ?? ""}:${task.notes ?? ""}`}
                 task={task}
                 vendors={vendors}
+                currentUser={currentUser}
                 saving={saving}
+                clockNow={clockNow}
+                canViewTestFields={canViewTestFields}
                 onSave={onSave}
                 onSubmitWork={onSubmitWork}
+                onWorkTimer={onWorkTimer}
+                onConfirmStyleList={onConfirmStyleList}
               />
             </div>
           </main>
@@ -1863,7 +1831,7 @@ function RealTaskDetailOverlay({
 
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">
               {approvedCount === totalCount && totalCount > 0
-                ? "所有款式已通过，可以准备给产品组工作指引输出建模完成事实。"
+                ? "所有款式已通过，产品组工作指引可读取建模完成事实。"
                 : "所有必做款式通过前，不会推进项目排期完成。"}
             </div>
 
@@ -1888,23 +1856,33 @@ function RealTaskDetailOverlay({
 function TaskDetailPanel({
   task,
   vendors,
+  currentUser,
   saving,
+  clockNow,
+  canViewTestFields,
   onSave,
   onSubmitWork,
+  onWorkTimer,
+  onConfirmStyleList,
 }: {
   task?: ModelingTaskCard;
   vendors: OutsourceVendorOption[];
+  currentUser: AuthUser;
   saving: boolean;
+  clockNow: number | null;
+  canViewTestFields: boolean;
   onSave: (task: ModelingTaskCard, payload: ModelingTaskUpdateRequest) => Promise<void>;
   onSubmitWork: (task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) => Promise<void>;
+  onWorkTimer: (task: ModelingTaskCard, action: "start") => Promise<void>;
+  onConfirmStyleList: (task: ModelingTaskCard, action: "confirm" | "return", note?: string) => Promise<void>;
 }) {
   const realVendors = useMemo(() => vendors.filter((vendor) => !vendor.isVirtual), [vendors]);
-  const [nextStatus, setNextStatus] = useState<ModelingTaskStatus>(task?.status ?? "未分配");
   const [vendorId, setVendorId] = useState(task?.outsourceVendorId ?? realVendors[0]?.id ?? "");
-  const [feedbackContent, setFeedbackContent] = useState("");
+  const [remainingWorkdaysDraft, setRemainingWorkdaysDraft] = useState(task?.remainingWorkdays === null || task?.remainingWorkdays === undefined ? "" : String(task.remainingWorkdays));
+  const [notesDraft, setNotesDraft] = useState(task?.notes ?? "");
   const [submissionContent, setSubmissionContent] = useState("");
   const [submissionUrl, setSubmissionUrl] = useState("");
-  const [actualFinishDate, setActualFinishDate] = useState(task?.actualFinishDate ?? todayDateString());
+  const [confirmationNote, setConfirmationNote] = useState("");
 
   if (!task) {
     return (
@@ -1916,51 +1894,65 @@ function TaskDetailPanel({
 
   const currentTask = task;
   const disabled = saving || currentTask.isVirtual;
-  const canSaveFeedback = !disabled && feedbackContent.trim().length > 0;
+  const canManageTask = currentUser.authRole === "admin" || currentUser.authRole === "manager";
+  const canUseModelerActions = !disabled && (canManageTask || currentUser.id === currentTask.modelerId);
+  const canEditManagementFields = !disabled && canManageTask;
+  const isTimerActive = Boolean(currentTask.activeWorkStartedAt);
+  const isReviewManagedStatus = productReviewManagedStatuses.has(currentTask.status);
+  const canEditOperationalFields = canEditManagementFields && !isReviewManagedStatus;
+  const canEditModelerInputs = canUseModelerActions && !isReviewManagedStatus;
+  const canStartTimer =
+    canUseModelerActions &&
+    !isTimerActive &&
+    !currentTask.isOutsourced &&
+    ["已排期", "排队中", "建模中", "修改中"].includes(currentTask.status);
   const canSubmitWork =
-    !disabled &&
-    !["未启动", "未分配", "待验收", "待送审", "已送审", "等反馈", "已通过", "取消"].includes(currentTask.status) &&
+    canUseModelerActions &&
+    !["待确认", "退回补充", "未启动", "未分配", "待验收", "待送审", "已送审", "等反馈", "已通过", "取消"].includes(currentTask.status) &&
     (submissionContent.trim().length > 0 || submissionUrl.trim().length > 0);
 
-  function handleSaveStatus() {
-    const payload: ModelingTaskUpdateRequest = { status: nextStatus };
-
-    if (nextStatus === "已通过") {
-      payload.actualFinishDate = actualFinishDate || todayDateString();
-    }
-
-    void onSave(currentTask, payload);
-  }
-
   function handleOutsource() {
-    if (!vendorId) {
+    if (!canEditOperationalFields || !vendorId) {
       return;
     }
 
     void onSave(currentTask, {
       isOutsourced: true,
       outsourceVendorId: vendorId,
-      status: "外包中",
     });
   }
 
-  function handleRecordFeedback(status: ModelingTaskStatus, feedbackType: string, blockType?: string) {
-    if (!feedbackContent.trim()) {
+  function handleSaveModelerInputs() {
+    if (!canEditModelerInputs) {
       return;
     }
 
-    const payload: ModelingTaskUpdateRequest = {
-      status,
-      feedbackType,
-      feedbackContent: feedbackContent.trim(),
-      blockType,
-    };
+    void onSave(currentTask, {
+      remainingWorkdays: remainingWorkdaysDraft === "" ? null : Number(remainingWorkdaysDraft),
+      notes: notesDraft.trim() || null,
+    });
+  }
 
-    if (status === "已通过") {
-      payload.actualFinishDate = actualFinishDate || todayDateString();
+  function handleStartWorkTimer() {
+    if (!canStartTimer) {
+      return;
     }
 
-    void onSave(currentTask, payload);
+    void onWorkTimer(currentTask, "start");
+  }
+
+  const workSummary = buildWorkTimeSummary(task, clockNow);
+
+  function handleConfirmStyleList(action: "confirm" | "return") {
+    if (!canEditManagementFields || !preConfirmationStatuses.has(currentTask.status)) {
+      return;
+    }
+
+    if (action === "return" && !confirmationNote.trim()) {
+      return;
+    }
+
+    void onConfirmStyleList(currentTask, action, confirmationNote.trim() || undefined);
   }
 
   function handleSubmitWork() {
@@ -1983,15 +1975,24 @@ function TaskDetailPanel({
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-        <DetailItem label="款式编号" value={task.styleCode} />
+        <ModelingTestFieldDetailItem canViewTestFields={canViewTestFields} sourceStyleId={task.sourceStyleId} styleCode={task.styleCode} />
         <DetailItem label="原画状态" value={task.originalArtStatus} />
         <DetailItem label="负责人" value={task.modelerName ?? task.outsourceVendorName ?? "待分配"} />
         <DetailItem label="难度" value={task.difficulty} />
         <DetailItem label="预估工期" value={`${task.estimatedWorkdays} 天`} />
         <DetailItem label="已消耗" value={`${task.consumedWorkdays} 天`} />
+        <DetailItem label="剩余工时" value={task.remainingWorkdays === null || task.remainingWorkdays === undefined ? "待填写" : `${task.remainingWorkdays} 天`} />
+        <DetailItem label="累计工时" value={formatWorkTimeSummary(workSummary)} />
+        <DetailItem label="反馈次数" value={`${task.feedbackCount} 次`} />
         <DetailItem label="计划开始" value={task.plannedStartDate ?? "待定"} />
         <DetailItem label="计划完成" value={task.plannedFinishDate ?? "待定"} />
       </div>
+
+      {task.notes ? (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+          备注：{task.notes}
+        </div>
+      ) : null}
 
       {task.isStale ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -2008,44 +2009,58 @@ function TaskDetailPanel({
 
       {task.isVirtual ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          当前是虚拟款式，只能做前端草稿。保存分配、状态、外包和反馈前，需要先录入真实款式。
+          当前是虚拟款式，只能做前端草稿。保存分配、外包、工时和备注前，需要先录入真实款式。
+        </div>
+      ) : null}
+
+      {preConfirmationStatuses.has(task.status) ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <div className="text-sm font-semibold text-amber-950">款式清单确认</div>
+          <div className="mt-1 text-sm leading-6 text-amber-900">
+            当前项目存在待确认款式。确认前不会进入正式产能计算，也不能分配、计时、提交成果或送审。
+          </div>
+          <textarea
+            value={confirmationNote}
+            onChange={(event) => setConfirmationNote(event.target.value)}
+            disabled={!canEditManagementFields}
+            placeholder="退回补充时必须填写原因；确认通过可不填。"
+            className="mt-3 min-h-20 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100 disabled:bg-slate-100"
+          />
+          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => handleConfirmStyleList("confirm")}
+              disabled={!canEditManagementFields || saving}
+              className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+              确认整批清单
+            </button>
+            <button
+              type="button"
+              onClick={() => handleConfirmStyleList("return")}
+              disabled={!canEditManagementFields || saving || confirmationNote.trim().length === 0}
+              className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              退回补充
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {isTimerActive ? (
+        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          本款式正在计时，开始时间：{formatDateTimeForDisplay(task.activeWorkStartedAt)}。
         </div>
       ) : null}
 
       <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4">
-        <div className="grid gap-2">
-          <label className="text-xs font-semibold text-slate-500">状态推进</label>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-            <select
-              value={nextStatus}
-              onChange={(event) => setNextStatus(event.target.value as ModelingTaskStatus)}
-              disabled={disabled}
-              className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100 disabled:bg-slate-100"
-            >
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleSaveStatus}
-              disabled={disabled}
-              className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-              保存
-            </button>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-500">当前状态</div>
+            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{currentTask.status}</span>
           </div>
-          {nextStatus === "已通过" ? (
-            <input
-              type="date"
-              value={actualFinishDate}
-              onChange={(event) => setActualFinishDate(event.target.value)}
-              disabled={disabled}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100 disabled:bg-slate-100"
-            />
-          ) : null}
+          <div className="mt-1 text-xs leading-5 text-slate-500">状态由分配、外包、开始建模、提交成果和产品组审核 / 送审结果自动生成。</div>
         </div>
 
         <div className="grid gap-2">
@@ -2054,7 +2069,7 @@ function TaskDetailPanel({
             <select
               value={vendorId}
               onChange={(event) => setVendorId(event.target.value)}
-              disabled={disabled || realVendors.length === 0}
+              disabled={!canEditOperationalFields || realVendors.length === 0}
               className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100 disabled:bg-slate-100"
             >
               {realVendors.length > 0 ? (
@@ -2070,7 +2085,7 @@ function TaskDetailPanel({
             </select>
             <button
               onClick={handleOutsource}
-              disabled={disabled || realVendors.length === 0 || !vendorId}
+              disabled={!canEditOperationalFields || realVendors.length === 0 || !vendorId}
               className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-sm font-semibold text-cyan-800 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
               <PackageCheck size={15} />
@@ -2079,12 +2094,68 @@ function TaskDetailPanel({
           </div>
         </div>
 
+        <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <label className="text-xs font-semibold text-slate-700">剩余工时与备注</label>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={remainingWorkdaysDraft}
+            onChange={(event) => setRemainingWorkdaysDraft(event.target.value)}
+            disabled={!canEditModelerInputs}
+            placeholder="剩余工时，按工作日填写"
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:bg-slate-100"
+          />
+          <textarea
+            value={notesDraft}
+            onChange={(event) => setNotesDraft(event.target.value)}
+            disabled={!canEditModelerInputs}
+            rows={3}
+            placeholder="填写建模侧备注，不用于产品检修或版权反馈结论"
+            className="min-h-[84px] resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-5 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:bg-slate-100"
+          />
+          <button
+            type="button"
+            onClick={handleSaveModelerInputs}
+            disabled={!canEditModelerInputs}
+            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+            保存剩余工时和备注
+          </button>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-blue-100 bg-blue-50/70 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="text-xs font-semibold text-blue-900">建模工时</label>
+            <span className="text-xs font-medium text-blue-800">
+              累计 {formatWorkTimeSummary(workSummary)}
+            </span>
+          </div>
+          <div className="grid gap-2 text-sm">
+            <button
+              type="button"
+              onClick={handleStartWorkTimer}
+              disabled={!canStartTimer}
+              className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {saving && !isTimerActive ? <Loader2 size={15} className="animate-spin" /> : <Clock3 size={15} />}
+              开始建模
+            </button>
+          </div>
+          <div className="text-xs leading-5 text-blue-900">
+            {isTimerActive
+              ? `当前款式正在计时，本次已运行 ${formatApproxWorkMinutes(workSummary.activeMinutes)}。页面每 5 分钟自动刷新一次。`
+              : "系统会自动结束计时：开始另一个款式或提交成果时，会结束同一建模师当前正在计时的款式。"}
+          </div>
+        </div>
+
         <div className="grid gap-2 rounded-lg border border-fuchsia-100 bg-fuchsia-50/60 p-3">
           <label className="text-xs font-semibold text-fuchsia-800">建模师提交成果</label>
           <textarea
             value={submissionContent}
             onChange={(event) => setSubmissionContent(event.target.value)}
-            disabled={disabled}
+            disabled={!canUseModelerActions}
             rows={3}
             placeholder="填写本次提交的内容、文件位置、注意事项或需要产品美术检修的问题"
             className="min-h-[84px] resize-none rounded-lg border border-fuchsia-100 bg-white px-3 py-2 text-sm leading-5 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 disabled:bg-slate-100"
@@ -2093,7 +2164,7 @@ function TaskDetailPanel({
             type="url"
             value={submissionUrl}
             onChange={(event) => setSubmissionUrl(event.target.value)}
-            disabled={disabled}
+            disabled={!canUseModelerActions}
             placeholder="成果链接，可填网盘、图包或文件地址"
             className="h-10 rounded-lg border border-fuchsia-100 bg-white px-3 text-sm outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 disabled:bg-slate-100"
           />
@@ -2111,49 +2182,22 @@ function TaskDetailPanel({
           </div>
         </div>
 
-        <div className="grid gap-2">
-          <label className="text-xs font-semibold text-slate-500">检修 / 送审记录</label>
-          <textarea
-            value={feedbackContent}
-            onChange={(event) => setFeedbackContent(event.target.value)}
-            disabled={disabled}
-            rows={3}
-            placeholder="填写本轮问题、反馈或通过说明"
-            className="min-h-[84px] resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-5 outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100 disabled:bg-slate-100"
-          />
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <button
-              onClick={() => handleRecordFeedback("已送审", "送审记录", "送审中")}
-              disabled={!canSaveFeedback}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2 font-semibold text-violet-800 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              <Send size={14} />
-              已送审
-            </button>
-            <button
-              onClick={() => handleRecordFeedback("等反馈", "版权方反馈", "等版权方反馈")}
-              disabled={!canSaveFeedback}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              <Clock3 size={14} />
-              等反馈
-            </button>
-            <button
-              onClick={() => handleRecordFeedback("修改中", "修改意见")}
-              disabled={!canSaveFeedback}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 font-semibold text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              <PenLine size={14} />
-              修改中
-            </button>
-            <button
-              onClick={() => handleRecordFeedback("已通过", "通过记录")}
-              disabled={!canSaveFeedback}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              <CheckCircle2 size={14} />
-              已通过
-            </button>
+        <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs font-semibold text-slate-700">产品检修 / 送审反馈</label>
+            <span className="text-xs text-slate-500">{task.feedbackCount} 次反馈</span>
+          </div>
+          {task.latestFeedback ? (
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700">
+              {task.latestFeedback}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-400">
+              暂无检修或送审反馈。
+            </div>
+          )}
+          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-500">
+            检修和送审结果由产品组工作指引回传，建模排期页只读展示。
           </div>
         </div>
       </div>
@@ -2219,6 +2263,133 @@ function DetailItem({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function ModelingTestFieldLine({
+  canViewTestFields,
+  className = "mt-1 block truncate text-xs text-slate-500",
+  sourceStyleId,
+  styleCode,
+}: {
+  canViewTestFields: boolean;
+  className?: string;
+  sourceStyleId?: string | null;
+  styleCode?: string | null;
+}) {
+  const value = [styleCode, sourceStyleId].find((fieldValue) => canDisplayModelingFieldValue(fieldValue, canViewTestFields));
+
+  if (!value) {
+    return null;
+  }
+
+  const label = isModelingTestFieldValue(value) ? "测试字段" : "款式编号";
+
+  return (
+    <span className={className}>
+      {label}：{value}
+    </span>
+  );
+}
+
+function ModelingTestFieldDetailItem({
+  canViewTestFields,
+  sourceStyleId,
+  styleCode,
+}: {
+  canViewTestFields: boolean;
+  sourceStyleId?: string | null;
+  styleCode?: string | null;
+}) {
+  const value = [styleCode, sourceStyleId].find((fieldValue) => canDisplayModelingFieldValue(fieldValue, canViewTestFields));
+
+  if (!value) {
+    return null;
+  }
+
+  return <DetailItem label={isModelingTestFieldValue(value) ? "测试字段" : "款式编号"} value={value} />;
+}
+
+function buildWorkTimeSummary(task: ModelingTaskCard, now: number | null) {
+  const persistedMinutes = Math.max(0, Math.floor(task.actualWorkMinutes || 0));
+  const activeSeconds = activeWorkSeconds(task.activeWorkStartedAt, now);
+  const activeMinutes = Math.floor(activeSeconds / 60);
+
+  return {
+    persistedMinutes,
+    activeSeconds,
+    activeMinutes,
+    totalMinutes: persistedMinutes + activeMinutes,
+    isActive: Boolean(task.activeWorkStartedAt),
+  };
+}
+
+function activeWorkSeconds(startedAt: string | undefined, now: number | null) {
+  if (!startedAt || now === null) {
+    return 0;
+  }
+
+  const startedAtMs = new Date(startedAt).getTime();
+
+  if (!Number.isFinite(startedAtMs)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((now - startedAtMs) / 1000));
+}
+
+function formatWorkTimeSummary(summary: {
+  totalMinutes: number;
+  activeMinutes: number;
+  isActive: boolean;
+}) {
+  const base = formatWorkMinutes(summary.totalMinutes);
+
+  if (!summary.isActive) {
+    return base;
+  }
+
+  return `${base}（本次 ${formatApproxWorkMinutes(summary.activeMinutes)}）`;
+}
+
+function formatApproxWorkMinutes(minutes: number) {
+  const safeMinutes = Math.max(0, Math.floor(minutes || 0));
+
+  if (safeMinutes <= 0) {
+    return "不足 1 分钟";
+  }
+
+  return `约 ${safeMinutes} 分钟`;
+}
+
+function formatWorkMinutes(minutes: number) {
+  const safeMinutes = Math.max(0, Math.floor(minutes || 0));
+  const hours = Math.floor(safeMinutes / 60);
+  const restMinutes = safeMinutes % 60;
+
+  if (hours <= 0) {
+    return `${safeMinutes} 分钟`;
+  }
+
+  return `${safeMinutes} 分钟（${hours} 小时 ${restMinutes} 分）`;
+}
+
+function formatDateTimeForDisplay(value?: string) {
+  if (!value) {
+    return "未开始";
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function ProgressBar({ value }: { value: number }) {
   const width = Math.max(0, Math.min(100, value));
 
@@ -2251,6 +2422,39 @@ function compareModelingTasks(a: ModelingTaskCard, b: ModelingTaskCard) {
   return a.styleName.localeCompare(b.styleName, "zh-CN");
 }
 
+function compareStyleListTasks(a: ModelingTaskCard, b: ModelingTaskCard) {
+  const sequenceDiff = compareStyleSequence(a.styleSequence, b.styleSequence);
+
+  if (sequenceDiff !== 0) {
+    return sequenceDiff;
+  }
+
+  if (a.isFirstModelingStyle !== b.isFirstModelingStyle) {
+    return a.isFirstModelingStyle ? -1 : 1;
+  }
+
+  return a.styleName.localeCompare(b.styleName, "zh-CN", { numeric: true });
+}
+
+function compareStyleSequence(a?: string, b?: string) {
+  const normalizedA = a?.trim() ?? "";
+  const normalizedB = b?.trim() ?? "";
+  const numericA = Number.parseInt(normalizedA, 10);
+  const numericB = Number.parseInt(normalizedB, 10);
+  const hasNumericA = Number.isFinite(numericA);
+  const hasNumericB = Number.isFinite(numericB);
+
+  if (hasNumericA && hasNumericB && numericA !== numericB) {
+    return numericA - numericB;
+  }
+
+  if (hasNumericA !== hasNumericB) {
+    return hasNumericA ? -1 : 1;
+  }
+
+  return normalizedA.localeCompare(normalizedB, "zh-CN", { numeric: true });
+}
+
 function buildCapacityRows(modelers: ModelerCapacity[], tasks: ModelingTaskCard[]): CapacityRow[] {
   return modelers.map((modeler) => {
     const queueTasks = tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status));
@@ -2271,7 +2475,7 @@ function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]
   const overloadedModelerCount = modelers.filter((modeler) => {
     return tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status)).length > modeler.weeklyAvailableWorkdays;
   }).length;
-  const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || task.blockType?.includes("修改"));
+  const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || Boolean(task.blockType));
 
   return [
     {
@@ -2423,6 +2627,3 @@ function isOriginalArtApproved(task: ModelingTaskCard) {
   return Boolean(task.originalArtApprovedDate) || text.includes("已过审") || text.includes("过审") || text.includes("通过") || text.includes("确认");
 }
 
-function todayDateString() {
-  return new Date().toISOString().slice(0, 10);
-}

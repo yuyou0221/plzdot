@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       deletedStyleCount: 0,
       deletedFeedbackCount: 0,
       deletedProgressCount: 0,
+      deletedEventCount: 0,
     });
   }
 
@@ -49,6 +50,9 @@ export async function POST(request: Request) {
       where: { modelingTaskId: { in: modelingTaskIds } },
     });
     const progress = await tx.projectModelingProgress.deleteMany({
+      where: { projectId: { in: projectIds } },
+    });
+    const events = await tx.modelingProductGuideEvent.deleteMany({
       where: { projectId: { in: projectIds } },
     });
     const styles = await tx.modelingTask.deleteMany({
@@ -67,6 +71,7 @@ export async function POST(request: Request) {
       deletedStyleCount: styles.count,
       deletedFeedbackCount: feedback.count,
       deletedProgressCount: progress.count,
+      deletedEventCount: events.count,
     };
   });
 

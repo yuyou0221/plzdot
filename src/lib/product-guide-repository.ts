@@ -1857,7 +1857,7 @@ function isDoneText(value?: string | null) {
 }
 
 function normalizeModelingStatus(value: string, isOutsourced: boolean) {
-  if (isOutsourced && (value.includes("排期") || value.includes("建模") || value.includes("进行"))) {
+  if (isOutsourced && (value.includes("排队") || value.includes("排期") || value.includes("建模") || value.includes("进行"))) {
     return "外包中";
   }
 
@@ -1865,6 +1865,7 @@ function normalizeModelingStatus(value: string, isOutsourced: boolean) {
   if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
+  if (value.includes("排队")) return "排队中";
   if (value.includes("修改") || value.includes("返修")) return "修改中";
   if (value.includes("建模")) return "建模中";
   if (value.includes("通过") || value.includes("完成")) return "已通过";

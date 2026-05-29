@@ -115,6 +115,7 @@ const validStatuses = new Set<ModelingTaskStatus>([
   "未启动",
   "未分配",
   "已排期",
+  "排队中",
   "建模中",
   "修改中",
   "待验收",
@@ -179,7 +180,7 @@ export async function previewModelingImport(workbookPath: string, fileName: stri
       errorCount: issueCounts.error,
       warningCount: issueCounts.warning,
       infoCount: issueCounts.info,
-      requiresRecalculation: styleRows.some((row) => ["待验收", "待送审", "已送审", "等反馈", "已通过", "修改中"].includes(row.status)),
+      requiresRecalculation: styleRows.some((row) => ["排队中", "待验收", "待送审", "已送审", "等反馈", "已通过", "修改中"].includes(row.status)),
     },
     globalIssues: workbook.feedbackSheet
       ? []
@@ -268,6 +269,7 @@ export async function applyModelingImport(
         actualFinishDate: actualFinishDate ?? (existing ? undefined : null),
         actualWorkdays: startDate && actualFinishDate ? workdaysBetween(startDate, actualFinishDate) : undefined,
         remainingWorkdays: normalizedStatus === "已通过" ? 0 : row.estimatedWorkdays ?? undefined,
+        notes: row.note ?? undefined,
         status: normalizedStatus,
         blockType: normalizedStatus === "修改中" ? "修改中" : null,
         lastFeedbackAt: normalizedStatus === "修改中" ? nullableDate(row.lastUpdatedAt) ?? new Date() : undefined,
@@ -785,6 +787,7 @@ function normalizeStatus(value: unknown, isOutsourced: boolean): ModelingTaskSta
 
   if (text.includes("未启动")) return "未启动";
   if (text.includes("未分配")) return "未分配";
+  if (text.includes("排队")) return "排队中";
   if (text.includes("排期")) return "已排期";
   if (text.includes("修改")) return "修改中";
   if (text.includes("建模中") || text.includes("进行中")) return "建模中";

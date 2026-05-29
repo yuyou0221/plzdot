@@ -18,10 +18,14 @@ export async function POST(request: Request) {
 
   try {
     const result = await startModelingStyles(payload, auth.user);
+    const message =
+      result.startedCount > 0
+        ? `已启动 ${result.startedCount} 个建模款式，跳过 ${result.skippedCount} 个。`
+        : `没有新的建模款式需要启动，跳过 ${result.skippedCount} 个。`;
 
     return NextResponse.json({
       ok: true,
-      message: `已启动 ${result.startedCount} 个建模款式。`,
+      message,
       ...result,
     });
   } catch (error) {

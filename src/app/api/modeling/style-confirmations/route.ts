@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
-import { ModelingContractError, submitModelingStyleSubmission } from "@/lib/modeling-product-guide-contract";
+import { confirmModelingStyleSubmission, ModelingContractError } from "@/lib/modeling-product-guide-contract";
 
 export const runtime = "nodejs";
 
@@ -17,11 +17,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await submitModelingStyleSubmission(payload, auth.user);
+    const result = await confirmModelingStyleSubmission(payload, auth.user);
 
     return NextResponse.json({
       ok: true,
-      message: `已接收 ${result.styles.length} 个建模款式，等待建模侧确认。`,
+      message: result.action === "confirm" ? `已确认 ${result.confirmedCount} 个建模款式。` : `已退回 ${result.returnedCount} 个建模款式补充。`,
       ...result,
     });
   } catch (error) {
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        message: error instanceof Error && error.message ? `提交建模款式失败：${error.message}` : "提交建模款式失败。",
+        message: error instanceof Error && error.message ? `提交款式清单确认失败：${error.message}` : "提交款式清单确认失败。",
       },
       { status: 500 },
     );
