@@ -305,9 +305,13 @@ model ModelingTask {
   id                      String    @id @default(uuid())
   projectId               String
   projectTaskId           String
+  sourceStyleId           String?
   styleCode               String
+  styleSequence           String?
   styleName               String
+  isFirstModelingStyle    Boolean   @default(false)
   isRequired              Boolean   @default(true)
+  referenceImageUrls      Json?
   originalArtStatus       String    @default("未过审")
   originalArtApprovedDate DateTime? @db.Date
   difficulty              String
@@ -324,7 +328,10 @@ model ModelingTask {
   internalApprovedDate    DateTime? @db.Date
   copyrightApprovedDate   DateTime? @db.Date
   actualWorkdays          Int?
+  actualWorkMinutes       Int       @default(0)
+  activeWorkStartedAt     DateTime?
   remainingWorkdays       Int?
+  notes                   String?
   status                  String    @default("未分配")
   reviewRound             Int?
   lastFeedbackAt          DateTime?
@@ -339,6 +346,9 @@ model ModelingTask {
 
   @@index([projectId])
   @@index([projectTaskId])
+  @@index([projectId, projectTaskId, sourceStyleId])
+  @@index([projectId, projectTaskId, styleSequence])
+  @@index([projectId, isFirstModelingStyle])
   @@index([modelerId, status])
   @@index([status])
   @@index([isOutsourced])
@@ -355,6 +365,7 @@ model ModelingFeedback {
   content          String
   severity         String    @default("普通")
   attachmentUrl    String?
+  submissionSnapshot Json?
   resolvedAt       DateTime?
   resolvedBy       String?
   status           String    @default("待处理")
@@ -382,6 +393,29 @@ model ProjectModelingProgress {
 
   @@index([projectId])
   @@index([projectTaskId])
+}
+
+model ModelingProductGuideEvent {
+  id             String    @id @default(uuid())
+  eventType      String
+  sourceModule   String    @default("modeling-schedule")
+  targetModule   String    @default("product-guide")
+  projectId      String
+  projectTaskId  String?
+  modelingTaskId String?
+  payload        Json
+  status         String    @default("pending")
+  generatedBy    String?
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([eventType])
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([modelingTaskId])
+  @@index([targetModule, status])
+  @@index([createdAt])
 }
 
 model WorkTask {
