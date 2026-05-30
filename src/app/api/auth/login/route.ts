@@ -3,17 +3,37 @@ import { prisma } from "@/lib/db/prisma";
 import { ensureDefaultAdminUser } from "@/lib/auth/default-admin";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSessionToken, SESSION_COOKIE_NAME, sessionCookieOptions } from "@/lib/auth/session";
+import { recordUserDataAuditLog } from "@/lib/user-data-audit";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  await ensureDefaultAdminUser();
+  try {
+    await ensureDefaultAdminUser();
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : "默认管理员初始化失败。";
+    await recordUserDataAuditLog({
+      request,
+      action: "登录",
+      targetType: "User",
+      result: "失败",
+      summary: `登录前初始化失败：${message}`,
+    });
+    return NextResponse.json({ ok: false, message }, { status: 500 });
+  }
 
   let payload: Record<string, unknown>;
 
   try {
     payload = (await request.json()) as Record<string, unknown>;
   } catch {
+    await recordUserDataAuditLog({
+      request,
+      action: "登录",
+      targetType: "User",
+      result: "拒绝",
+      summary: "登录请求内容不是有效 JSON。",
+    });
     return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON。" }, { status: 400 });
   }
 
@@ -21,6 +41,15 @@ export async function POST(request: Request) {
   const password = typeof payload.password === "string" ? payload.password : "";
 
   if (!loginName || !password) {
+    await recordUserDataAuditLog({
+      request,
+      action: "登录",
+      targetType: "User",
+      targetId: loginName || null,
+      result: "拒绝",
+      summary: "登录名或密码缺失。",
+      metadata: { loginName: loginName || null },
+    });
     return NextResponse.json({ ok: false, message: "请填写登录名和密码。" }, { status: 400 });
   }
 
@@ -39,6 +68,15 @@ export async function POST(request: Request) {
   });
 
   if (!user?.loginName || !verifyPassword(password, user.passwordHash)) {
+    await recordUserDataAuditLog({
+      request,
+      action: "登录",
+      targetType: "User",
+      targetId: user?.id ?? loginName,
+      result: "拒绝",
+      summary: "登录失败：登录名或密码不正确。",
+      metadata: { loginName, reason: "invalid_credentials" },
+    });
     return NextResponse.json({ ok: false, message: "登录名或密码不正确。" }, { status: 401 });
   }
 
@@ -66,6 +104,17 @@ export async function POST(request: Request) {
   });
 
   response.cookies.set(SESSION_COOKIE_NAME, token, sessionCookieOptions());
+
+  await recordUserDataAuditLog({
+    actor: { id: user.id, name: user.name, loginName: user.loginName },
+    request,
+    action: "登录",
+    targetType: "User",
+    targetId: user.id,
+    result: "成功",
+    summary: "账号登录成功。",
+    metadata: { loginName: user.loginName },
+  });
 
   return response;
 }

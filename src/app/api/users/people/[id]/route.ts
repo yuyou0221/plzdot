@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole, requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { recordUserDataAuditLog } from "@/lib/user-data-audit";
+import { isUserDataAuditWriteError, recordUserDataAuditLog } from "@/lib/user-data-audit";
 import { userDataExcelOnlyResponse } from "@/lib/user-data-excel-only";
 
 export const runtime = "nodejs";
@@ -17,6 +17,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const auth = await requireApiUserDataLevelZero();
   if ("response" in auth) return auth.response;
 
+  try {
   const { id } = await params;
 
   if (auth.user.id === id) {
@@ -28,6 +29,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       targetId: id,
       result: "拒绝",
       summary: "不能删除当前登录账号。",
+      required: true,
     });
     return NextResponse.json({ ok: false, message: "不能删除当前登录账号。" }, { status: 400 });
   }
@@ -46,6 +48,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       targetId: id,
       result: "失败",
       summary: "未找到要删除的人员。",
+      required: true,
     });
     return NextResponse.json({ ok: false, message: "未找到要删除的人员。" }, { status: 404 });
   }
@@ -60,6 +63,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       result: "拒绝",
       summary: "只能删除停用状态的账号。",
       metadata: { targetName: target.name, status: target.status },
+      required: true,
     });
     return NextResponse.json({ ok: false, message: "只能删除停用状态的账号。" }, { status: 400 });
   }
@@ -76,6 +80,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       result: "拒绝",
       summary: "停用账号仍有业务引用，不能删除。",
       metadata: { targetName: target.name, businessReferenceCount },
+      required: true,
     });
     return NextResponse.json(
       {
@@ -91,19 +96,27 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     await tx.modelerCapabilityTag.deleteMany({ where: { userId: id } });
     await tx.userAvailabilityBlock.deleteMany({ where: { userId: id } });
     await tx.user.delete({ where: { id } });
-  });
-  await recordUserDataAuditLog({
-    actor: auth.user,
-    request,
-    action: "删除停用账号",
-    targetType: "User",
-    targetId: id,
-    result: "成功",
-    summary: `已删除停用账号：${target.name}`,
-    metadata: { targetName: target.name },
+    await recordUserDataAuditLog({
+      actor: auth.user,
+      request,
+      action: "删除停用账号",
+      targetType: "User",
+      targetId: id,
+      result: "成功",
+      summary: `已删除停用账号：${target.name}`,
+      metadata: { targetName: target.name },
+      client: tx,
+      required: true,
+    });
   });
 
   return NextResponse.json({ ok: true, id, message: `已删除停用账号：${target.name}` });
+  } catch (error) {
+    if (isUserDataAuditWriteError(error)) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: 500 });
+    }
+    throw error;
+  }
 }
 
 async function countBusinessReferences(userId: string) {

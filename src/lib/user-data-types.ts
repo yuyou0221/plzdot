@@ -98,6 +98,14 @@ export type UserDataViewerPolicy = {
   canDeleteDisabledUsers: boolean;
 };
 
+export type PasswordExportSecretStatus = {
+  configured: boolean;
+  protectedEnvironment: boolean;
+  sourceLabel: string;
+  blocksProtectedOperations: boolean;
+  message: string;
+};
+
 export type UserDataFieldVisibility = {
   scope: string;
   field: string;
@@ -135,4 +143,5 @@ export type UserDataWorkbenchData = {
   vendors: UserDataVendor[];
   availabilityBlocks: UserAvailabilityBlock[];
   auditLogs: UserDataAuditLogEntry[];
+  passwordExportSecretStatus: PasswordExportSecretStatus;
 };

@@ -3,10 +3,9 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { assertPasswordExportSecretConfigured } from "@/lib/auth/password-export";
-import { recordUserDataAuditLog } from "@/lib/user-data-audit";
+import { isUserDataAuditWriteError, recordUserDataAuditLog } from "@/lib/user-data-audit";
 import {
   hashUserDataImportBuffer,
-  markUserDataImportPreviewUsed,
   validateUserDataImportPreview,
 } from "@/lib/user-data-import-preview";
 import {
@@ -34,6 +33,7 @@ export async function POST(request: Request) {
         targetType: "用户数据Excel",
         result: "拒绝",
         summary: "未选择用户数据 Excel 文件。",
+        required: true,
       });
       return NextResponse.json({ ok: false, message: "请先选择用户数据 Excel 文件。" }, { status: 400 });
     }
@@ -47,6 +47,7 @@ export async function POST(request: Request) {
         result: "拒绝",
         summary: "文件格式不是 .xlsx。",
         metadata: { fileName: file.name },
+        required: true,
       });
       return NextResponse.json({ ok: false, message: "当前只支持 .xlsx 格式。" }, { status: 400 });
     }
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
         result: "拒绝",
         summary: previewValidation.reason,
         metadata: { fileName: file.name, fileHash, ...previewValidation.metadata },
+        required: true,
       });
 
       return NextResponse.json({ ok: false, message: previewValidation.reason }, { status: previewValidation.status });
@@ -85,27 +87,11 @@ export async function POST(request: Request) {
       buffer,
       fileName: file.name,
       importedBy: auth.user.name,
-    });
-    await markUserDataImportPreviewUsed(previewValidation.record.id, result.importId);
-    await recordUserDataAuditLog({
-      actor: auth.user,
-      request,
-      action: "Excel覆盖导入",
-      targetType: "用户数据Excel",
-      targetId: result.importId,
-      result: "成功",
-      summary: "用户数据 Excel 覆盖导入完成。",
-      metadata: {
+      audit: {
+        actor: auth.user,
+        request,
         previewId: previewValidation.record.id,
-        fileName: file.name,
         fileHash,
-        people: result.people,
-        permissionRoles: result.permissionRoles,
-        teams: result.teams,
-        vendors: result.vendors,
-        availabilityBlocks: result.availabilityBlocks,
-        deactivated: result.deactivated,
-        warningCount: result.warnings.length,
       },
     });
 
@@ -116,16 +102,28 @@ export async function POST(request: Request) {
       outputDir: importDir,
     });
   } catch (error) {
+    if (isUserDataAuditWriteError(error)) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: 500 });
+    }
+
     const isValidationError = error instanceof UserDataImportValidationError;
-    await recordUserDataAuditLog({
-      actor: auth.user,
-      request,
-      action: "Excel覆盖导入",
-      targetType: "用户数据Excel",
-      result: "失败",
-      summary: error instanceof Error && error.message ? error.message : "用户数据导入失败。",
-      metadata: { status: isValidationError ? 400 : 500 },
-    });
+    try {
+      await recordUserDataAuditLog({
+        actor: auth.user,
+        request,
+        action: "Excel覆盖导入",
+        targetType: "用户数据Excel",
+        result: "失败",
+        summary: error instanceof Error && error.message ? error.message : "用户数据导入失败。",
+        metadata: { status: isValidationError ? 400 : 500 },
+        required: true,
+      });
+    } catch (auditError) {
+      if (isUserDataAuditWriteError(auditError)) {
+        return NextResponse.json({ ok: false, message: auditError.message }, { status: 500 });
+      }
+      throw auditError;
+    }
 
     return NextResponse.json(
       {

@@ -5,8 +5,15 @@ import type { Prisma } from "@prisma/client";
 import { read, utils, type WorkBook } from "xlsx";
 import { encryptExportablePassword } from "@/lib/auth/password-export";
 import { hashPassword } from "@/lib/auth/password";
-import { defaultPermissionLevelForAuthRole, normalizeAuthRole, normalizeUserPermissionLevel } from "@/lib/auth/permissions";
+import {
+  defaultPermissionLevelForAuthRole,
+  normalizeAuthRole,
+  normalizeUserPermissionLevel,
+  type AuthUser,
+} from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
+import { recordUserDataAuditLog } from "@/lib/user-data-audit";
+import { markUserDataImportPreviewUsed } from "@/lib/user-data-import-preview";
 import {
   businessRoleList,
   normalizeBoolean,
@@ -106,6 +113,15 @@ export type UserDataImportPreviewResult = {
     loginConflicts: number;
     activeLoginUsersMissingPassword: number;
   };
+  risks: {
+    unknownPersonIds: number;
+    unknownTeamIds: number;
+    unknownVendorIds: number;
+    unknownAvailabilityBlockIds: number;
+    availabilityRowsUsingFallbackMatch: number;
+    duplicatePersonNames: string[];
+    passwordNotExportableAccounts: number;
+  };
   canApply: boolean;
   warnings: string[];
   errors: string[];
@@ -125,10 +141,17 @@ export async function importUserDataWorkbook({
   buffer,
   fileName,
   importedBy,
+  audit,
 }: {
   buffer: Buffer;
   fileName: string;
   importedBy: string;
+  audit?: {
+    actor: AuthUser;
+    request: Request;
+    previewId: string;
+    fileHash: string;
+  };
 }): Promise<UserDataImportResult> {
   const mode: ImportMode = "replace";
   const { peopleRows, permissionRoleRows, teamRows, vendorRows, availabilityRows, availabilitySheetExists } =
@@ -177,7 +200,7 @@ export async function importUserDataWorkbook({
       },
     });
 
-    return {
+    const result: UserDataImportResult = {
       ok: true,
       importId,
       mode,
@@ -191,6 +214,35 @@ export async function importUserDataWorkbook({
       deactivated,
       warnings: state.warnings,
     };
+
+    if (audit) {
+      await markUserDataImportPreviewUsed(audit.previewId, result.importId, tx);
+      await recordUserDataAuditLog({
+        actor: audit.actor,
+        request: audit.request,
+        action: "Excel覆盖导入",
+        targetType: "用户数据Excel",
+        targetId: result.importId,
+        result: "成功",
+        summary: "用户数据 Excel 覆盖导入完成。",
+        metadata: {
+          previewId: audit.previewId,
+          fileName,
+          fileHash: audit.fileHash,
+          people: result.people,
+          permissionRoles: result.permissionRoles,
+          teams: result.teams,
+          vendors: result.vendors,
+          availabilityBlocks: result.availabilityBlocks,
+          deactivated: result.deactivated,
+          warningCount: result.warnings.length,
+        },
+        client: tx,
+        required: true,
+      });
+    }
+
+    return result;
   });
 }
 
@@ -215,14 +267,22 @@ export async function previewUserDataWorkbook({
     warnings.push("未识别到「不可排期记录」工作表，本次覆盖导入不会更新不可排期记录。");
   }
 
-  const existingUsers = await prisma.user.findMany({
-    select: { id: true, name: true, loginName: true, passwordHash: true },
-  });
+  const [existingUsers, existingTeams, existingVendors, existingAvailabilityBlocks] = await Promise.all([
+    prisma.user.findMany({
+      select: { id: true, name: true, loginName: true, passwordHash: true, passwordExportCiphertext: true },
+    }),
+    prisma.team.findMany({ select: { id: true, name: true } }),
+    prisma.outsourceVendor.findMany({ select: { id: true, name: true } }),
+    prisma.userAvailabilityBlock.findMany({ select: { id: true, userId: true, blockType: true, startDate: true, endDate: true } }),
+  ]);
   const existingUserById = new Map(existingUsers.map((user) => [user.id, user]));
   const existingUserByName = new Map(existingUsers.map((user) => [normalizeKey(user.name), user]));
   const existingUserIdByLoginName = new Map(
     existingUsers.filter((user) => user.loginName).map((user) => [normalizeKey(user.loginName ?? ""), user.id]),
   );
+  const existingTeamById = new Map(existingTeams.map((team) => [team.id, team]));
+  const existingVendorById = new Map(existingVendors.map((vendor) => [vendor.id, vendor]));
+  const existingAvailabilityBlockById = new Map(existingAvailabilityBlocks.map((block) => [block.id, block]));
 
   let loginUsers = 0;
   let passwordRows = 0;
@@ -231,7 +291,14 @@ export async function previewUserDataWorkbook({
   let activeLoginUsersMissingPassword = 0;
   let activeAdminAfterImport = false;
   let activeLevelZeroAfterImport = false;
+  let unknownPersonIds = 0;
+  let unknownTeamIds = 0;
+  let unknownVendorIds = 0;
+  let unknownAvailabilityBlockIds = 0;
+  let availabilityRowsUsingFallbackMatch = 0;
+  let passwordNotExportableAccounts = 0;
   const loginNameCounts = new Map<string, number>();
+  const personNameCounts = new Map<string, number>();
 
   for (const [index, row] of peopleRows.entries()) {
     const rowNumber = index + 2;
@@ -241,6 +308,12 @@ export async function previewUserDataWorkbook({
     if (!name) {
       warnings.push(`人员名单第 ${rowNumber} 行缺少姓名，导入时会跳过。`);
       continue;
+    }
+
+    personNameCounts.set(normalizeKey(name), (personNameCounts.get(normalizeKey(name)) ?? 0) + 1);
+    if (id && !existingUserById.has(id)) {
+      unknownPersonIds += 1;
+      warnings.push(`人员名单第 ${rowNumber} 行使用了数据库中不存在的人员ID，覆盖导入时会按该 ID 新建人员。`);
     }
 
     const matchedUser = id ? existingUserById.get(id) : existingUserByName.get(normalizeKey(name));
@@ -273,6 +346,12 @@ export async function previewUserDataWorkbook({
       if (initialPassword.length < 8) {
         shortPasswordRows += 1;
       }
+    } else if (loginName && matchedUser?.passwordHash && !matchedUser.passwordExportCiphertext) {
+      passwordNotExportableAccounts += 1;
+      warnings.push(`人员名单第 ${rowNumber} 行账号已有历史密码哈希，但没有可导出密码记录；导出时密码列会为空。`);
+    } else if (loginName && migrationPasswordHash) {
+      passwordNotExportableAccounts += 1;
+      warnings.push(`人员名单第 ${rowNumber} 行使用迁移密码哈希，无法反推出明文；导出时密码列会为空。`);
     }
 
     const hasPasswordAfterImport = Boolean(initialPassword || migrationPasswordHash || matchedUser?.passwordHash);
@@ -293,9 +372,54 @@ export async function previewUserDataWorkbook({
   const duplicateLoginNames = Array.from(loginNameCounts.entries())
     .filter(([, count]) => count > 1)
     .map(([loginName]) => loginName);
+  const duplicatePersonNames = Array.from(personNameCounts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([nameKey]) => nameKey);
 
   if (duplicateLoginNames.length > 0) {
     errors.push(`人员名单中有重复登录名：${duplicateLoginNames.slice(0, 10).join("、")}。`);
+  }
+
+  if (duplicatePersonNames.length > 0) {
+    warnings.push(`人员名单中有 ${duplicatePersonNames.length} 个重名人员；没有人员ID的行可能无法稳定辅助匹配，请优先保留人员ID。`);
+  }
+
+  for (const [index, row] of teamRows.entries()) {
+    const rowNumber = index + 2;
+    const id = text(rowValue(row, ["团队ID", "团队 Id", "Team ID"]));
+
+    if (id && !existingTeamById.has(id)) {
+      unknownTeamIds += 1;
+      warnings.push(`团队结构第 ${rowNumber} 行使用了数据库中不存在的团队ID，覆盖导入时会按该 ID 新建团队。`);
+    }
+  }
+
+  for (const [index, row] of vendorRows.entries()) {
+    const rowNumber = index + 2;
+    const id = text(rowValue(row, ["供应商ID", "供应商 Id", "Vendor ID"]));
+
+    if (id && !existingVendorById.has(id)) {
+      unknownVendorIds += 1;
+      warnings.push(`外包供应商第 ${rowNumber} 行使用了数据库中不存在的供应商ID，覆盖导入时会按该 ID 新建供应商。`);
+    }
+  }
+
+  for (const [index, row] of availabilityRows.entries()) {
+    const rowNumber = index + 2;
+    const id = text(rowValue(row, ["记录ID", "不可排期ID", "Availability ID"]));
+
+    if (id && !existingAvailabilityBlockById.has(id)) {
+      unknownAvailabilityBlockIds += 1;
+      warnings.push(`不可排期记录第 ${rowNumber} 行使用了数据库中不存在的记录ID，覆盖导入时会按该 ID 新建记录。`);
+    }
+
+    if (!id) {
+      availabilityRowsUsingFallbackMatch += 1;
+    }
+  }
+
+  if (availabilityRowsUsingFallbackMatch > 0) {
+    warnings.push(`有 ${availabilityRowsUsingFallbackMatch} 条不可排期记录没有记录ID，将按人员 + 类型 + 开始日期 + 结束日期辅助匹配。`);
   }
 
   if (!activeAdminAfterImport) {
@@ -331,6 +455,15 @@ export async function previewUserDataWorkbook({
       duplicateLoginNames,
       loginConflicts,
       activeLoginUsersMissingPassword,
+    },
+    risks: {
+      unknownPersonIds,
+      unknownTeamIds,
+      unknownVendorIds,
+      unknownAvailabilityBlockIds,
+      availabilityRowsUsingFallbackMatch,
+      duplicatePersonNames,
+      passwordNotExportableAccounts,
     },
     canApply: errors.length === 0,
     warnings: warnings.slice(0, 80),

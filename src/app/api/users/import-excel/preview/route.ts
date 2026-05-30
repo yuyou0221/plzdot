@@ -11,14 +11,46 @@ export async function POST(request: Request) {
   if ("response" in auth) return auth.response;
 
   try {
-    const formData = await request.formData();
+    let formData: FormData;
+
+    try {
+      formData = await request.formData();
+    } catch {
+      await recordUserDataAuditLog({
+        actor: auth.user,
+        request,
+        action: "Excel预览",
+        targetType: "用户数据Excel",
+        result: "拒绝",
+        summary: "预览请求没有有效的 Excel 表单文件。",
+      });
+      return NextResponse.json({ ok: false, message: "请先选择用户数据 Excel 文件。" }, { status: 400 });
+    }
+
     const file = formData.get("file");
 
     if (!(file instanceof File)) {
+      await recordUserDataAuditLog({
+        actor: auth.user,
+        request,
+        action: "Excel预览",
+        targetType: "用户数据Excel",
+        result: "拒绝",
+        summary: "未选择用户数据 Excel 文件。",
+      });
       return NextResponse.json({ ok: false, message: "请先选择用户数据 Excel 文件。" }, { status: 400 });
     }
 
     if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      await recordUserDataAuditLog({
+        actor: auth.user,
+        request,
+        action: "Excel预览",
+        targetType: "用户数据Excel",
+        result: "拒绝",
+        summary: "文件格式不是 .xlsx。",
+        metadata: { fileName: file.name },
+      });
       return NextResponse.json({ ok: false, message: "当前只支持 .xlsx 格式。" }, { status: 400 });
     }
 
@@ -49,6 +81,7 @@ export async function POST(request: Request) {
         expiresAt: previewRecord.expiresAt,
         counts: preview.counts,
         checks: preview.checks,
+        risks: preview.risks,
         warningCount: preview.warnings.length,
         errorCount: preview.errors.length,
       },
