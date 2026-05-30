@@ -127,12 +127,7 @@ projectTeamId
 }
 ```
 
-下一步：
-
-```text
-把 project-analysis-v5-excel.js 接入这个接口。
-成功后写入 schedule_project_results、schedule_task_results 和 alerts。
-```
+当前测算入口已接入 `project-analysis-v5` 端口，成功后写入 `schedule_project_results`、`schedule_task_results`、`task_cards` 和 `alerts`。
 
 ## POST /api/schedule/adjustments
 
@@ -349,7 +344,7 @@ project-main：项目主数据 Excel，合并补充模式。
 src/lib/schedule-engine/service.ts
 ```
 
-服务层通过 `ScheduleEnginePort` 调用默认 legacy adapter，并通过 `ScheduleEngineResultStore` 保存结果。后续替换核心排期内核时，应新增端口实现，不改页面组件和业务 API。
+服务层通过 `ScheduleEnginePort` 调用默认 `project-analysis-v5` 端口，并通过 `ScheduleEngineResultStore` 保存结果。数据库输入集中在 `src/lib/schedule-engine/project-analysis-v5-input.ts` 的 `loadProjectAnalysisV5InputFromDatabase()`，页面组件和业务 API 不直接调用 core JS 或旧适配器。
 
 ## 用户数据 API
 

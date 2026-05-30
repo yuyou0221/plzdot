@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { legacyScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
+import { defaultScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
 
 export const runtime = "nodejs";
 
@@ -42,8 +42,8 @@ export async function POST(request: Request) {
         runName: `手动测算 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
         runType: "正式测算",
         sourceImportId: sourceImportIdFromPayload(payload.source),
-        scriptName: legacyScheduleEnginePort.engineName,
-        scriptVersion: legacyScheduleEnginePort.engineVersion,
+        scriptName: defaultScheduleEnginePort.engineName,
+        scriptVersion: defaultScheduleEnginePort.engineVersion,
         inputSnapshot: {
           source: payload.source ?? "manual",
           projectIds: payload.projectIds ?? [],

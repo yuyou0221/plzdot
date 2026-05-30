@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { legacyScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
+import { defaultScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
 import {
   ingestProjectTaskFactEvent,
   type IngestResult,
@@ -37,8 +37,8 @@ export async function ingestTaskFactEventAndRecalculate(
     data: {
       runName: `任务事实重算 ${event.projectId} #${event.taskNo}`,
       runType: "任务事实重算",
-      scriptName: legacyScheduleEnginePort.engineName,
-      scriptVersion: legacyScheduleEnginePort.engineVersion,
+      scriptName: defaultScheduleEnginePort.engineName,
+      scriptVersion: defaultScheduleEnginePort.engineVersion,
       inputSnapshot: {
         source: "task-fact-event",
         eventId: event.eventId,
