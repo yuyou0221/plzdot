@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { buildModelingTodosFromTasks } from "@/lib/modeling-todos";
@@ -39,6 +40,14 @@ type ProjectTaskTarget = {
 type MatchedTask = {
   id: string;
   status: string;
+  styleName: string;
+  styleSequence: string | null;
+};
+
+type PreparedStyleSubmission = {
+  style: ParsedStyleInput;
+  target: ProjectTaskTarget;
+  existing: MatchedTask | null;
 };
 
 const pendingConfirmationStatuses = new Set(["待确认", "退回补充"]);
@@ -58,6 +67,8 @@ export async function submitModelingStyleSubmission(payload: Record<string, unkn
   const projectId = requiredText(payload.projectId, "缺少项目。");
   const submittedByName = optionalText(payload.submittedByName) ?? actor.name ?? "产品组工作指引";
   const sourceRequestId = optionalText(payload.sourceRequestId);
+  const styleSubmissionBatchId = optionalText(payload.styleSubmissionBatchId) ?? optionalText(payload.submissionBatchId) ?? sourceRequestId ?? randomUUID();
+  const requestedStyleSubmissionVersion = optionalPositiveInt(payload.styleSubmissionVersion) ?? optionalPositiveInt(payload.submissionVersion);
   const styles = parseStyleInputs(payload.styles);
 
   if (styles.length === 0) {
@@ -97,13 +108,49 @@ export async function submitModelingStyleSubmission(payload: Record<string, unkn
   return prisma.$transaction(async (tx) => {
     const resultStyles = [];
     const touchedProjectTaskIds = new Set<string>();
+    const existingBatchTask = await tx.modelingTask.findFirst({
+      where: { projectId, styleSubmissionBatchId },
+      select: { styleSubmissionVersion: true },
+      orderBy: { styleSubmissionVersion: "desc" },
+    });
+    const maxVersion = await tx.modelingTask.aggregate({
+      where: { projectId },
+      _max: { styleSubmissionVersion: true },
+    });
+    const styleSubmissionVersion =
+      requestedStyleSubmissionVersion ?? existingBatchTask?.styleSubmissionVersion ?? (maxVersion._max.styleSubmissionVersion ?? 0) + 1;
+    const preparedStyles: PreparedStyleSubmission[] = [];
 
     for (const style of styles) {
       const target = targets.get(style)!;
       const existing = await matchExistingModelingTask(tx, projectId, target.id, style);
+      preparedStyles.push({ style, target, existing });
+    }
+
+    assertFullPendingSeriesResubmission(
+      await tx.modelingTask.findMany({
+        where: { projectId, status: { in: ["待确认", "退回补充"] } },
+        select: {
+          id: true,
+          projectTaskId: true,
+          styleCode: true,
+          styleSequence: true,
+          styleName: true,
+        },
+        orderBy: [{ styleSequence: "asc" }, { styleCode: "asc" }, { createdAt: "asc" }],
+      }),
+      preparedStyles,
+    );
+    assertNoDuplicateStyleMatches(preparedStyles);
+
+    for (const { style, target, existing } of preparedStyles) {
       const styleCode = style.styleCode || buildStyleCode(project.projectCode, project.projectName, target.taskNo, style);
       const commonData = {
         sourceStyleId: style.sourceStyleId,
+        styleSubmissionBatchId,
+        styleSubmissionVersion,
+        styleSubmissionSubmittedAt: now,
+        styleSubmissionSubmittedBy: submittedByName,
         styleCode,
         styleSequence: style.styleSequence,
         styleName: style.styleName,
@@ -150,6 +197,8 @@ export async function submitModelingStyleSubmission(payload: Record<string, unkn
       touchedProjectTaskIds.add(target.id);
       resultStyles.push({
         sourceStyleId: style.sourceStyleId ?? undefined,
+        styleSubmissionBatchId,
+        styleSubmissionVersion,
         styleCode: task.styleCode,
         styleSequence: task.styleSequence ?? style.styleSequence,
         styleName: task.styleName,
@@ -170,6 +219,8 @@ export async function submitModelingStyleSubmission(payload: Record<string, unkn
       projectId,
       projectName: project.projectName,
       sourceRequestId,
+      styleSubmissionBatchId,
+      styleSubmissionVersion,
       styles: resultStyles,
       todos: buildModelingTodosFromTasks(
         resultStyles.map((style) => ({
@@ -218,6 +269,8 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
       select: {
         id: true,
         sourceStyleId: true,
+        styleSubmissionBatchId: true,
+        styleSubmissionVersion: true,
         projectTaskId: true,
         styleCode: true,
         styleSequence: true,
@@ -241,16 +294,49 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
       throw new ModelingContractError("当前项目没有待确认的建模款式。", 404);
     }
 
+    const allProjectStylesForValidation = await tx.modelingTask.findMany({
+      where: { projectId, status: { not: "取消" } },
+      select: {
+        id: true,
+        projectTaskId: true,
+        styleCode: true,
+        styleSequence: true,
+        styleName: true,
+        isFirstModelingStyle: true,
+        originalArtStatus: true,
+        originalArtApprovedDate: true,
+        difficulty: true,
+        estimatedWorkdays: true,
+      },
+    });
     const projectTasks = await tx.projectTask.findMany({
-      where: { id: { in: [...new Set(tasks.map((task) => task.projectTaskId))] }, projectId },
+      where: { id: { in: [...new Set(allProjectStylesForValidation.map((task) => task.projectTaskId))] }, projectId },
       select: { id: true, taskNo: true },
     });
     const taskNoByProjectTaskId = new Map(projectTasks.map((task) => [task.id, task.taskNo]));
-    const issues = validateStyleConfirmationTasks(tasks, taskNoByProjectTaskId);
+    const issues = validateStyleConfirmationTasks(tasks, taskNoByProjectTaskId, allProjectStylesForValidation);
 
     if (action === "confirm" && issues.length > 0) {
       throw new ModelingContractError(`款式清单不能确认：${issues.join("；")}`);
     }
+
+    const taskIds = tasks.map((task) => task.id);
+    const startedProjectTaskIds =
+      action === "confirm"
+        ? new Set(
+            (
+              await tx.modelingTask.findMany({
+                where: {
+                  projectId,
+                  projectTaskId: { in: [...new Set(tasks.map((task) => task.projectTaskId))] },
+                  id: { notIn: taskIds },
+                  status: { notIn: ["待确认", "退回补充", "未启动"] },
+                },
+                select: { projectTaskId: true },
+              })
+            ).map((task) => task.projectTaskId),
+          )
+        : new Set<string>();
 
     if (action === "return") {
       await Promise.all(
@@ -270,7 +356,7 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
       );
 
       await tx.modelingTask.updateMany({
-        where: { id: { in: tasks.map((task) => task.id) } },
+        where: { id: { in: taskIds } },
         data: {
           status: "退回补充",
           lastFeedbackAt: now,
@@ -282,17 +368,21 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
         },
       });
     } else {
-      await tx.modelingTask.updateMany({
-        where: { id: { in: tasks.map((task) => task.id) } },
-        data: {
-          status: "未启动",
-          lastUpdatedAt: now,
-          lastUpdatedBy: operatorName,
-          blockedSince: null,
-          blockedDays: 0,
-          blockType: null,
-        },
-      });
+      await Promise.all(
+        tasks.map((task) =>
+          tx.modelingTask.update({
+            where: { id: task.id },
+            data: {
+              status: startedProjectTaskIds.has(task.projectTaskId) ? "未分配" : "未启动",
+              lastUpdatedAt: now,
+              lastUpdatedBy: operatorName,
+              blockedSince: null,
+              blockedDays: 0,
+              blockType: startedProjectTaskIds.has(task.projectTaskId) ? "补款确认后自动进入未分配" : null,
+            },
+          }),
+        ),
+      );
     }
 
     const touchedProjectTaskIds = [...new Set(tasks.map((task) => task.projectTaskId))];
@@ -306,6 +396,8 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
       taskNo: taskNoByProjectTaskId.get(task.projectTaskId) ?? null,
       modelingTaskId: task.id,
       sourceStyleId: task.sourceStyleId,
+      styleSubmissionBatchId: task.styleSubmissionBatchId,
+      styleSubmissionVersion: task.styleSubmissionVersion,
       styleCode: task.styleCode,
       styleSequence: task.styleSequence,
       styleName: task.styleName,
@@ -317,7 +409,8 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
       difficulty: task.difficulty,
       estimatedWorkdays: task.estimatedWorkdays,
       previousStatus: task.status,
-      modelingStatus: action === "confirm" ? "未启动" : "退回补充",
+      modelingStatus: action === "confirm" ? (startedProjectTaskIds.has(task.projectTaskId) ? "未分配" : "未启动") : "退回补充",
+      autoStartedAfterConfirmation: action === "confirm" && startedProjectTaskIds.has(task.projectTaskId),
     }));
     const eventType = action === "confirm" ? "style_list_confirmed" : "style_list_returned";
     const productGuideEvent = await createModelingProductGuideEvent(tx, {
@@ -341,6 +434,8 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
           taskNo: style.taskNo,
           modelingTaskId: style.modelingTaskId,
           sourceStyleId: style.sourceStyleId,
+          styleSubmissionBatchId: style.styleSubmissionBatchId,
+          styleSubmissionVersion: style.styleSubmissionVersion,
           styleCode: style.styleCode,
           styleSequence: style.styleSequence,
           styleName: style.styleName,
@@ -348,6 +443,7 @@ export async function confirmModelingStyleSubmission(payload: Record<string, unk
           isRequired: style.isRequired,
           previousStatus: style.previousStatus,
           modelingStatus: style.modelingStatus,
+          autoStartedAfterConfirmation: style.autoStartedAfterConfirmation,
         })),
       },
     });
@@ -485,6 +581,7 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
   const reviewerId = optionalText(payload.reviewerId) ?? actor.id ?? null;
   const feedbackContent = optionalText(payload.feedbackContent);
   const feedbackAttachments = parseReviewFeedbackAttachments(payload);
+  const submissionFeedbackId = optionalText(payload.submissionFeedbackId) ?? optionalText(payload.feedbackId) ?? optionalText(payload.modelingFeedbackId);
 
   if ((reviewResult === "内部不通过" || reviewResult === "送审不通过") && !feedbackContent) {
     throw new ModelingContractError("内部不通过或送审不通过必须填写文字反馈。");
@@ -501,6 +598,7 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
         styleName: true,
         status: true,
         isOutsourced: true,
+        modelerId: true,
         plannedStartDate: true,
         actualStartDate: true,
         activeWorkStartedAt: true,
@@ -533,8 +631,19 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
     const latestSubmissionFeedback = await tx.modelingFeedback.findFirst({
       where: { modelingTaskId, feedbackType: "建模师提交" },
       orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
-      select: { submissionSnapshot: true },
+      select: { id: true, roundNo: true, status: true, submissionSnapshot: true },
     });
+
+    if (!latestSubmissionFeedback) {
+      throw new ModelingContractError("当前款式没有可审核的建模成果提交记录。");
+    }
+
+    if (submissionFeedbackId && submissionFeedbackId !== latestSubmissionFeedback.id) {
+      throw new ModelingContractError("审核结果对应的不是最新建模成果提交，请刷新后重新审核。", 409);
+    }
+
+    assertReviewTargetSubmissionAllowed(reviewResult, latestSubmissionFeedback.status);
+
     const submissionRestoreStatus = readSubmissionRestoreStatus(latestSubmissionFeedback?.submissionSnapshot);
     const nextRound = Math.max(task.reviewRound ?? 0, latestFeedback?.roundNo ?? 0) + 1;
     const now = new Date();
@@ -550,6 +659,7 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
     if (reviewResult === "内部通过可送审") {
       nextStatus = "待送审";
       feedbackType = "内部通过";
+      await createWorkLogIfNeeded(tx, task, now, "internal_review_approved", reviewerName);
       Object.assign(data, buildStopTimerData(task.activeWorkStartedAt, now));
       data.internalApprovedDate = startOfDay(reviewAt);
       data.remainingWorkdays = 0;
@@ -566,9 +676,24 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
       data.blockType = "内部不通过";
       data.blockedSince = null;
       data.blockedDays = 0;
+    } else if (reviewResult === "已送审") {
+      nextStatus = "已送审";
+      feedbackType = "送审记录";
+      resolvedAt = undefined;
+      data.blockedSince = now;
+      data.blockedDays = 0;
+      data.blockType = "送审中";
+    } else if (reviewResult === "等反馈") {
+      nextStatus = "等反馈";
+      feedbackType = "等待版权方反馈";
+      resolvedAt = undefined;
+      data.blockedSince = now;
+      data.blockedDays = 0;
+      data.blockType = "等版权方反馈";
     } else if (reviewResult === "送审通过") {
       nextStatus = "已通过";
       feedbackType = "版权方过审";
+      await createWorkLogIfNeeded(tx, task, now, "copyright_review_approved", reviewerName);
       Object.assign(data, buildStopTimerData(task.activeWorkStartedAt, now));
       const finishDate = startOfDay(reviewAt);
       const startDate = task.actualStartDate ?? task.plannedStartDate ?? finishDate;
@@ -610,6 +735,15 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
       },
     });
 
+    await tx.modelingFeedback.update({
+      where: { id: latestSubmissionFeedback.id },
+      data: {
+        status: buildReviewedSubmissionStatus(reviewResult),
+        resolvedAt: reviewAt,
+        resolvedBy: reviewerName,
+      },
+    });
+
     const updated = await tx.modelingTask.update({
       where: { id: modelingTaskId },
       data: {
@@ -628,12 +762,255 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
       styleCode: updated.styleCode,
       styleName: updated.styleName,
       reviewResult,
+      submissionFeedbackId: latestSubmissionFeedback.id,
+      reviewedSubmissionRound: latestSubmissionFeedback.roundNo,
       modelingStatus: updated.status,
       feedbackContent: feedbackText,
       feedbackAttachments: feedbackAttachments.structured,
       attachmentUrls: feedbackAttachments.urls,
       restoredFromSubmissionSnapshot: reviewResult === "内部不通过" || reviewResult === "送审不通过",
       restoreStatusOnRejection: reviewResult === "内部不通过" || reviewResult === "送审不通过" ? submissionRestoreStatus : undefined,
+      writebackDraft,
+    };
+  });
+}
+
+export async function cancelModelingStyle(payload: Record<string, unknown>, actor: ContractActor = {}) {
+  const modelingTaskId = requiredText(payload.modelingTaskId, "缺少建模款式任务。");
+  const cancelReason = optionalText(payload.cancelReason) ?? optionalText(payload.reason);
+  const operatorName = optionalText(payload.operatorName) ?? actor.name ?? "建模排期";
+  const operatorId = optionalText(payload.operatorId) ?? actor.id ?? null;
+  const releaseScheduleRequirement = payload.releaseScheduleRequirement === true;
+  const now = new Date();
+
+  if (!cancelReason) {
+    throw new ModelingContractError("取消款式必须填写原因。");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const task = await tx.modelingTask.findUnique({
+      where: { id: modelingTaskId },
+      select: {
+        id: true,
+        projectId: true,
+        projectTaskId: true,
+        styleCode: true,
+        styleName: true,
+        status: true,
+        isRequired: true,
+        affectsProjectSchedule: true,
+        modelerId: true,
+        activeWorkStartedAt: true,
+        reviewRound: true,
+      },
+    });
+
+    if (!task) {
+      throw new ModelingContractError("找不到对应建模款式任务。", 404);
+    }
+
+    const payloadProjectId = optionalText(payload.projectId);
+    const payloadProjectTaskId = optionalText(payload.projectTaskId);
+
+    if (payloadProjectId && payloadProjectId !== task.projectId) {
+      throw new ModelingContractError("取消事件的项目与建模款式不一致。");
+    }
+
+    if (payloadProjectTaskId && payloadProjectTaskId !== task.projectTaskId) {
+      throw new ModelingContractError("取消事件的项目任务与建模款式不一致。");
+    }
+
+    const currentStatus = normalizeStatus(task.status, false);
+
+    if (currentStatus === "已通过") {
+      throw new ModelingContractError("已通过款式不能直接取消，请先走重开事件。");
+    }
+
+    if (currentStatus === "取消") {
+      const writebackDraft = await refreshProjectModelingProgress(tx, task.projectId, task.projectTaskId);
+
+      return {
+        projectId: task.projectId,
+        projectTaskId: task.projectTaskId,
+        modelingTaskId: task.id,
+        styleCode: task.styleCode,
+        styleName: task.styleName,
+        previousStatus: task.status,
+        modelingStatus: task.status,
+        releasedScheduleRequirement: false,
+        writebackDraft,
+      };
+    }
+
+    if (task.isRequired && !releaseScheduleRequirement) {
+      throw new ModelingContractError("必做款式取消会影响项目建模完成口径，必须明确 releaseScheduleRequirement=true。");
+    }
+
+    const latestFeedback = await tx.modelingFeedback.findFirst({
+      where: { modelingTaskId },
+      orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
+      select: { roundNo: true },
+    });
+    const roundNo = Math.max(task.reviewRound ?? 0, latestFeedback?.roundNo ?? 0) + 1;
+    const data: Prisma.ModelingTaskUpdateInput = {
+      status: "取消",
+      isRequired: task.isRequired && releaseScheduleRequirement ? false : task.isRequired,
+      affectsProjectSchedule: task.affectsProjectSchedule && releaseScheduleRequirement ? false : task.affectsProjectSchedule,
+      activeWorkStartedAt: null,
+      lastFeedbackAt: now,
+      lastUpdatedAt: now,
+      lastUpdatedBy: operatorName,
+      blockedSince: null,
+      blockedDays: 0,
+      blockType: null,
+    };
+
+    await createWorkLogIfNeeded(tx, task, now, "cancel_style", operatorName);
+    Object.assign(data, buildStopTimerData(task.activeWorkStartedAt, now));
+
+    await tx.modelingFeedback.create({
+      data: {
+        modelingTaskId,
+        feedbackType: "款式取消",
+        roundNo,
+        feedbackByUserId: operatorId,
+        feedbackByName: operatorName,
+        feedbackAt: now,
+        content: cancelReason,
+        resolvedAt: now,
+        resolvedBy: operatorName,
+        status: "已记录",
+      },
+    });
+
+    const updated = await tx.modelingTask.update({
+      where: { id: modelingTaskId },
+      data,
+      select: { id: true, projectId: true, projectTaskId: true, styleCode: true, styleName: true, status: true, isRequired: true, affectsProjectSchedule: true },
+    });
+
+    const writebackDraft = await refreshProjectModelingProgress(tx, updated.projectId, updated.projectTaskId);
+
+    return {
+      projectId: updated.projectId,
+      projectTaskId: updated.projectTaskId,
+      modelingTaskId: updated.id,
+      styleCode: updated.styleCode,
+      styleName: updated.styleName,
+      previousStatus: task.status,
+      modelingStatus: updated.status,
+      releasedScheduleRequirement: task.isRequired && releaseScheduleRequirement,
+      isRequired: updated.isRequired,
+      affectsProjectSchedule: updated.affectsProjectSchedule,
+      writebackDraft,
+    };
+  });
+}
+
+export async function reopenApprovedModelingStyle(payload: Record<string, unknown>, actor: ContractActor = {}) {
+  const modelingTaskId = requiredText(payload.modelingTaskId, "缺少建模款式任务。");
+  const reopenReason = optionalText(payload.reopenReason) ?? optionalText(payload.reason);
+  const operatorName = optionalText(payload.operatorName) ?? actor.name ?? "建模排期";
+  const operatorId = optionalText(payload.operatorId) ?? actor.id ?? null;
+  const now = new Date();
+
+  if (!reopenReason) {
+    throw new ModelingContractError("已通过款式重开必须填写原因。");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const task = await tx.modelingTask.findUnique({
+      where: { id: modelingTaskId },
+      select: {
+        id: true,
+        projectId: true,
+        projectTaskId: true,
+        styleCode: true,
+        styleName: true,
+        status: true,
+        isOutsourced: true,
+        estimatedWorkdays: true,
+        modelerId: true,
+        activeWorkStartedAt: true,
+        reviewRound: true,
+      },
+    });
+
+    if (!task) {
+      throw new ModelingContractError("找不到对应建模款式任务。", 404);
+    }
+
+    const payloadProjectId = optionalText(payload.projectId);
+    const payloadProjectTaskId = optionalText(payload.projectTaskId);
+
+    if (payloadProjectId && payloadProjectId !== task.projectId) {
+      throw new ModelingContractError("重开事件的项目与建模款式不一致。");
+    }
+
+    if (payloadProjectTaskId && payloadProjectTaskId !== task.projectTaskId) {
+      throw new ModelingContractError("重开事件的项目任务与建模款式不一致。");
+    }
+
+    if (normalizeStatus(task.status, task.isOutsourced) !== "已通过") {
+      throw new ModelingContractError(`只有已通过款式可以重开。当前状态：${task.status}。`);
+    }
+
+    const latestFeedback = await tx.modelingFeedback.findFirst({
+      where: { modelingTaskId },
+      orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
+      select: { roundNo: true },
+    });
+    const roundNo = Math.max(task.reviewRound ?? 0, latestFeedback?.roundNo ?? 0) + 1;
+    const data: Prisma.ModelingTaskUpdateInput = {
+      status: "排队中",
+      actualFinishDate: null,
+      internalApprovedDate: null,
+      copyrightApprovedDate: null,
+      actualWorkdays: null,
+      remainingWorkdays: task.estimatedWorkdays,
+      activeWorkStartedAt: null,
+      reviewRound: roundNo,
+      lastFeedbackAt: now,
+      lastUpdatedAt: now,
+      lastUpdatedBy: operatorName,
+      blockedSince: null,
+      blockedDays: 0,
+      blockType: null,
+    };
+
+    await createWorkLogIfNeeded(tx, task, now, "reopen_approved_style", operatorName);
+    Object.assign(data, buildStopTimerData(task.activeWorkStartedAt, now));
+
+    await tx.modelingFeedback.create({
+      data: {
+        modelingTaskId,
+        feedbackType: "已通过款式重开",
+        roundNo,
+        feedbackByUserId: operatorId,
+        feedbackByName: operatorName,
+        feedbackAt: now,
+        content: reopenReason,
+        status: "待处理",
+      },
+    });
+
+    const updated = await tx.modelingTask.update({
+      where: { id: modelingTaskId },
+      data,
+      select: { id: true, projectId: true, projectTaskId: true, styleCode: true, styleName: true, status: true },
+    });
+
+    const writebackDraft = await refreshProjectModelingProgress(tx, updated.projectId, updated.projectTaskId);
+
+    return {
+      projectId: updated.projectId,
+      projectTaskId: updated.projectTaskId,
+      modelingTaskId: updated.id,
+      styleCode: updated.styleCode,
+      styleName: updated.styleName,
+      previousStatus: task.status,
+      modelingStatus: updated.status,
+      reviewRound: roundNo,
       writebackDraft,
     };
   });
@@ -653,6 +1030,10 @@ export async function getProjectModelingStyles(projectId: string) {
         projectId: true,
         projectTaskId: true,
         sourceStyleId: true,
+        styleSubmissionBatchId: true,
+        styleSubmissionVersion: true,
+        styleSubmissionSubmittedAt: true,
+        styleSubmissionSubmittedBy: true,
         styleCode: true,
         styleSequence: true,
         styleName: true,
@@ -718,6 +1099,10 @@ export async function getProjectModelingStyles(projectId: string) {
         taskName: projectTask?.taskName ?? "",
         modelingTaskId: task.id,
         sourceStyleId: task.sourceStyleId,
+        styleSubmissionBatchId: task.styleSubmissionBatchId,
+        styleSubmissionVersion: task.styleSubmissionVersion,
+        styleSubmissionSubmittedAt: formatDateTime(task.styleSubmissionSubmittedAt),
+        styleSubmissionSubmittedBy: task.styleSubmissionSubmittedBy,
         styleCode: task.styleCode,
         styleSequence: task.styleSequence,
         styleName: task.styleName,
@@ -869,16 +1254,17 @@ function validateStyleConfirmationTasks(
     estimatedWorkdays: number;
   }>,
   taskNoByProjectTaskId: Map<string, number>,
+  allSeriesTasks = tasks,
 ) {
   const issues: string[] = [];
-  const firstStyleCount = tasks.filter((task) => task.isFirstModelingStyle).length;
+  const firstStyleCount = allSeriesTasks.filter((task) => task.isFirstModelingStyle).length;
 
   if (firstStyleCount !== 1) {
     issues.push("必须且只能有 1 个第一款建模款式");
   }
 
   const sequenceCounts = new Map<string, number>();
-  for (const task of tasks) {
+  for (const task of allSeriesTasks) {
     const sequence = (task.styleSequence ?? "").trim();
     if (sequence) {
       sequenceCounts.set(sequence, (sequenceCounts.get(sequence) ?? 0) + 1);
@@ -978,7 +1364,7 @@ async function matchExistingModelingTask(
   for (const matcher of matchers) {
     const matches = await tx.modelingTask.findMany({
       where: matcher.where,
-      select: { id: true, status: true },
+      select: { id: true, status: true, styleName: true, styleSequence: true },
       take: 2,
     });
 
@@ -992,6 +1378,65 @@ async function matchExistingModelingTask(
   }
 
   return null;
+}
+
+function assertFullPendingSeriesResubmission(
+  pendingTasks: Array<{
+    id: string;
+    projectTaskId: string;
+    styleCode: string;
+    styleSequence: string | null;
+    styleName: string;
+  }>,
+  preparedStyles: PreparedStyleSubmission[],
+) {
+  if (pendingTasks.length === 0) {
+    return;
+  }
+
+  const pendingTaskIds = new Set(pendingTasks.map((task) => task.id));
+  const matchedPendingTaskIds = new Set(
+    preparedStyles
+      .map((item) => item.existing?.id)
+      .filter((taskId): taskId is string => typeof taskId === "string" && pendingTaskIds.has(taskId)),
+  );
+  const missingTasks = pendingTasks.filter((task) => !matchedPendingTaskIds.has(task.id));
+
+  if (missingTasks.length === 0) {
+    return;
+  }
+
+  const missingNames = missingTasks
+    .slice(0, 5)
+    .map((task) => task.styleName || task.styleSequence || task.styleCode)
+    .join("、");
+
+  throw new ModelingContractError(
+    `重新提交款式清单必须包含同一系列的完整款式，不能通过缺失删除款式。缺少：${missingNames}${missingTasks.length > 5 ? "等" : ""}。如需取消款式，请走单独取消事件。`,
+    409,
+  );
+}
+
+function assertNoDuplicateStyleMatches(preparedStyles: PreparedStyleSubmission[]) {
+  const counts = new Map<string, number>();
+
+  for (const item of preparedStyles) {
+    if (!item.existing) {
+      continue;
+    }
+
+    counts.set(item.existing.id, (counts.get(item.existing.id) ?? 0) + 1);
+  }
+
+  const duplicatedTaskId = [...counts.entries()].find(([, count]) => count > 1)?.[0];
+
+  if (!duplicatedTaskId) {
+    return;
+  }
+
+  const duplicatedTask = preparedStyles.find((item) => item.existing?.id === duplicatedTaskId)?.existing;
+
+  throw new ModelingContractError(`提交的款式清单存在重复匹配：${duplicatedTask?.styleName ?? duplicatedTaskId}。请检查款式序号、款式编号或 sourceStyleId。`, 409);
 }
 
 async function resolveProjectTaskIdForStart(projectId: string, taskNo: 7 | 10, projectTaskId?: string | null) {
@@ -1021,6 +1466,8 @@ function normalizeReviewResult(value: string) {
 
   if (text === "内部通过可送审" || text === "内部通过") return "内部通过可送审";
   if (text === "内部不通过") return "内部不通过";
+  if (text === "已送审" || text === "送审中" || text === "提交版权方") return "已送审";
+  if (text === "等反馈" || text === "等待反馈" || text === "等待版权方反馈") return "等反馈";
   if (text === "送审通过" || text === "版权方通过") return "送审通过";
   if (text === "送审不通过" || text === "版权方不通过" || text === "版权方驳回") return "送审不通过";
 
@@ -1036,11 +1483,56 @@ function assertReviewResultTransitionAllowed(reviewResult: string, currentStatus
     return;
   }
 
+  if (reviewResult === "已送审") {
+    if (currentStatus !== "待送审") {
+      throw new ModelingContractError(`款式尚未内部通过，不能标记已送审。当前状态：${currentStatus}。`);
+    }
+
+    return;
+  }
+
+  if (reviewResult === "等反馈") {
+    if (currentStatus !== "已送审" && currentStatus !== "待送审") {
+      throw new ModelingContractError(`款式尚未送审，不能标记等反馈。当前状态：${currentStatus}。`);
+    }
+
+    return;
+  }
+
   if (reviewResult === "送审通过" || reviewResult === "送审不通过") {
     if (currentStatus !== "待送审" && currentStatus !== "已送审" && currentStatus !== "等反馈") {
       throw new ModelingContractError(`款式尚未进入送审阶段，不能写入版权方送审结果。当前状态：${currentStatus}。`);
     }
   }
+}
+
+function assertReviewTargetSubmissionAllowed(reviewResult: string, submissionStatus: string) {
+  if (reviewResult === "内部通过可送审" || reviewResult === "内部不通过") {
+    if (submissionStatus !== "待产品美术验收") {
+      throw new ModelingContractError(`当前建模成果提交已经处理过，不能重复写入内部审核结果。提交状态：${submissionStatus}。`, 409);
+    }
+
+    return;
+  }
+
+  if (
+    submissionStatus !== "内部通过" &&
+    submissionStatus !== "内部通过可送审" &&
+    submissionStatus !== "待版权方送审" &&
+    submissionStatus !== "已送审" &&
+    submissionStatus !== "等版权方反馈"
+  ) {
+    throw new ModelingContractError(`当前建模成果尚未内部通过，不能写入版权方送审结果。提交状态：${submissionStatus}。`, 409);
+  }
+}
+
+function buildReviewedSubmissionStatus(reviewResult: string) {
+  if (reviewResult === "内部通过可送审") return "内部通过";
+  if (reviewResult === "内部不通过") return "内部不通过";
+  if (reviewResult === "已送审") return "已送审";
+  if (reviewResult === "等反馈") return "等版权方反馈";
+  if (reviewResult === "送审通过") return "版权方过审";
+  return "版权方不通过";
 }
 
 function readSubmissionRestoreStatus(value: unknown): ModelingTaskStatus {
@@ -1231,6 +1723,40 @@ function withAttachmentNotes(content: string, attachments: ParsedReviewFeedbackA
   }
 
   return [content, ...attachments.items.map((item) => `${item.label}：${item.url}`)].join("\n");
+}
+
+async function createWorkLogIfNeeded(
+  tx: Prisma.TransactionClient,
+  task: {
+    id: string;
+    projectId: string;
+    projectTaskId: string;
+    modelerId: string | null;
+    activeWorkStartedAt: Date | null;
+  },
+  endedAt: Date,
+  stopReason: string,
+  stoppedBy: string,
+) {
+  const durationMinutes = minutesBetween(task.activeWorkStartedAt, endedAt);
+
+  if (!task.activeWorkStartedAt || durationMinutes <= 0) {
+    return;
+  }
+
+  await tx.modelingWorkLog.create({
+    data: {
+      modelingTaskId: task.id,
+      projectId: task.projectId,
+      projectTaskId: task.projectTaskId,
+      modelerId: task.modelerId,
+      startedAt: task.activeWorkStartedAt,
+      endedAt,
+      durationMinutes,
+      stopReason,
+      stoppedBy,
+    },
+  });
 }
 
 function buildStopTimerData(startedAt: Date | null, now: Date): Prisma.ModelingTaskUpdateInput {

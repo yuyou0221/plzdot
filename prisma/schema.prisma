@@ -302,78 +302,125 @@ model ScheduleTaskResult {
 }
 
 model ModelingTask {
-  id                      String    @id @default(uuid())
-  projectId               String
-  projectTaskId           String
-  sourceStyleId           String?
-  styleCode               String
-  styleSequence           String?
-  styleName               String
-  isFirstModelingStyle    Boolean   @default(false)
-  isRequired              Boolean   @default(true)
-  referenceImageUrls      Json?
-  originalArtStatus       String    @default("未过审")
-  originalArtApprovedDate DateTime? @db.Date
-  difficulty              String
-  estimatedWorkdays       Int
-  modelerId               String?
-  assignmentOwnerId       String?
-  isOutsourced            Boolean   @default(false)
-  outsourceVendorId       String?
-  stableOutsourceCapacity Boolean?
-  plannedStartDate        DateTime? @db.Date
-  plannedFinishDate       DateTime? @db.Date
-  actualStartDate         DateTime? @db.Date
-  actualFinishDate        DateTime? @db.Date
-  internalApprovedDate    DateTime? @db.Date
-  copyrightApprovedDate   DateTime? @db.Date
-  actualWorkdays          Int?
-  actualWorkMinutes       Int       @default(0)
-  activeWorkStartedAt     DateTime?
-  remainingWorkdays       Int?
-  notes                   String?
-  status                  String    @default("未分配")
-  reviewRound             Int?
-  lastFeedbackAt          DateTime?
-  blockedSince            DateTime?
-  blockedDays             Int?
-  blockType               String?
-  affectsProjectSchedule  Boolean   @default(true)
-  lastUpdatedAt           DateTime?
-  lastUpdatedBy           String?
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  id                         String    @id @default(uuid())
+  projectId                  String
+  projectTaskId              String
+  sourceStyleId              String?
+  styleSubmissionBatchId     String?
+  styleSubmissionVersion     Int?
+  styleSubmissionSubmittedAt DateTime?
+  styleSubmissionSubmittedBy String?
+  styleCode                  String
+  styleSequence              String?
+  styleName                  String
+  isFirstModelingStyle       Boolean   @default(false)
+  isRequired                 Boolean   @default(true)
+  referenceImageUrls         Json?
+  originalArtStatus          String    @default("未过审")
+  originalArtApprovedDate    DateTime? @db.Date
+  difficulty                 String
+  estimatedWorkdays          Int
+  modelerId                  String?
+  assignmentOwnerId          String?
+  isOutsourced               Boolean   @default(false)
+  outsourceVendorId          String?
+  stableOutsourceCapacity    Boolean?
+  plannedStartDate           DateTime? @db.Date
+  plannedFinishDate          DateTime? @db.Date
+  actualStartDate            DateTime? @db.Date
+  actualFinishDate           DateTime? @db.Date
+  internalApprovedDate       DateTime? @db.Date
+  copyrightApprovedDate      DateTime? @db.Date
+  actualWorkdays             Int?
+  actualWorkMinutes          Int       @default(0)
+  activeWorkStartedAt        DateTime?
+  remainingWorkdays          Int?
+  notes                      String?
+  status                     String    @default("未分配")
+  reviewRound                Int?
+  lastFeedbackAt             DateTime?
+  blockedSince               DateTime?
+  blockedDays                Int?
+  blockType                  String?
+  affectsProjectSchedule     Boolean   @default(true)
+  lastUpdatedAt              DateTime?
+  lastUpdatedBy              String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
 
   @@index([projectId])
   @@index([projectTaskId])
   @@index([projectId, projectTaskId, sourceStyleId])
   @@index([projectId, projectTaskId, styleSequence])
   @@index([projectId, isFirstModelingStyle])
+  @@index([projectId, styleSubmissionBatchId])
+  @@index([projectId, styleSubmissionVersion])
   @@index([modelerId, status])
   @@index([status])
   @@index([isOutsourced])
 }
 
 model ModelingFeedback {
-  id               String    @id @default(uuid())
-  modelingTaskId   String
-  feedbackType     String
-  roundNo          Int
-  feedbackByUserId String?
-  feedbackByName   String?
-  feedbackAt       DateTime
-  content          String
-  severity         String    @default("普通")
-  attachmentUrl    String?
+  id                 String    @id @default(uuid())
+  modelingTaskId     String
+  feedbackType       String
+  roundNo            Int
+  feedbackByUserId   String?
+  feedbackByName     String?
+  feedbackAt         DateTime
+  content            String
+  severity           String    @default("普通")
+  attachmentUrl      String?
   submissionSnapshot Json?
-  resolvedAt       DateTime?
-  resolvedBy       String?
-  status           String    @default("待处理")
-  createdAt        DateTime  @default(now())
+  resolvedAt         DateTime?
+  resolvedBy         String?
+  status             String    @default("待处理")
+  createdAt          DateTime  @default(now())
 
   @@index([modelingTaskId])
   @@index([feedbackAt])
   @@index([status])
+}
+
+model ModelingWorkLog {
+  id              String   @id @default(uuid())
+  modelingTaskId  String
+  projectId       String
+  projectTaskId   String
+  modelerId       String?
+  startedAt       DateTime
+  endedAt         DateTime
+  durationMinutes Int
+  stopReason      String
+  stoppedBy       String?
+  createdAt       DateTime @default(now())
+
+  @@index([modelingTaskId])
+  @@index([projectId])
+  @@index([modelerId])
+  @@index([startedAt])
+}
+
+model ModelingAssignmentHistory {
+  id                    String   @id @default(uuid())
+  modelingTaskId        String
+  projectId             String
+  projectTaskId         String
+  assignmentType        String
+  fromModelerId         String?
+  toModelerId           String?
+  fromOutsourceVendorId String?
+  toOutsourceVendorId   String?
+  changedBy             String?
+  reason                String?
+  createdAt             DateTime @default(now())
+
+  @@index([modelingTaskId])
+  @@index([projectId])
+  @@index([fromModelerId])
+  @@index([toModelerId])
+  @@index([toOutsourceVendorId])
+  @@index([createdAt])
 }
 
 model ProjectModelingProgress {
