@@ -11,7 +11,9 @@ import {
   Gauge,
   ListChecks,
   Palette,
+  Plus,
   Search,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import clsx from "clsx";
@@ -50,13 +52,21 @@ type TaskActionForm = {
   note: string;
 };
 
-type StyleListForm = {
-  styleNames: string;
-  styleCount: string;
+type StyleListRowForm = {
+  clientId: string;
+  styleSequence: string;
+  styleName: string;
+  isFirstModelingStyle: boolean;
+  isRequired: boolean;
   difficulty: string;
   estimatedWorkdays: string;
-  originalArtStatus: string;
   originalArtApprovedDate: string;
+  referenceImageUrl: string;
+  notes: string;
+};
+
+type StyleListForm = {
+  styles: StyleListRowForm[];
   note: string;
 };
 
@@ -115,6 +125,7 @@ const milestoneCardClass: Record<ProductGuideMilestoneRiskLevel, string> = {
 const weeklyTaskGridClass =
   "grid-cols-[minmax(120px,0.95fr)_minmax(180px,1.45fr)_96px_minmax(170px,1.2fr)] max-xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]";
 const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂停", "取消"];
+const styleDifficultyOptions = ["常规款", "简单款", "换色款", "困难正比例款"];
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
@@ -309,25 +320,45 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       return;
     }
 
+    const styles = styleForm.styles
+      .filter((style) => style.styleName.trim().length > 0)
+      .map((style, index) => ({
+        styleSequence: style.styleSequence.trim() || String(index + 1),
+        styleName: style.styleName.trim(),
+        isFirstModelingStyle: style.isFirstModelingStyle,
+        isRequired: style.isRequired,
+        difficulty: style.difficulty.trim() || "常规款",
+        estimatedWorkdays: style.estimatedWorkdays,
+        originalArtApprovedDate: style.originalArtApprovedDate,
+        referenceImageUrl: style.referenceImageUrl.trim(),
+        notes: [style.notes.trim(), styleForm.note.trim()].filter(Boolean).join("\n"),
+      }));
+    const firstStyleCount = styles.filter((style) => style.isFirstModelingStyle).length;
+
+    if (styles.length === 0) {
+      notify("请至少填写 1 款建模款式。", "warning");
+      return;
+    }
+
+    if (firstStyleCount !== 1) {
+      notify("必须且只能选择 1 款作为第一款建模款式。", "warning");
+      return;
+    }
+
     await saveMutation({
       path: "/api/product-guide/modeling-tasks",
       method: "POST",
       payload: {
         projectId: selectedItem.projectId,
         projectTaskId: selectedItem.taskId,
-        styleNames: styleForm.styleNames,
-        styleCount: styleForm.styleCount,
-        difficulty: styleForm.difficulty,
-        estimatedWorkdays: styleForm.estimatedWorkdays,
-        originalArtStatus: styleForm.originalArtStatus,
-        originalArtApprovedDate: styleForm.originalArtApprovedDate,
+        styles,
         note: styleForm.note,
       },
       onSuccess: (result) => {
         setActiveAction(null);
         setStyleForm(defaultStyleListForm());
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已生成建模款式。");
+        notify(result.message ?? "已提交建模款式清单，等待建模侧确认。");
         router.refresh();
       },
     });
@@ -1082,7 +1113,7 @@ function DetailPanel({
           {canShowStyleListAction(item) ? (
             <>
               <SmallActionButton
-                label="录入款式"
+                label="提交款式清单"
                 onClick={() => {
                   setStyleForm(defaultStyleListForm());
                   setActiveAction("style-list");
@@ -1526,63 +1557,163 @@ function StyleListFormView({
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const updateRow = (clientId: string, patch: Partial<StyleListRowForm>) => {
+    setForm({
+      ...form,
+      styles: form.styles.map((style) => (style.clientId === clientId ? { ...style, ...patch } : style)),
+    });
+  };
+  const addRow = () => {
+    setForm({
+      ...form,
+      styles: [...form.styles, createStyleListRow(nextStyleSequence(form.styles))],
+    });
+  };
+  const removeRow = (clientId: string) => {
+    if (form.styles.length <= 1) {
+      return;
+    }
+
+    setForm({
+      ...form,
+      styles: form.styles
+        .filter((style) => style.clientId !== clientId)
+        .map((style, index) => ({
+          ...style,
+          styleSequence: style.styleSequence || String(index + 1),
+        })),
+    });
+  };
+  const selectFirstStyle = (clientId: string) => {
+    setForm({
+      ...form,
+      styles: form.styles.map((style) => ({
+        ...style,
+        isFirstModelingStyle: style.clientId === clientId,
+      })),
+    });
+  };
+
   return (
     <div className="grid gap-3">
       <div>
-        <div className="text-sm font-semibold text-slate-900">录入款式清单</div>
-        <div className="mt-1 text-xs text-slate-500">有真实名称就逐行填写；没有名称时填写数量，会生成待补充款式。</div>
+        <div className="text-sm font-semibold text-slate-900">提交建模款式清单</div>
+        <div className="mt-1 text-xs text-slate-500">
+          按完整系列提交。必须且只能指定 1 款第一款；第一款会挂任务 7，其余款式会挂任务 10。
+        </div>
       </div>
+      <div className="grid gap-2">
+        {form.styles.map((style, index) => (
+          <div key={style.clientId} className="rounded-lg border border-slate-200 bg-white p-2">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-slate-500">款式 {index + 1}</div>
+              <button
+                type="button"
+                onClick={() => removeRow(style.clientId)}
+                disabled={form.styles.length <= 1 || saving}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                title="删除该款式"
+              >
+                <Trash2 size={13} />
+                删除
+              </button>
+            </div>
+            <div className="grid gap-2">
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
+                <LabeledInput
+                  label="款式序号"
+                  value={style.styleSequence}
+                  onChange={(value) => updateRow(style.clientId, { styleSequence: value })}
+                />
+                <LabeledInput
+                  label="款式名称"
+                  value={style.styleName}
+                  placeholder="例如：雨衣"
+                  onChange={(value) => updateRow(style.clientId, { styleName: value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-600">
+                  <input
+                    type="radio"
+                    name="first-modeling-style"
+                    checked={style.isFirstModelingStyle}
+                    onChange={() => selectFirstStyle(style.clientId)}
+                    className="size-4 accent-rose-600"
+                  />
+                  第一款
+                </label>
+                <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={style.isRequired}
+                    onChange={(event) => updateRow(style.clientId, { isRequired: event.target.checked })}
+                    className="size-4 accent-rose-600"
+                  />
+                  必做
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-medium text-slate-500">
+                  难度
+                  <select
+                    value={style.difficulty}
+                    onChange={(event) => updateRow(style.clientId, { difficulty: event.target.value })}
+                    className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                  >
+                    {styleDifficultyOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <LabeledInput
+                  label="预计建模天数"
+                  type="number"
+                  value={style.estimatedWorkdays}
+                  onChange={(value) => updateRow(style.clientId, { estimatedWorkdays: value })}
+                />
+              </div>
+              <LabeledInput
+                label="原画过审日期"
+                type="date"
+                value={style.originalArtApprovedDate}
+                onChange={(value) => updateRow(style.clientId, { originalArtApprovedDate: value })}
+              />
+              <LabeledInput
+                label="参考图链接"
+                value={style.referenceImageUrl}
+                placeholder="https://..."
+                onChange={(value) => updateRow(style.clientId, { referenceImageUrl: value })}
+              />
+              <LabeledTextarea
+                label="备注"
+                value={style.notes}
+                placeholder="可填写款式拆分说明、参考重点或特殊要求"
+                rows={2}
+                onChange={(value) => updateRow(style.clientId, { notes: value })}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={addRow}
+        disabled={saving}
+        className="inline-flex h-9 w-fit items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+      >
+        <Plus size={15} />
+        添加款式
+      </button>
       <LabeledTextarea
-        label="款式名称"
-        value={form.styleNames}
-        placeholder={"例如：\n坐姿款\n站姿款\n表情替换款"}
-        onChange={(value) => setForm({ ...form, styleNames: value })}
-      />
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="款式数量"
-          type="number"
-          value={form.styleCount}
-          onChange={(value) => setForm({ ...form, styleCount: value })}
-        />
-        <LabeledInput
-          label="预估工时"
-          type="number"
-          value={form.estimatedWorkdays}
-          onChange={(value) => setForm({ ...form, estimatedWorkdays: value })}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledInput
-          label="难度"
-          value={form.difficulty}
-          onChange={(value) => setForm({ ...form, difficulty: value })}
-        />
-        <label className="grid gap-1 text-xs font-medium text-slate-500">
-          原画状态
-          <select
-            value={form.originalArtStatus}
-            onChange={(event) => setForm({ ...form, originalArtStatus: event.target.value })}
-            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-          >
-            <option value="未过审">未过审</option>
-            <option value="已过审">已过审</option>
-          </select>
-        </label>
-      </div>
-      <LabeledInput
-        label="原画过审日期"
-        type="date"
-        value={form.originalArtApprovedDate}
-        onChange={(value) => setForm({ ...form, originalArtApprovedDate: value })}
-      />
-      <LabeledTextarea
-        label="备注"
+        label="系列备注"
         value={form.note}
-        placeholder="可填写款式拆分说明"
+        placeholder="可填写本次提交的整体说明"
         onChange={(value) => setForm({ ...form, note: value })}
       />
-      <FormActions saving={saving} submitLabel="生成款式" onCancel={onCancel} onSubmit={onSubmit} />
+      <FormActions saving={saving} submitLabel="提交清单" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
 }
@@ -1618,11 +1749,13 @@ function LabeledTextarea({
   label,
   value,
   placeholder,
+  rows = 3,
   onChange,
 }: {
   label: string;
   value: string;
   placeholder?: string;
+  rows?: number;
   onChange: (value: string) => void;
 }) {
   return (
@@ -1632,7 +1765,7 @@ function LabeledTextarea({
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        rows={3}
+        rows={rows}
         className="resize-none rounded-md border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
       />
     </label>
@@ -1714,17 +1847,38 @@ function StyleSummaryBlock({ styles }: { styles: ProductGuideStyleSummary[] }) {
       {visibleStyles.length > 0 ? (
         <div className="mt-2 grid gap-1.5">
           {visibleStyles.map((style) => (
-            <div key={style.id} className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs">
-              <div className="min-w-0">
-                <div className="truncate font-semibold text-slate-800">{style.styleName}</div>
-                <div className="mt-0.5 truncate text-slate-400">
-                  {style.styleCode} · {style.difficulty} · {style.estimatedWorkdays} 天
+            <div key={style.id} className="rounded-md bg-white px-2 py-1.5 text-xs">
+              <div className="grid grid-cols-[minmax(0,1fr)_80px_72px] items-center gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-slate-800">{style.styleName}</div>
+                  <div className="mt-0.5 truncate text-slate-400">
+                    {style.styleCode} · {style.difficulty} · {style.estimatedWorkdays} 天
+                  </div>
+                  <div className="mt-0.5 truncate text-slate-400" title={style.id}>
+                    建模任务ID {style.id}
+                  </div>
                 </div>
+                <span
+                  className={clsx(
+                    "truncate rounded-full px-2 py-0.5 text-center font-semibold",
+                    style.status === "退回补充"
+                      ? "bg-amber-100 text-amber-800"
+                      : style.status === "待确认"
+                        ? "bg-sky-100 text-sky-800"
+                        : "bg-slate-100 text-slate-600",
+                  )}
+                >
+                  {style.status}
+                </span>
+                <span className="truncate text-slate-500">
+                  {style.originalArtApprovedDate ?? style.originalArtStatus}
+                </span>
               </div>
-              <span className="truncate text-slate-600">{style.status}</span>
-              <span className="truncate text-slate-500">
-                {style.originalArtApprovedDate ?? style.originalArtStatus}
-              </span>
+              {style.status === "退回补充" && style.latestFeedbackSummary ? (
+                <div className="mt-1 break-words rounded bg-amber-50 px-2 py-1 text-amber-800">
+                  退回原因：{style.latestFeedbackSummary}
+                </div>
+              ) : null}
             </div>
           ))}
           {styles.length > visibleStyles.length ? (
@@ -1733,7 +1887,7 @@ function StyleSummaryBlock({ styles }: { styles: ProductGuideStyleSummary[] }) {
         </div>
       ) : (
         <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-xs text-slate-500">
-          该项目尚未录入真实款式。录入后会进入建模排期。
+          该项目尚未提交真实款式。提交后会先进入建模侧确认。
         </div>
       )}
     </div>
@@ -1934,14 +2088,32 @@ function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
 
 function defaultStyleListForm(): StyleListForm {
   return {
-    styleNames: "",
-    styleCount: "",
-    difficulty: "常规款",
-    estimatedWorkdays: "7",
-    originalArtStatus: "未过审",
-    originalArtApprovedDate: "",
+    styles: [createStyleListRow(1)],
     note: "",
   };
+}
+
+function createStyleListRow(sequence: number): StyleListRowForm {
+  return {
+    clientId: `style-row-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    styleSequence: String(sequence),
+    styleName: "",
+    isFirstModelingStyle: false,
+    isRequired: true,
+    difficulty: "常规款",
+    estimatedWorkdays: "7",
+    originalArtApprovedDate: "",
+    referenceImageUrl: "",
+    notes: "",
+  };
+}
+
+function nextStyleSequence(styles: StyleListRowForm[]) {
+  const numericSequences = styles
+    .map((style) => Number(style.styleSequence))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  return numericSequences.length > 0 ? Math.max(...numericSequences) + 1 : styles.length + 1;
 }
 
 function normalizeTaskStatus(value?: string) {

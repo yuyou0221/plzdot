@@ -135,6 +135,14 @@ type ModelingTaskRow = {
   updatedAt: Date;
 };
 
+type ModelingFeedbackRow = {
+  modelingTaskId: string;
+  feedbackType: string;
+  content: string;
+  feedbackAt: Date;
+  status: string;
+};
+
 type ProgressUpdateRow = {
   id: string;
   projectId: string;
@@ -421,6 +429,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
         }),
       ]);
 
+    const latestFeedbackByTaskId = await getLatestModelingFeedbackByTaskId(modelingTasks.map((task) => task.id));
     const projectById = new Map(projects.map((project) => [project.id, project]));
     const maps: ContextMaps = {
       teamById: new Map(teams.map((team) => [team.id, team])),
@@ -650,7 +659,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       milestoneBoard,
       filters: buildFilters(items, users, teams, milestoneBoard.cards),
       items,
-      styleSummaries: buildStyleSummaries(modelingTasks),
+      styleSummaries: buildStyleSummaries(modelingTasks, latestFeedbackByTaskId),
     };
   } catch (error) {
     console.error("Failed to build product guide data", error);
@@ -1131,24 +1140,62 @@ function buildMilestoneBoard(
   };
 }
 
-function buildStyleSummaries(modelingTasks: ModelingTaskRow[]): ProductGuideStyleSummary[] {
+async function getLatestModelingFeedbackByTaskId(modelingTaskIds: string[]) {
+  if (modelingTaskIds.length === 0) {
+    return new Map<string, ModelingFeedbackRow>();
+  }
+
+  const feedbackRows = await prisma.modelingFeedback.findMany({
+    where: { modelingTaskId: { in: modelingTaskIds } },
+    orderBy: [{ feedbackAt: "desc" }, { createdAt: "desc" }],
+    take: Math.min(2000, modelingTaskIds.length * 5),
+    select: {
+      modelingTaskId: true,
+      feedbackType: true,
+      content: true,
+      feedbackAt: true,
+      status: true,
+    },
+  });
+  const latestByTaskId = new Map<string, ModelingFeedbackRow>();
+
+  for (const feedback of feedbackRows) {
+    if (!latestByTaskId.has(feedback.modelingTaskId)) {
+      latestByTaskId.set(feedback.modelingTaskId, feedback);
+    }
+  }
+
+  return latestByTaskId;
+}
+
+function buildStyleSummaries(
+  modelingTasks: ModelingTaskRow[],
+  latestFeedbackByTaskId: Map<string, ModelingFeedbackRow>,
+): ProductGuideStyleSummary[] {
   return modelingTasks
-    .map((task) => ({
-      id: task.id,
-      projectId: task.projectId,
-      projectTaskId: task.projectTaskId,
-      styleCode: task.styleCode,
-      styleName: task.styleName || task.styleCode,
-      isRequired: task.isRequired,
-      originalArtStatus: task.originalArtStatus,
-      originalArtApprovedDate: formatDate(task.originalArtApprovedDate),
-      difficulty: task.difficulty,
-      estimatedWorkdays: task.estimatedWorkdays,
-      status: normalizeModelingStatus(task.status, task.isOutsourced),
-      plannedFinishDate: formatDate(task.plannedFinishDate),
-      actualFinishDate: formatDate(task.actualFinishDate),
-      lastUpdatedAt: formatDate(task.lastUpdatedAt ?? task.updatedAt),
-    }))
+    .map((task) => {
+      const feedback = latestFeedbackByTaskId.get(task.id);
+
+      return {
+        id: task.id,
+        projectId: task.projectId,
+        projectTaskId: task.projectTaskId,
+        styleCode: task.styleCode,
+        styleName: task.styleName || task.styleCode,
+        isRequired: task.isRequired,
+        originalArtStatus: task.originalArtStatus,
+        originalArtApprovedDate: formatDate(task.originalArtApprovedDate),
+        difficulty: task.difficulty,
+        estimatedWorkdays: task.estimatedWorkdays,
+        status: normalizeModelingStatus(task.status, task.isOutsourced),
+        plannedFinishDate: formatDate(task.plannedFinishDate),
+        actualFinishDate: formatDate(task.actualFinishDate),
+        latestFeedbackSummary: feedback?.content,
+        latestFeedbackAt: formatDate(feedback?.feedbackAt),
+        blockType: task.blockType ?? feedback?.feedbackType,
+        lastUpdatedAt: formatDate(task.lastUpdatedAt ?? task.updatedAt),
+      };
+    })
     .sort((a, b) => a.projectId.localeCompare(b.projectId) || a.styleCode.localeCompare(b.styleCode, "zh-CN"));
 }
 
@@ -1861,8 +1908,12 @@ function normalizeModelingStatus(value: string, isOutsourced: boolean) {
     return "外包中";
   }
 
+  if (value.includes("待确认")) return "待确认";
+  if (value.includes("退回补充")) return "退回补充";
+  if (value.includes("未启动")) return "未启动";
   if (value.includes("未分配")) return "未分配";
   if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
+  if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
   if (value.includes("排队")) return "排队中";

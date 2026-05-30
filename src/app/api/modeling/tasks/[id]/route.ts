@@ -30,7 +30,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       eventType: result.eventType,
       task,
       projectSummary,
-      writebackDraft: result.writebackDraft,
+      projectScheduleReadiness: result.writebackDraft,
     });
   } catch (error) {
     if (error instanceof ModelingTaskUpdateError) {

@@ -18,11 +18,13 @@ export async function POST(request: Request) {
 
   try {
     const result = await reopenApprovedModelingStyle(payload, auth.user);
+    const { writebackDraft, ...publicResult } = result;
 
     return NextResponse.json({
       ok: true,
       message: `已通过款式已重开：${result.styleName}。`,
-      ...result,
+      ...publicResult,
+      projectScheduleReadiness: writebackDraft,
     });
   } catch (error) {
     if (error instanceof ModelingContractError) {

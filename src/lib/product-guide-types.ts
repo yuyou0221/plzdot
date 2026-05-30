@@ -41,6 +41,9 @@ export type ProductGuideStyleSummary = {
   status: string;
   plannedFinishDate?: string;
   actualFinishDate?: string;
+  latestFeedbackSummary?: string;
+  latestFeedbackAt?: string;
+  blockType?: string;
   lastUpdatedAt?: string;
 };
 

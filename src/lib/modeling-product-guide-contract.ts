@@ -51,7 +51,6 @@ type PreparedStyleSubmission = {
 };
 
 const pendingConfirmationStatuses = new Set(["待确认", "退回补充"]);
-const formalProgressExcludedStatuses = new Set<ModelingTaskStatus>(["待确认", "退回补充"]);
 
 export class ModelingContractError extends Error {
   statusCode: number;
@@ -1141,20 +1140,36 @@ export async function getProjectModelingProgress(projectId: string) {
     throw new ModelingContractError("缺少项目。");
   }
 
+  const sourceTaskNos = [7, 10] as const;
+  const projectTasks = await prisma.projectTask.findMany({
+    where: { projectId, taskNo: { in: [...sourceTaskNos] } },
+    select: { id: true, taskNo: true, taskName: true },
+  });
+  const taskNoByProjectTaskId = new Map(projectTasks.map((task) => [task.id, task.taskNo]));
+  const sourceProjectTaskIds = projectTasks.map((task) => task.id);
   const tasks = await prisma.modelingTask.findMany({
-    where: { projectId, affectsProjectSchedule: true },
+    where: { projectId, projectTaskId: { in: sourceProjectTaskIds }, affectsProjectSchedule: true },
+    orderBy: [{ isFirstModelingStyle: "desc" }, { styleSequence: "asc" }, { styleName: "asc" }],
     select: {
       id: true,
       projectTaskId: true,
+      sourceStyleId: true,
+      styleCode: true,
+      styleSequence: true,
+      styleName: true,
+      isFirstModelingStyle: true,
       isRequired: true,
       status: true,
       isOutsourced: true,
       modelerId: true,
       plannedFinishDate: true,
       actualFinishDate: true,
+      copyrightApprovedDate: true,
+      lastFeedbackAt: true,
+      blockType: true,
     },
   });
-  const requiredTasks = tasks.filter((task) => task.isRequired && !formalProgressExcludedStatuses.has(normalizeStatus(task.status, task.isOutsourced)));
+  const requiredTasks = tasks.filter((task) => task.isRequired);
   const totalRequiredStyles = requiredTasks.length;
   const approvedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "已通过").length;
   const inProgressStyles = requiredTasks.filter((task) => {
@@ -1169,11 +1184,37 @@ export async function getProjectModelingProgress(projectId: string) {
   const outsourcedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "外包中" || task.isOutsourced).length;
   const unstartedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "未启动").length;
   const unassignedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "未分配" && !task.modelerId && !task.isOutsourced).length;
-  const canWritebackProjectTask = totalRequiredStyles > 0 && approvedStyles === totalRequiredStyles;
+  const allRequiredStylesApproved = totalRequiredStyles > 0 && approvedStyles === totalRequiredStyles;
+  const approvedRequiredTasks = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "已通过");
+  const lastRequiredStyleApprovedDate = maxDate(approvedRequiredTasks.map((task) => task.copyrightApprovedDate ?? task.actualFinishDate));
+  const unapprovedRequiredStyles = requiredTasks
+    .filter((task) => normalizeStatus(task.status, task.isOutsourced) !== "已通过")
+    .map((task) => buildProjectScheduleReadableStyle(task, taskNoByProjectTaskId));
+  const blockingStyles = requiredTasks
+    .filter((task) => {
+      const status = normalizeStatus(task.status, task.isOutsourced);
+      return status === "待验收" || status === "待送审" || status === "已送审" || status === "等反馈" || status === "修改中";
+    })
+    .map((task) => buildProjectScheduleReadableStyle(task, taskNoByProjectTaskId));
+  const submittedOrWaitingStyles = requiredTasks
+    .filter((task) => {
+      const status = normalizeStatus(task.status, task.isOutsourced);
+      return status === "待验收" || status === "待送审" || status === "已送审" || status === "等反馈";
+    })
+    .map((task) => buildProjectScheduleReadableStyle(task, taskNoByProjectTaskId));
 
   return {
     projectId,
     projectTaskIds: [...new Set(tasks.map((task) => task.projectTaskId))],
+    sourceTaskNos: [...sourceTaskNos],
+    allRequiredStylesApproved,
+    canProjectScheduleTreatModelingDone: allRequiredStylesApproved,
+    requiredStyleCount: totalRequiredStyles,
+    approvedRequiredStyleCount: approvedStyles,
+    lastRequiredStyleApprovedDate: formatDate(lastRequiredStyleApprovedDate),
+    unapprovedRequiredStyles,
+    blockingStyles,
+    submittedOrWaitingStyles,
     totalRequiredStyles,
     approvedStyles,
     inProgressStyles,
@@ -1183,10 +1224,46 @@ export async function getProjectModelingProgress(projectId: string) {
     unstartedStyles,
     unassignedStyles,
     progressPercent: totalRequiredStyles > 0 ? Math.round((approvedStyles / totalRequiredStyles) * 100) : 0,
-    canWritebackProjectTask,
     projectedAllApprovedDate: formatDate(
-      maxDate(requiredTasks.map((task) => (canWritebackProjectTask ? task.actualFinishDate : task.plannedFinishDate ?? task.actualFinishDate))),
+      maxDate(requiredTasks.map((task) => (allRequiredStylesApproved ? task.actualFinishDate : task.plannedFinishDate ?? task.actualFinishDate))),
     ),
+  };
+}
+
+function buildProjectScheduleReadableStyle(
+  task: {
+    id: string;
+    projectTaskId: string;
+    sourceStyleId: string | null;
+    styleCode: string;
+    styleSequence: string | null;
+    styleName: string;
+    isFirstModelingStyle: boolean;
+    isRequired: boolean;
+    status: string;
+    isOutsourced: boolean;
+    actualFinishDate: Date | null;
+    copyrightApprovedDate: Date | null;
+    lastFeedbackAt: Date | null;
+    blockType: string | null;
+  },
+  taskNoByProjectTaskId: Map<string, number>,
+) {
+  return {
+    modelingTaskId: task.id,
+    projectTaskId: task.projectTaskId,
+    taskNo: taskNoByProjectTaskId.get(task.projectTaskId) ?? (task.isFirstModelingStyle ? 7 : 10),
+    sourceStyleId: task.sourceStyleId,
+    styleCode: task.styleCode,
+    styleSequence: task.styleSequence,
+    styleName: task.styleName,
+    isFirstModelingStyle: task.isFirstModelingStyle,
+    isRequired: task.isRequired,
+    modelingStatus: normalizeStatus(task.status, task.isOutsourced),
+    actualFinishDate: formatDate(task.actualFinishDate),
+    copyrightApprovedDate: formatDate(task.copyrightApprovedDate),
+    lastFeedbackAt: formatDate(task.lastFeedbackAt),
+    blockType: task.blockType,
   };
 }
 

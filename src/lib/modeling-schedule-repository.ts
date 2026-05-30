@@ -8,6 +8,7 @@ import type {
   ModelingMilestoneOverview,
   ModelingMilestoneRiskLevel,
   ModelingMetric,
+  ModelingFeedbackSummary,
   ModelingReferenceImage,
   ModelingScheduleData,
   ModelingTaskCard,
@@ -89,6 +90,8 @@ type ModelingTaskRow = {
   styleSequence: string | null;
   styleName: string;
   isFirstModelingStyle: boolean;
+  isRequired: boolean;
+  affectsProjectSchedule: boolean;
   referenceImageUrls: unknown;
   originalArtStatus: string;
   originalArtApprovedDate: Date | null;
@@ -118,11 +121,16 @@ type ModelingTaskRow = {
 };
 
 type FeedbackRow = {
+  id: string;
   modelingTaskId: string;
+  feedbackType: string;
   roundNo: number;
+  feedbackByName: string | null;
   feedbackAt: Date;
   content: string;
   status: string;
+  attachmentUrl: string | null;
+  submissionSnapshot: unknown;
 };
 
 type ScheduleTaskResultRow = {
@@ -172,6 +180,8 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
           styleSequence: true,
           styleName: true,
           isFirstModelingStyle: true,
+          isRequired: true,
+          affectsProjectSchedule: true,
           referenceImageUrls: true,
           originalArtStatus: true,
           originalArtApprovedDate: true,
@@ -241,11 +251,16 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
             orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
             take: 800,
             select: {
+              id: true,
               modelingTaskId: true,
+              feedbackType: true,
               roundNo: true,
+              feedbackByName: true,
               feedbackAt: true,
               content: true,
               status: true,
+              attachmentUrl: true,
+              submissionSnapshot: true,
             },
         })
         : Promise.resolve([]),
@@ -573,13 +588,34 @@ function buildRealTasks(
 ): ModelingTaskCard[] {
   const modelerById = new Map(modelers.map((modeler) => [modeler.id, modeler]));
   const latestFeedbackByTaskId = new Map<string, FeedbackRow>();
+  const latestSubmissionByTaskId = new Map<string, FeedbackRow>();
   const feedbackCountByTaskId = new Map<string, number>();
+  const feedbackHistoryByTaskId = new Map<string, ModelingFeedbackSummary[]>();
 
   for (const feedback of feedbackRows) {
     feedbackCountByTaskId.set(feedback.modelingTaskId, (feedbackCountByTaskId.get(feedback.modelingTaskId) ?? 0) + 1);
 
     if (!latestFeedbackByTaskId.has(feedback.modelingTaskId)) {
       latestFeedbackByTaskId.set(feedback.modelingTaskId, feedback);
+    }
+
+    if (feedback.feedbackType === "建模师提交" && !latestSubmissionByTaskId.has(feedback.modelingTaskId)) {
+      latestSubmissionByTaskId.set(feedback.modelingTaskId, feedback);
+    }
+
+    const history = feedbackHistoryByTaskId.get(feedback.modelingTaskId) ?? [];
+    if (history.length < 12) {
+      history.push({
+        id: feedback.id,
+        feedbackType: feedback.feedbackType,
+        roundNo: feedback.roundNo,
+        feedbackByName: feedback.feedbackByName ?? undefined,
+        feedbackAt: formatDateTime(feedback.feedbackAt) ?? formatDate(feedback.feedbackAt) ?? "",
+        content: feedback.content,
+        status: feedback.status,
+        attachmentUrl: feedback.attachmentUrl ?? undefined,
+      });
+      feedbackHistoryByTaskId.set(feedback.modelingTaskId, history);
     }
   }
 
@@ -591,6 +627,8 @@ function buildRealTasks(
     const isCompletedBySchedule = Boolean(completion);
     const status = isCompletedBySchedule ? "已通过" : normalizeStatus(task.status, task.isOutsourced);
     const latestFeedback = latestFeedbackByTaskId.get(task.id);
+    const latestSubmission = latestSubmissionByTaskId.get(task.id);
+    const latestSubmissionSnapshot = readSubmissionSnapshot(latestSubmission?.submissionSnapshot);
     const actualFinishDate = isCompletedBySchedule
       ? task.actualFinishDate ?? completion?.completionDate ?? task.plannedFinishDate
       : task.actualFinishDate;
@@ -609,6 +647,8 @@ function buildRealTasks(
       styleSequence: task.styleSequence ?? undefined,
       styleName: task.styleName || "待补充款式名",
       isFirstModelingStyle: task.isFirstModelingStyle,
+      isRequired: task.isRequired,
+      affectsProjectSchedule: task.affectsProjectSchedule,
       referenceImageUrls: referenceImagesFromJson(task.referenceImageUrls),
       status,
       difficulty: task.difficulty || "常规",
@@ -644,6 +684,13 @@ function buildRealTasks(
       blockType: isCompletedBySchedule ? undefined : (task.blockType ?? (reviewBlockedStatuses.has(status) ? (status === "待验收" ? "待产品美术验收" : "送审 / 反馈") : undefined)),
       latestFeedback: isCompletedBySchedule ? undefined : latestFeedback?.content,
       feedbackStatus: isCompletedBySchedule ? undefined : latestFeedback?.status,
+      latestSubmissionFeedbackId: isCompletedBySchedule ? undefined : latestSubmission?.id,
+      latestSubmissionContent: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.content || latestSubmission?.content),
+      latestSubmissionDeliverableUrls: isCompletedBySchedule ? [] : latestSubmissionSnapshot.deliverableUrls,
+      latestSubmissionAt: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.submittedAt ?? formatDateTime(latestSubmission?.feedbackAt)),
+      latestSubmissionBy: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.submittedByName ?? latestSubmission?.feedbackByName ?? undefined),
+      latestSubmissionStatus: isCompletedBySchedule ? undefined : latestSubmission?.status,
+      feedbackHistory: isCompletedBySchedule ? [] : (feedbackHistoryByTaskId.get(task.id) ?? []),
       isVirtual: false,
       canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
@@ -696,6 +743,8 @@ function buildVirtualTasks(
           styleSequence: String(index),
           styleName: `待补充款式名 ${String(index).padStart(2, "0")}`,
           isFirstModelingStyle: index === 1,
+          isRequired: true,
+          affectsProjectSchedule: true,
           referenceImageUrls: [],
           status,
           difficulty,
@@ -728,6 +777,13 @@ function buildVirtualTasks(
           blockType: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "待验收" ? "待产品美术验收" : status === "等反馈" ? "等版权方反馈" : "送审中") : undefined,
           latestFeedback: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? (status === "待验收" ? "虚拟提交：建模师已提交成果，等待产品美术验收。" : "虚拟反馈：待补充检修问题与版权方意见。") : undefined,
           feedbackStatus: !isCompletedBySchedule && reviewBlockedStatuses.has(status) ? "待处理" : undefined,
+          latestSubmissionFeedbackId: undefined,
+          latestSubmissionContent: undefined,
+          latestSubmissionDeliverableUrls: [],
+          latestSubmissionAt: undefined,
+          latestSubmissionBy: undefined,
+          latestSubmissionStatus: undefined,
+          feedbackHistory: [],
           isVirtual: true,
           canDragAssign: status === "未分配" && !isCompletedBySchedule,
         });
@@ -749,6 +805,8 @@ function buildProjectSummaries(
     outsourcedStyles: number;
     unassignedStyles: number;
     progressPercent: number;
+    projectedAllApprovedDate: Date | null;
+    canWritebackProjectTask: boolean;
   }>,
   isVirtual: boolean,
   completedModelingByProjectId = new Map<string, ModelingMilestoneCompletion>(),
@@ -757,7 +815,7 @@ function buildProjectSummaries(
 
   return projects
     .filter((project) => {
-      const hasModelingTasks = tasks.some((task) => task.projectId === project.id && !preConfirmationStatuses.has(task.status));
+      const hasModelingTasks = tasks.some((task) => task.projectId === project.id && task.affectsProjectSchedule);
 
       if (!isVirtual) {
         return hasModelingTasks || progressByProjectId.has(project.id);
@@ -767,11 +825,18 @@ function buildProjectSummaries(
     })
     .map((project) => {
       const progress = progressByProjectId.get(project.id);
-      const projectTasks = tasks.filter((task) => task.projectId === project.id && !preConfirmationStatuses.has(task.status));
+      const projectTasks = tasks.filter((task) => task.projectId === project.id && task.affectsProjectSchedule);
+      const formalProjectTasks = projectTasks.filter((task) => !preConfirmationStatuses.has(task.status));
+      const requiredProjectTasks = projectTasks.filter((task) => task.isRequired);
+      const approvedRequiredProjectTasks = requiredProjectTasks.filter((task) => task.status === "已通过");
+      const allRequiredStylesApproved = requiredProjectTasks.length > 0 && approvedRequiredProjectTasks.length === requiredProjectTasks.length;
+      const lastRequiredStyleApprovedDate = maxDate(
+        approvedRequiredProjectTasks.map((task) => dateFromRawValue(task.copyrightApprovedDate) ?? dateFromRawValue(task.actualFinishDate)),
+      );
       const isCompletedBySchedule = completedModelingByProjectId.has(project.id);
 
       if (isCompletedBySchedule) {
-        const totalStyles = projectTasks.length || progress?.totalRequiredStyles || project.styleCount || 0;
+        const totalStyles = formalProjectTasks.length || progress?.totalRequiredStyles || project.styleCount || 0;
 
         return {
           projectId: project.id,
@@ -785,17 +850,23 @@ function buildProjectSummaries(
           outsourcedStyles: 0,
           unassignedStyles: 0,
           progressPercent: 100,
-          isVirtual: isVirtual && projectTasks.length > 0,
+          allRequiredStylesApproved: true,
+          canProjectScheduleTreatModelingDone: true,
+          requiredStyleCount: totalStyles,
+          approvedRequiredStyleCount: totalStyles,
+          lastRequiredStyleApprovedDate: formatDate(lastRequiredStyleApprovedDate ?? progress?.projectedAllApprovedDate ?? project.plannedLaunchDate),
+          sourceTaskNos: [7, 10],
+          isVirtual: isVirtual && formalProjectTasks.length > 0,
         };
       }
 
-      if (projectTasks.length > 0) {
-        const totalStyles = projectTasks.length;
-        const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
-        const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "排队中" || task.status === "建模中" || task.status === "修改中").length;
-        const submittedStyles = projectTasks.filter((task) => task.status === "待验收" || task.status === "已送审" || task.status === "等反馈").length;
-        const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
-        const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
+      if (formalProjectTasks.length > 0 || requiredProjectTasks.length > 0) {
+        const totalStyles = formalProjectTasks.length || projectTasks.length;
+        const approvedStyles = formalProjectTasks.filter((task) => task.status === "已通过").length;
+        const inProgressStyles = formalProjectTasks.filter((task) => task.status === "已排期" || task.status === "排队中" || task.status === "建模中" || task.status === "修改中").length;
+        const submittedStyles = formalProjectTasks.filter((task) => task.status === "待验收" || task.status === "待送审" || task.status === "已送审" || task.status === "等反馈").length;
+        const outsourcedStyles = formalProjectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
+        const unassignedStyles = formalProjectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
         return {
           projectId: project.id,
@@ -809,6 +880,12 @@ function buildProjectSummaries(
           outsourcedStyles,
           unassignedStyles,
           progressPercent: totalStyles > 0 ? Math.round((approvedStyles / totalStyles) * 100) : 0,
+          allRequiredStylesApproved,
+          canProjectScheduleTreatModelingDone: allRequiredStylesApproved,
+          requiredStyleCount: requiredProjectTasks.length,
+          approvedRequiredStyleCount: approvedRequiredProjectTasks.length,
+          lastRequiredStyleApprovedDate: formatDate(lastRequiredStyleApprovedDate),
+          sourceTaskNos: [7, 10],
           isVirtual,
         };
       }
@@ -826,29 +903,33 @@ function buildProjectSummaries(
           outsourcedStyles: progress.outsourcedStyles,
           unassignedStyles: progress.unassignedStyles,
           progressPercent: progress.progressPercent,
+          allRequiredStylesApproved: progress.canWritebackProjectTask,
+          canProjectScheduleTreatModelingDone: progress.canWritebackProjectTask,
+          requiredStyleCount: progress.totalRequiredStyles,
+          approvedRequiredStyleCount: progress.approvedStyles,
+          lastRequiredStyleApprovedDate: formatDate(progress.projectedAllApprovedDate),
+          sourceTaskNos: [7, 10],
           isVirtual: false,
         };
       }
-
-      const totalStyles = projectTasks.length;
-      const approvedStyles = projectTasks.filter((task) => task.status === "已通过").length;
-      const inProgressStyles = projectTasks.filter((task) => task.status === "已排期" || task.status === "排队中" || task.status === "建模中" || task.status === "修改中").length;
-      const submittedStyles = projectTasks.filter((task) => task.status === "待验收" || task.status === "已送审" || task.status === "等反馈").length;
-      const outsourcedStyles = projectTasks.filter((task) => task.status === "外包中" || task.isOutsourced).length;
-      const unassignedStyles = projectTasks.filter((task) => task.status === "未分配" && !task.modelerId && !task.isOutsourced).length;
 
       return {
         projectId: project.id,
         projectName: project.projectName,
         currentStage: project.currentStage ?? project.status,
         plannedLaunchDate: formatDate(project.plannedLaunchDate) ?? "",
-        totalStyles,
-        approvedStyles,
-        inProgressStyles,
-        submittedStyles,
-        outsourcedStyles,
-        unassignedStyles,
-        progressPercent: totalStyles > 0 ? Math.round((approvedStyles / totalStyles) * 100) : 0,
+        totalStyles: 0,
+        approvedStyles: 0,
+        inProgressStyles: 0,
+        submittedStyles: 0,
+        outsourcedStyles: 0,
+        unassignedStyles: 0,
+        progressPercent: 0,
+        allRequiredStylesApproved: false,
+        canProjectScheduleTreatModelingDone: false,
+        requiredStyleCount: 0,
+        approvedRequiredStyleCount: 0,
+        sourceTaskNos: [7, 10],
         isVirtual,
       };
     });
@@ -1031,6 +1112,29 @@ function referenceImagesFromJson(value: unknown): ModelingReferenceImage[] {
       return image;
     })
     .filter((item): item is ModelingReferenceImage => item !== null);
+}
+
+function readSubmissionSnapshot(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      content: "",
+      deliverableUrls: [] as string[],
+      submittedAt: undefined,
+      submittedByName: undefined,
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const deliverableUrls = Array.isArray(record.deliverableUrls)
+    ? record.deliverableUrls.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : [];
+
+  return {
+    content: typeof record.content === "string" ? record.content.trim() : "",
+    deliverableUrls,
+    submittedAt: typeof record.submittedAt === "string" && record.submittedAt.trim() ? record.submittedAt.trim() : undefined,
+    submittedByName: typeof record.submittedByName === "string" && record.submittedByName.trim() ? record.submittedByName.trim() : undefined,
+  };
 }
 
 function dateFromRawValue(value: unknown) {

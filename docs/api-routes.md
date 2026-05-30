@@ -243,7 +243,7 @@ POST /api/auth/logout
 
 ## 产品组工作指引 API
 
-用途：产品组工作指引写入任务执行事实和建模款式清单。
+用途：产品组工作指引写入任务执行事实，并通过兼容入口提交建模款式清单。
 
 当前路由：
 
@@ -260,7 +260,7 @@ POST /api/product-guide/modeling-tasks
 3. expected-finish 写入 ProjectTask.expectedFinishDate 和进度备注，并记录 ProgressUpdate。
 4. submit-review 写入 ProjectTask.status=已送审、送审备注，并记录 ProgressUpdate。
 5. block / unblock 写入 ProjectTask.isBlocked、blockReason 和进度备注，并记录 ProgressUpdate。
-6. POST /api/product-guide/modeling-tasks 写入真实 ModelingTask，并轻量更新 ProjectModelingProgress。
+6. POST /api/product-guide/modeling-tasks 作为旧入口保留，内部桥接到建模排期 style-submissions 契约，提交后 ModelingTask.status=待确认。
 7. 这些写入只记录执行事实，不直接重算预测；页面会提示需要重新测算。
 ```
 
@@ -295,7 +295,7 @@ GET /api/modeling/projects/:projectId/progress
 5. 建模师提交成果后状态进入“待验收”，写入 ModelingFeedback，供产品组工作指引读取。
 6. 建模计时按分钟累计，同一建模师同时只能有一个正在运行的计时；停止计时不作为手动输入，由开始其他款式、提交成果、取消款式等事件自动生成，并写入 ModelingWorkLog。
 7. 每次保存会重算 ProjectModelingProgress。
-8. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
+8. 所有任务 7 / 10 必做款式已通过时，只生成项目排期可读取的完成事实，不静默修改项目排期基线。
 9. 输出给产品组工作指引的主动事件会写入 ModelingProductGuideEvent，并随当前接口返回。
 10. 通用更新入口会返回 `eventType`，第一版用于标识当前保存动作，后续逐步拆成独立事件接口。
 11. 分配建模师、清空建模师、标记外包、取消外包会写入 ModelingAssignmentHistory。
@@ -592,10 +592,10 @@ modelingTaskId、款式编号、款式名称、是否第一款、建模状态、
 
 ### GET /api/modeling/projects/:projectId/progress
 
-用途：给产品组工作指引读取项目级建模进度。
+用途：给产品组工作指引和项目排期读取项目级建模进度与建模完成事实。建模排期只提供可读事实，不主动写项目排期。
 
 返回内容包括：
 
 ```text
-totalRequiredStyles、approvedStyles、inProgressStyles、submittedStyles、waitingSubmissionStyles、outsourcedStyles、unstartedStyles、unassignedStyles、progressPercent、canWritebackProjectTask。
+sourceTaskNos、allRequiredStylesApproved、canProjectScheduleTreatModelingDone、requiredStyleCount、approvedRequiredStyleCount、lastRequiredStyleApprovedDate、unapprovedRequiredStyles、blockingStyles、submittedOrWaitingStyles、totalRequiredStyles、approvedStyles、inProgressStyles、submittedStyles、waitingSubmissionStyles、outsourcedStyles、unstartedStyles、unassignedStyles、progressPercent。
 ```

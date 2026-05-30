@@ -102,6 +102,15 @@ type ProjectStyle = {
 };
 
 type ProjectProgress = {
+  sourceTaskNos: number[];
+  allRequiredStylesApproved: boolean;
+  canProjectScheduleTreatModelingDone: boolean;
+  requiredStyleCount: number;
+  approvedRequiredStyleCount: number;
+  lastRequiredStyleApprovedDate?: string | null;
+  unapprovedRequiredStyles: ProjectStyle[];
+  blockingStyles: ProjectStyle[];
+  submittedOrWaitingStyles: ProjectStyle[];
   totalRequiredStyles: number;
   approvedStyles: number;
   inProgressStyles: number;
@@ -111,7 +120,6 @@ type ProjectProgress = {
   unstartedStyles: number;
   unassignedStyles: number;
   progressPercent: number;
-  canWritebackProjectTask: boolean;
   projectedAllApprovedDate?: string | null;
 };
 
@@ -178,7 +186,7 @@ const scenarioOptions: Array<{ id: ScenarioId; label: string; description: strin
   { id: "work-submit", label: "提交待验收", description: "建模师提交第一款成果，产品组可见待验收" },
   { id: "internal-reject", label: "内部驳回", description: "第一款回到排队中并生成内部反馈" },
   { id: "copyright-reject", label: "版权驳回", description: "第一款待送审后被版权方驳回" },
-  { id: "partial-pass", label: "部分通过", description: "第一款通过，但项目不能回写完成" },
+  { id: "partial-pass", label: "部分通过", description: "第一款通过，但项目排期不能读取为建模完成" },
 ];
 
 export function ModelingContractTestPage({ currentUserName, currentUserRole, initialDate, initialSeed, projects, testModelers }: ModelingContractTestPageProps) {
@@ -1470,8 +1478,8 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3 text-sm">
-                    <Metric label="必做款式" value={progress.totalRequiredStyles} />
-                    <Metric label="已通过" value={progress.approvedStyles} />
+                    <Metric label="必做款式" value={progress.requiredStyleCount} />
+                    <Metric label="已通过" value={progress.approvedRequiredStyleCount} />
                     <Metric label="未启动" value={progress.unstartedStyles} />
                     <Metric label="未分配" value={progress.unassignedStyles} />
                     <Metric label="待送审" value={progress.waitingSubmissionStyles} />
@@ -1480,13 +1488,15 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
                     <Metric label="外包中" value={progress.outsourcedStyles} />
                   </div>
                   <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    回写条件：{progress.canWritebackProjectTask ? "已满足" : "未满足"}
+                    项目排期读取条件：{progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足"}
                   </div>
                 </div>
               ) : (
                 <div className="text-sm text-slate-500">暂无进度数据。</div>
               )}
             </Panel>
+
+            <ProjectScheduleReadableInfoPanel canViewTestFields={canViewTestFields} progress={progress} />
 
             <ProductGuideReadableInfoPanel canViewTestFields={canViewTestFields} project={selectedProject} progress={progress} styles={projectStyles} />
           </div>
@@ -1507,7 +1517,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
       buildCheck("款式数量", `${expectedTotal} 款`, `${styles.length} 款`, styles.length === expectedTotal),
       buildCheck("全部款式状态", "已通过", allApproved ? "已通过" : styles.map((style) => style.modelingStatus).join("、"), allApproved),
       buildCheck("项目进度", "100%", `${progress.progressPercent}%`, progress.progressPercent === 100),
-      buildCheck("回写条件", "已满足", progress.canWritebackProjectTask ? "已满足" : "未满足", progress.canWritebackProjectTask),
+      buildCheck("项目排期读取条件", "已满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", progress.canProjectScheduleTreatModelingDone),
     ];
   }
 
@@ -1516,7 +1526,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
       buildCheck("第一款状态", "未分配", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "未分配"),
       buildCheck("其余款状态", "未启动", remainingUnstarted ? "未启动" : remainingStyles.map((style) => style.modelingStatus).join("、"), remainingUnstarted),
       buildCheck("未启动数量", `${expectedTotal - 1} 款`, `${progress.unstartedStyles} 款`, progress.unstartedStyles === expectedTotal - 1),
-      buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+      buildCheck("项目排期读取条件", "未满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", !progress.canProjectScheduleTreatModelingDone),
     ];
   }
 
@@ -1527,7 +1537,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
       buildCheck("第一款状态", "排队中", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "排队中"),
       buildCheck("修改轮次", "大于 0", String(firstStyle?.reviewRound ?? 0), Number(firstStyle?.reviewRound ?? 0) > 0),
       buildCheck("驳回附件", "图片反馈 + PDF 反馈", latestFeedback || "无反馈", latestFeedback.includes("图片反馈") && latestFeedback.includes("PDF 反馈")),
-      buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+      buildCheck("项目排期读取条件", "未满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", !progress.canProjectScheduleTreatModelingDone),
     ];
   }
 
@@ -1535,7 +1545,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
     return [
       buildCheck("第一款状态", "待验收", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "待验收"),
       buildCheck("待验收统计", "大于 0", `${progress.submittedStyles} 款`, progress.submittedStyles > 0),
-      buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+      buildCheck("项目排期读取条件", "未满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", !progress.canProjectScheduleTreatModelingDone),
     ];
   }
 
@@ -1546,7 +1556,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
       buildCheck("第一款状态", "排队中", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "排队中"),
       buildCheck("最新反馈", "版权方反馈", latestFeedback || "无反馈", Boolean(latestFeedback)),
       buildCheck("版权附件", "PPT 反馈", latestFeedback || "无反馈", latestFeedback.includes("PPT 反馈")),
-      buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+      buildCheck("项目排期读取条件", "未满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", !progress.canProjectScheduleTreatModelingDone),
     ];
   }
 
@@ -1554,7 +1564,7 @@ function evaluateScenario(scenarioId: ScenarioId, styles: ProjectStyle[], progre
     buildCheck("第一款状态", "已通过", firstStyle?.modelingStatus ?? "缺失", firstStyle?.modelingStatus === "已通过"),
     buildCheck("已通过数量", "1 款", `${progress.approvedStyles} 款`, progress.approvedStyles === 1),
     buildCheck("项目进度", "小于 100%", `${progress.progressPercent}%`, progress.progressPercent > 0 && progress.progressPercent < 100),
-    buildCheck("回写条件", "未满足", progress.canWritebackProjectTask ? "已满足" : "未满足", !progress.canWritebackProjectTask),
+    buildCheck("项目排期读取条件", "未满足", progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足", !progress.canProjectScheduleTreatModelingDone),
   ];
 }
 
@@ -1767,7 +1777,7 @@ function StyleDetailOverlay({
                         <MiniProgress label="未启动" value={progress.unstartedStyles} />
                       </div>
                       <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                        回写条件：{progress.canWritebackProjectTask ? "已满足" : "未满足"}
+                        项目排期读取条件：{progress.canProjectScheduleTreatModelingDone ? "已满足" : "未满足"}
                       </div>
                     </div>
                   ) : (
@@ -2059,6 +2069,79 @@ function MiniProgress({ label, value }: { label: string; value: number }) {
   );
 }
 
+function ProjectScheduleReadableInfoPanel({ canViewTestFields, progress }: { canViewTestFields: boolean; progress: ProjectProgress | null }) {
+  const sourceTaskText = progress?.sourceTaskNos?.length ? `任务 ${progress.sourceTaskNos.join(" / ")}` : "任务 7 / 10";
+
+  return (
+    <Panel title="项目排期读取模拟">
+      {progress ? (
+        <div className="space-y-3">
+          <div
+            className={`rounded-md border px-3 py-2 text-sm leading-6 ${
+              progress.canProjectScheduleTreatModelingDone
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                : "border-amber-200 bg-amber-50 text-amber-900"
+            }`}
+          >
+            <div className="font-semibold">
+              {progress.canProjectScheduleTreatModelingDone
+                ? `${sourceTaskText} 必做款式已全部通过`
+                : `${sourceTaskText} 必做款式尚未全部通过`}
+            </div>
+            <div>
+              {progress.canProjectScheduleTreatModelingDone
+                ? "项目排期主动读取时，可以把建模事实视为完成。"
+                : "项目排期主动读取时，不能把建模事实视为完成。"}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <Metric label="必做通过" value={`${progress.approvedRequiredStyleCount}/${progress.requiredStyleCount}`} />
+            <Metric label="最后通过日期" value={progress.lastRequiredStyleApprovedDate ?? "未满足"} />
+            <Metric label="未通过必做" value={progress.unapprovedRequiredStyles.length} />
+            <Metric label="送审/待验收" value={progress.submittedOrWaitingStyles.length} />
+          </div>
+          {progress.unapprovedRequiredStyles.length > 0 ? (
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+              <div className="mb-2 font-semibold text-slate-800">未完成必做款式</div>
+              <div className="space-y-1 text-slate-600">
+                {progress.unapprovedRequiredStyles.slice(0, 6).map((style) => (
+                  <div key={style.modelingTaskId} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">{style.styleName}</span>
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{style.modelingStatus}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {canViewTestFields ? (
+            <pre className="max-h-[280px] overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+              {JSON.stringify(
+                {
+                  sourceTaskNos: progress.sourceTaskNos,
+                  allRequiredStylesApproved: progress.allRequiredStylesApproved,
+                  canProjectScheduleTreatModelingDone: progress.canProjectScheduleTreatModelingDone,
+                  requiredStyleCount: progress.requiredStyleCount,
+                  approvedRequiredStyleCount: progress.approvedRequiredStyleCount,
+                  lastRequiredStyleApprovedDate: progress.lastRequiredStyleApprovedDate,
+                  unapprovedRequiredStyles: progress.unapprovedRequiredStyles,
+                  blockingStyles: progress.blockingStyles,
+                  submittedOrWaitingStyles: progress.submittedOrWaitingStyles,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          ) : null}
+        </div>
+      ) : (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">
+          暂无建模进度，项目排期读取时不会得到建模完成事实。
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function ProductGuideReadableInfoPanel({
   canViewTestFields,
   project,
@@ -2083,7 +2166,7 @@ function ProductGuideReadableInfoPanel({
           <div className="grid grid-cols-2 gap-3 text-sm">
             <Metric label="项目进度" value={`${readableInfo.progressPercent}%`} />
             <Metric label="通过款式" value={`${readableInfo.approvedStyles}/${readableInfo.totalRequiredStyles}`} />
-            <Metric label="是否全部通过" value={readableInfo.canWritebackProjectTask ? "是" : "否"} />
+            <Metric label="是否全部通过" value={readableInfo.canProjectScheduleTreatModelingDone ? "是" : "否"} />
             <Metric label="待验收/送审" value={readableInfo.submittedStyles} />
           </div>
           {canViewTestFields ? (
@@ -2119,7 +2202,7 @@ function buildProductGuideReadableInfo(project: ModelingContractTestProject, sty
     waitingSubmissionStyles: progress.waitingSubmissionStyles,
     unstartedStyles: progress.unstartedStyles,
     unassignedStyles: progress.unassignedStyles,
-    canWritebackProjectTask: progress.canWritebackProjectTask,
+    canProjectScheduleTreatModelingDone: progress.canProjectScheduleTreatModelingDone,
     projectedAllApprovedDate: progress.projectedAllApprovedDate,
     styles: requiredStyles.map((style) => ({
       modelingTaskId: style.modelingTaskId,
