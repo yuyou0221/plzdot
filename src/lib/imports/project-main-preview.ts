@@ -38,7 +38,9 @@ type ProjectPreviewRow = {
   licensorName: string;
   ipName: string;
   productType: string;
+  productLine: string;
   styleCount: number | null;
+  retailPrice: string;
   projectLevel: string;
   routeType: string;
   needThreeView: boolean | null;
@@ -48,6 +50,9 @@ type ProjectPreviewRow = {
   projectTeam: string;
   productOwner: string;
   productArtist: string;
+  modelingOwner: string;
+  subsidiary: string;
+  royaltyRate: string;
   status: string;
   annualPlan: string;
   urgency: string;
@@ -108,12 +113,17 @@ const PROJECT_CODE_FIELDS = ["项目编号", "项目编码", "业务项目编号
 const LICENSOR_FIELDS = ["版权方", "授权方"];
 const IP_FIELDS = ["IP", "IP名称", "IP 名称"];
 const PRODUCT_TYPE_FIELDS = ["产品类型"];
+const PRODUCT_LINE_FIELDS = ["产品线", "产品材质", "材质"];
+const RETAIL_PRICE_FIELDS = ["零售价", "建议零售价", "售价"];
 const PLANNED_LAUNCH_DATE_FIELDS = ["计划上线日期", "预计上线日期", "计划上线", "预计上线时间", "预估出货日期"];
 const PLANNED_LAUNCH_MONTH_FIELDS = ["预计上线月份", "上线月份"];
 const PROJECT_START_DATE_FIELDS = ["启动日期", "项目启动日期"];
 const PROJECT_TEAM_FIELDS = ["项目组", "所属团队"];
 const PRODUCT_OWNER_FIELDS = ["产品研发", "项目管理"];
 const PRODUCT_ARTIST_FIELDS = ["产品研发美术", "产品美术"];
+const MODELING_OWNER_FIELDS = ["建模负责人", "建模负责", "建模对接人"];
+const SUBSIDIARY_FIELDS = ["子公司", "所属子公司"];
+const ROYALTY_RATE_FIELDS = ["授权金比例", "授权比例", "版权金比例"];
 const STATUS_FIELDS = ["项目状态", "当前阶段"];
 const STYLE_COUNT_FIELDS = ["预计款式数", "规格", "款式数"];
 const PROJECT_LEVEL_FIELDS = ["项目等级"];
@@ -142,7 +152,7 @@ const CALCULATED_IMPORT_FIELDS = [
 ];
 
 export async function previewProjectMainImport(workbookPath: string, fileName: string): Promise<ProjectMainImportPreview> {
-  const workbook = await extractWorkbook(workbookPath);
+  const workbook = await extractProjectWorkbook(workbookPath);
   const projectRecords = workbook.projects.filter(isProjectRecordCandidate);
   const existingProjectResult = await loadExistingProjects();
   const existingProjects = existingProjectResult.projects;
@@ -191,7 +201,7 @@ export async function previewProjectMainImport(workbookPath: string, fileName: s
   };
 }
 
-async function extractWorkbook(workbookPath: string) {
+export async function extractProjectWorkbook(workbookPath: string) {
   const scriptPath = path.join(process.cwd(), "legacy", "schedule-engine", "extract_project_excel.py");
   const python = process.env.SCHEDULE_IMPORT_PYTHON || (process.platform === "win32" ? "python" : "python3");
   const result = await runCommand(python, [scriptPath, workbookPath]);
@@ -273,6 +283,8 @@ function previewProjectRow(
   const licensorName = stringFieldAny(record, LICENSOR_FIELDS);
   const ipName = stringFieldAny(record, IP_FIELDS);
   const productType = stringFieldAny(record, PRODUCT_TYPE_FIELDS);
+  const productLine = stringFieldAny(record, PRODUCT_LINE_FIELDS);
+  const retailPrice = stringFieldAny(record, RETAIL_PRICE_FIELDS);
   const plannedLaunchDate = plannedLaunchDateFromRecord(record, suggestedLaunchDateByIndex.get(index));
   const plannedLaunchMonth =
     monthFromDateString(plannedLaunchDate) || plannedLaunchMonthFromRecord(record);
@@ -280,6 +292,9 @@ function previewProjectRow(
   const projectTeam = stringFieldAny(record, PROJECT_TEAM_FIELDS);
   const productOwner = stringFieldAny(record, PRODUCT_OWNER_FIELDS);
   const productArtist = stringFieldAny(record, PRODUCT_ARTIST_FIELDS);
+  const modelingOwner = stringFieldAny(record, MODELING_OWNER_FIELDS);
+  const subsidiary = stringFieldAny(record, SUBSIDIARY_FIELDS);
+  const royaltyRate = stringFieldAny(record, ROYALTY_RATE_FIELDS);
   const status = stringFieldAny(record, STATUS_FIELDS);
   const styleCount = numberFieldAny(record, STYLE_COUNT_FIELDS);
   const projectLevel = stringFieldAny(record, PROJECT_LEVEL_FIELDS);
@@ -350,7 +365,9 @@ function previewProjectRow(
     licensorName,
     ipName,
     productType,
+    productLine,
     styleCount,
+    retailPrice,
     projectLevel,
     routeType,
     needThreeView,
@@ -360,6 +377,9 @@ function previewProjectRow(
     projectTeam,
     productOwner,
     productArtist,
+    modelingOwner,
+    subsidiary,
+    royaltyRate,
     status,
     annualPlan,
     urgency,
@@ -469,10 +489,13 @@ function isProjectRecordCandidate(record: Record<string, unknown>) {
     ...LICENSOR_FIELDS,
     ...IP_FIELDS,
     ...PRODUCT_TYPE_FIELDS,
+    ...PRODUCT_LINE_FIELDS,
+    ...RETAIL_PRICE_FIELDS,
     ...PLANNED_LAUNCH_DATE_FIELDS,
     ...PLANNED_LAUNCH_MONTH_FIELDS,
     ...LAUNCH_ORDER_FIELDS,
     ...PROJECT_TEAM_FIELDS,
+    ...MODELING_OWNER_FIELDS,
     ...STATUS_FIELDS,
   ];
 

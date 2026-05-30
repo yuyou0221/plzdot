@@ -10,8 +10,7 @@ const defaultScenarioDir = path.resolve("test-fixtures", "schedule-scenarios");
 
 let prisma: typeof import("../src/lib/db/prisma").prisma;
 let milestoneByTaskNo: typeof import("../src/lib/schedule-domain").milestoneByTaskNo;
-let persistScheduleAnalysis: typeof import("../src/lib/schedule-engine/adapters").persistScheduleAnalysis;
-let runScheduleAnalysisFromDatabase: typeof import("../src/lib/schedule-engine/adapters").runScheduleAnalysisFromDatabase;
+let runAndPersistScheduleAnalysis: typeof import("../src/lib/schedule-engine/service").runAndPersistScheduleAnalysis;
 let getScheduleWorkbenchData: typeof import("../src/lib/schedule-repository").getScheduleWorkbenchData;
 let ingestProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").ingestProjectTaskFactEvent;
 let parseProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").parseProjectTaskFactEvent;
@@ -92,6 +91,8 @@ type ScenarioExpect = {
 
 type ProjectExpectation = {
   ref: string;
+  taskCount?: number;
+  taskNos?: number[];
   tasks?: TaskExpectation[];
   scheduleResult?: {
     exists?: boolean;
@@ -187,15 +188,14 @@ async function loadRuntime() {
   const [db, domain, adapters, repository, events] = await Promise.all([
     import("../src/lib/db/prisma"),
     import("../src/lib/schedule-domain"),
-    import("../src/lib/schedule-engine/adapters"),
+    import("../src/lib/schedule-engine/service"),
     import("../src/lib/schedule-repository"),
     import("../src/lib/schedule-task-fact-events-core"),
   ]);
 
   prisma = db.prisma;
   milestoneByTaskNo = domain.milestoneByTaskNo;
-  persistScheduleAnalysis = adapters.persistScheduleAnalysis;
-  runScheduleAnalysisFromDatabase = adapters.runScheduleAnalysisFromDatabase;
+  runAndPersistScheduleAnalysis = adapters.runAndPersistScheduleAnalysis;
   getScheduleWorkbenchData = repository.getScheduleWorkbenchData;
   ingestProjectTaskFactEvent = events.ingestProjectTaskFactEvent;
   parseProjectTaskFactEvent = events.parseProjectTaskFactEvent;
@@ -391,8 +391,7 @@ async function runScenarioScheduleAnalysis(scenario: Scenario, batchId: string, 
     },
   });
 
-  const analysis = await runScheduleAnalysisFromDatabase({ projectIds, today: scenario.today });
-  await persistScheduleAnalysis(scheduleRun.id, analysis);
+  await runAndPersistScheduleAnalysis(scheduleRun.id, { projectIds, today: scenario.today });
 
   await prisma.scheduleRun.update({
     where: { id: scheduleRun.id },
@@ -443,6 +442,25 @@ async function assertScenario(runtime: ScenarioRuntime) {
           equalResult(`项目 ${expectation.ref} 风险等级`, result.riskLevel, expectation.scheduleResult.riskLevel),
         );
       }
+    }
+
+    if (typeof expectation.taskCount === "number") {
+      const taskCount = await prisma.projectTask.count({ where: { projectId } });
+      assertions.push(equalResult(`项目 ${expectation.ref} 任务数量`, taskCount, expectation.taskCount));
+    }
+
+    if (expectation.taskNos?.length) {
+      const tasks = await prisma.projectTask.findMany({
+        where: { projectId, taskNo: { in: expectation.taskNos } },
+        select: { taskNo: true },
+      });
+      const actualTaskNos = new Set(tasks.map((task) => task.taskNo));
+      const missingTaskNos = expectation.taskNos.filter((taskNo) => !actualTaskNos.has(taskNo));
+      assertions.push({
+        ok: missingTaskNos.length === 0,
+        label: `项目 ${expectation.ref} 标准任务编号覆盖`,
+        detail: missingTaskNos.length > 0 ? `缺少任务：${missingTaskNos.join(", ")}` : undefined,
+      });
     }
 
     for (const taskExpectation of expectation.tasks ?? []) {

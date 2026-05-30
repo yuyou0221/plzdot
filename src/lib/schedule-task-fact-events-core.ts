@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 
+export const STANDARD_SCHEDULE_TASK_COUNT = 31;
+
 const eventTypes = new Set<ProjectTaskFactEvent["eventType"]>([
   "task_started",
   "task_expected_finish_updated",
@@ -13,7 +15,27 @@ const eventTypes = new Set<ProjectTaskFactEvent["eventType"]>([
   "task_note_updated",
 ]);
 
-const allowedStatuses = new Set(["未开始", "进行中", "送审中", "已送审", "已完成", "阻塞", "暂停", "取消"]);
+const allowedStatuses = new Set([
+  "未开始",
+  "进行中",
+  "送审中",
+  "已送审",
+  "已完成",
+  "阻塞",
+  "暂停",
+  "取消",
+]);
+
+const legacyStatusAliases = new Map([
+  ["鏈紑濮?", "未开始"],
+  ["杩涜涓?", "进行中"],
+  ["閫佸涓?", "送审中"],
+  ["宸查€佸", "已送审"],
+  ["宸插畬鎴?", "已完成"],
+  ["闃诲", "阻塞"],
+  ["鏆傚仠", "暂停"],
+  ["鍙栨秷", "取消"],
+]);
 
 type ProjectTaskFactEventType =
   | "task_started"
@@ -26,10 +48,12 @@ type ProjectTaskFactEventType =
   | "task_resumed"
   | "task_note_updated";
 
+type ProjectTaskFactEventSourceModule = "product-guide" | "manual-excel";
+
 export type ProjectTaskFactEvent = {
   eventId: string;
   eventType: ProjectTaskFactEventType;
-  sourceModule: "product-guide";
+  sourceModule: ProjectTaskFactEventSourceModule;
   projectId: string;
   taskNo: number;
   taskKey: string;
@@ -54,7 +78,7 @@ type TaskRow = {
   progressNote: string | null;
 };
 
-type IngestResult = {
+export type IngestResult = {
   ok: boolean;
   eventId: string;
   duplicate: boolean;
@@ -71,7 +95,13 @@ type FailedResult = IngestResult & {
 };
 
 export class TaskFactEventValidationError extends Error {
-  status = 400;
+  status: number;
+
+  constructor(message: string, status = 400) {
+    super(message);
+    this.name = "TaskFactEventValidationError";
+    this.status = status;
+  }
 }
 
 export function parseProjectTaskFactEvent(value: unknown): ProjectTaskFactEvent {
@@ -87,11 +117,15 @@ export function parseProjectTaskFactEvent(value: unknown): ProjectTaskFactEvent 
   }
 
   const sourceModule = requiredString(value.sourceModule, "sourceModule");
-  if (sourceModule !== "product-guide") {
-    throw new TaskFactEventValidationError("任务事实事件 sourceModule 必须是 product-guide。");
+  if (sourceModule !== "product-guide" && sourceModule !== "manual-excel") {
+    throw new TaskFactEventValidationError("任务事实事件 sourceModule 必须是 product-guide 或 manual-excel。");
   }
 
   const taskNo = positiveInteger(value.taskNo, "taskNo");
+  if (!isStandardScheduleTaskNo(taskNo)) {
+    throw new TaskFactEventValidationError(`taskNo 必须是 1-${STANDARD_SCHEDULE_TASK_COUNT} 的标准任务编号。`);
+  }
+
   const occurredAt = requiredString(value.occurredAt, "occurredAt");
   if (!dateTimeFromIso(occurredAt)) {
     throw new TaskFactEventValidationError("occurredAt 必须是带时区的 ISO 时间字符串。");
@@ -118,7 +152,14 @@ export function parseProjectTaskFactEvent(value: unknown): ProjectTaskFactEvent 
 }
 
 export async function ingestProjectTaskFactEvent(event: ProjectTaskFactEvent): Promise<IngestResult> {
-  const existingEvent = await prisma.projectTaskFactEventLog.findUnique({
+  return prisma.$transaction((tx) => ingestProjectTaskFactEventWithTx(tx, event));
+}
+
+export async function ingestProjectTaskFactEventWithTx(
+  tx: Prisma.TransactionClient,
+  event: ProjectTaskFactEvent,
+): Promise<IngestResult> {
+  const existingEvent = await tx.projectTaskFactEventLog.findUnique({
     where: { eventId: event.eventId },
     select: {
       eventId: true,
@@ -138,89 +179,85 @@ export async function ingestProjectTaskFactEvent(event: ProjectTaskFactEvent): P
       processingStatus: processed ? "processed" : "failed",
       projectTaskId: existingEvent.projectTaskId ?? undefined,
       needsRecalculation: false,
-      message: processed
-        ? "项目排期已接收任务事实事件"
-        : (existingEvent.errorMessage ?? "任务事实事件此前处理失败。"),
+      message: processed ? "项目排期已接收任务事实事件" : (existingEvent.errorMessage ?? "任务事实事件此前处理失败。"),
       status: processed ? undefined : 409,
     };
   }
 
-  return prisma.$transaction(async (tx) => {
-    const project = await tx.project.findUnique({
-      where: { id: event.projectId },
-      select: { id: true },
-    });
-
-    if (!project) {
-      return createFailedEventLog(tx, event, "项目不存在，无法写入任务事实。", 404);
-    }
-
-    const task = await resolveProjectTask(tx, event);
-    if (!task.ok) {
-      return task;
-    }
-
-    const taskPatch = buildProjectTaskPatch(event, task.row);
-    if (!taskPatch.ok) {
-      return createFailedEventLog(tx, event, taskPatch.message, taskPatch.status, task.row.id);
-    }
-
-    const oldValue: Prisma.InputJsonObject = taskSnapshot(task.row);
-    const updatedTask = await tx.projectTask.update({
-      where: { id: task.row.id },
-      data: taskPatch.data,
-      select: taskSelect,
-    });
-    const eventPayload = toJsonObject(event.payload);
-    const newValue: Prisma.InputJsonObject = {
-      ...taskSnapshot(updatedTask),
-      eventType: event.eventType,
-      eventPayload,
-    };
-    const note = textValue(event.payload.note) ?? taskPatch.defaultNote;
-
-    await tx.progressUpdate.create({
-      data: {
-        projectId: event.projectId,
-        projectTaskId: updatedTask.id,
-        updateType: updateTypeLabel(event.eventType),
-        oldValue,
-        newValue,
-        note,
-        updatedBy: event.operatorId,
-        updatedByName: event.operatorName,
-      },
-    });
-
-    const eventLog = await tx.projectTaskFactEventLog.create({
-      data: {
-        eventId: event.eventId,
-        eventType: event.eventType,
-        sourceModule: event.sourceModule,
-        projectId: event.projectId,
-        projectTaskId: updatedTask.id,
-        taskNo: event.taskNo,
-        taskKey: event.taskKey,
-        taskName: event.taskName,
-        occurredAt: dateTimeFromIso(event.occurredAt)!,
-        operatorId: event.operatorId,
-        operatorName: event.operatorName,
-        payload: eventPayload,
-        processingStatus: "processed",
-      },
-      select: { eventId: true, projectTaskId: true },
-    });
-
-    return {
-      ok: true,
-      eventId: eventLog.eventId,
-      duplicate: false,
-      processingStatus: "processed",
-      projectTaskId: eventLog.projectTaskId ?? undefined,
-      needsRecalculation: true,
-      message: "项目排期已接收任务事实事件",
-    };
+  const project = await tx.project.findUnique({
+    where: { id: event.projectId },
+    select: { id: true },
   });
+
+  if (!project) {
+    return createFailedEventLog(tx, event, "项目不存在，无法写入任务事实。", 404);
+  }
+
+  const task = await resolveProjectTask(tx, event);
+  if (!task.ok) {
+    return task;
+  }
+
+  const taskPatch = buildProjectTaskPatch(event, task.row);
+  if (!taskPatch.ok) {
+    return createFailedEventLog(tx, event, taskPatch.message, taskPatch.status, task.row.id);
+  }
+
+  const oldValue: Prisma.InputJsonObject = taskSnapshot(task.row);
+  const updatedTask = await tx.projectTask.update({
+    where: { id: task.row.id },
+    data: taskPatch.data,
+    select: taskSelect,
+  });
+  const eventPayload = toJsonObject(event.payload);
+  const newValue: Prisma.InputJsonObject = {
+    ...taskSnapshot(updatedTask),
+    eventType: event.eventType,
+    eventPayload,
+  };
+  const note = textValue(event.payload.note) ?? taskPatch.defaultNote;
+
+  await tx.progressUpdate.create({
+    data: {
+      projectId: event.projectId,
+      projectTaskId: updatedTask.id,
+      updateType: updateTypeLabel(event.eventType),
+      oldValue,
+      newValue,
+      note,
+      updatedBy: event.operatorId,
+      updatedByName: event.operatorName,
+    },
+  });
+
+  const eventLog = await tx.projectTaskFactEventLog.create({
+    data: {
+      eventId: event.eventId,
+      eventType: event.eventType,
+      sourceModule: event.sourceModule,
+      projectId: event.projectId,
+      projectTaskId: updatedTask.id,
+      taskNo: event.taskNo,
+      taskKey: event.taskKey,
+      taskName: event.taskName,
+      occurredAt: dateTimeFromIso(event.occurredAt)!,
+      operatorId: event.operatorId,
+      operatorName: event.operatorName,
+      payload: eventPayload,
+      processingStatus: "processed",
+    },
+    select: { eventId: true, projectTaskId: true },
+  });
+
+  return {
+    ok: true,
+    eventId: eventLog.eventId,
+    duplicate: false,
+    processingStatus: "processed",
+    projectTaskId: eventLog.projectTaskId ?? undefined,
+    needsRecalculation: true,
+    message: "项目排期已接收任务事实事件",
+  };
 }
 
 const taskSelect = {
@@ -267,7 +304,7 @@ async function resolveProjectTask(tx: Prisma.TransactionClient, event: ProjectTa
       projectId: event.projectId,
       taskRuleId: taskRule.id,
       taskNo: event.taskNo,
-      taskName: event.taskName || taskRule.taskName,
+      taskName: taskRule.taskName || event.taskName,
       milestoneType: taskRule.milestoneType,
       status: "未开始",
     },
@@ -290,8 +327,7 @@ function buildProjectTaskPatch(event: ProjectTaskFactEvent, task: TaskRow) {
 
   if (event.eventType === "task_started") {
     const actualStartDate = requiredDate(payload.actualStartDate, "actualStartDate");
-    const status = statusValue(payload.status, "进行中");
-    data.status = status;
+    data.status = "进行中";
     data.actualStartDate = actualStartDate;
     data.progressNote = note ?? task.progressNote;
     defaultNote = note;
@@ -299,8 +335,7 @@ function buildProjectTaskPatch(event: ProjectTaskFactEvent, task: TaskRow) {
 
   if (event.eventType === "task_expected_finish_updated") {
     const expectedFinishDate = requiredDate(payload.expectedFinishDate, "expectedFinishDate");
-    const status = statusValue(payload.status, "进行中");
-    data.status = status;
+    data.status = statusValue(payload.status, "进行中");
     data.expectedFinishDate = expectedFinishDate;
     data.progressNote = note ?? task.progressNote;
     defaultNote = note;
@@ -309,8 +344,7 @@ function buildProjectTaskPatch(event: ProjectTaskFactEvent, task: TaskRow) {
   if (event.eventType === "task_submitted_for_review") {
     requiredDate(payload.submittedAt, "submittedAt");
     const expectedFinishDate = requiredDate(payload.expectedFinishDate, "expectedFinishDate");
-    const status = statusValue(payload.status, "送审中");
-    data.status = status;
+    data.status = statusValue(payload.status, "送审中");
     data.expectedFinishDate = expectedFinishDate;
     data.progressNote = note ?? task.progressNote;
     defaultNote = note;
@@ -540,8 +574,13 @@ function positiveInteger(value: unknown, fieldName: string) {
   throw new TaskFactEventValidationError(`${fieldName} 必须是正整数。`);
 }
 
+function isStandardScheduleTaskNo(taskNo: number) {
+  return Number.isInteger(taskNo) && taskNo >= 1 && taskNo <= STANDARD_SCHEDULE_TASK_COUNT;
+}
+
 function statusValue(value: unknown, fallback: string) {
-  const status = textValue(value) ?? fallback;
+  const rawStatus = textValue(value) ?? fallback;
+  const status = legacyStatusAliases.get(rawStatus) ?? rawStatus;
 
   if (!allowedStatuses.has(status)) {
     throw new TaskFactEventValidationError(`任务状态不在允许范围内：${status}`);

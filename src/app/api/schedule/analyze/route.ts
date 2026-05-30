@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { persistScheduleAnalysis, runScheduleAnalysisFromDatabase } from "@/lib/schedule-engine/adapters";
+import { legacyScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
 
 export const runtime = "nodejs";
 
@@ -42,8 +42,8 @@ export async function POST(request: Request) {
         runName: `手动测算 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
         runType: "正式测算",
         sourceImportId: sourceImportIdFromPayload(payload.source),
-        scriptName: "project-analysis-v5-excel.js",
-        scriptVersion: "p0-adapter",
+        scriptName: legacyScheduleEnginePort.engineName,
+        scriptVersion: legacyScheduleEnginePort.engineVersion,
         inputSnapshot: {
           source: payload.source ?? "manual",
           projectIds: payload.projectIds ?? [],
@@ -54,12 +54,11 @@ export async function POST(request: Request) {
       },
     });
 
-    const result = await runScheduleAnalysisFromDatabase({
+    const analysis = await runAndPersistScheduleAnalysis(run.id, {
       projectIds: payload.projectIds,
       today: payload.today,
     });
-
-    await persistScheduleAnalysis(run.id, result);
+    const result = analysis.payload;
 
     await prisma.scheduleRun.update({
       where: { id: run.id },

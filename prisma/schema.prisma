@@ -121,7 +121,9 @@ model Project {
   ipName            String?
   licensorName      String?
   productType       String?
+  productLine       String?
   styleCount        Int?
+  retailPrice       String?
   projectLevel      String?
   routeType         String?
   needThreeView     Boolean?
@@ -130,6 +132,9 @@ model Project {
   projectTeamId     String?
   projectOwnerId    String?
   artOwnerId        String?
+  modelingOwnerId   String?
+  subsidiary        String?
+  royaltyRate       String?
   currentStage      String?
   status            String    @default("进行中")
   sourceImportId    String?
@@ -140,6 +145,7 @@ model Project {
   @@index([projectName])
   @@index([plannedLaunchDate])
   @@index([projectTeamId])
+  @@index([modelingOwnerId])
   @@index([status])
 }
 

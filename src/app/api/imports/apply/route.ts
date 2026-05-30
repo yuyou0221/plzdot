@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     }
 
     const result = await applyProjectMainImport(workbookPath, file.name, auth.user.name);
-    const message = `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目。需要重新测算排期。`;
+    const message = `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。需要重新测算排期。`;
 
     return NextResponse.json({
       ok: true,
