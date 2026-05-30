@@ -46,19 +46,23 @@ export function decryptExportablePassword(payload: string | null | undefined) {
   }
 }
 
+export function assertPasswordExportSecretConfigured() {
+  passwordExportSecret();
+}
+
 function passwordExportKey() {
   return createHash("sha256").update(passwordExportSecret()).digest();
 }
 
 function passwordExportSecret() {
-  const secret = process.env.PASSWORD_EXPORT_SECRET || process.env.AUTH_SECRET || process.env.DATABASE_URL;
+  const stableSecret = process.env.PASSWORD_EXPORT_SECRET;
 
-  if (secret) {
-    return secret;
+  if (stableSecret) {
+    return stableSecret;
   }
 
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("PASSWORD_EXPORT_SECRET, AUTH_SECRET, or DATABASE_URL is required for exportable passwords.");
+  if (process.env.NODE_ENV === "production" || process.env.APP_ENV === "staging" || process.env.APP_ENV === "production") {
+    throw new Error("PASSWORD_EXPORT_SECRET is required for import, export, and password changes in protected environments.");
   }
 
   return "local-dev-password-export-secret-change-before-production";

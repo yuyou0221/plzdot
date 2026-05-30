@@ -114,6 +114,27 @@ model UserAvailabilityBlock {
   @@index([status])
 }
 
+model UserDataAuditLog {
+  id             String   @id @default(uuid())
+  actorUserId    String?
+  actorName      String?
+  actorLoginName String?
+  action         String
+  targetType     String?
+  targetId       String?
+  result         String
+  summary        String?
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([action])
+  @@index([result])
+  @@index([createdAt])
+}
+
 model Project {
   id                String    @id @default(uuid())
   projectCode       String?

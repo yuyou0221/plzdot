@@ -13,6 +13,7 @@ import type {
   UserDataPerson,
   UserDataTeam,
   UserAvailabilityBlock,
+  UserDataAuditLogEntry,
   UserDataVendor,
   UserDataWorkbenchData,
   UserDataViewerPolicy,
@@ -29,13 +30,11 @@ const baseTeams = [
   { name: "供应链团队", teamType: "供应链" },
 ];
 
-const baseProductGroups = ["忍者组", "迪no组", "丹东组", "易特凡组"];
-
 export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<UserDataWorkbenchData> {
   try {
-    await ensureBaseUserData();
+    const viewer = buildViewerPolicy(currentUser);
 
-    const [teamRows, userRows, tagRows, vendorRows, availabilityRows] = await Promise.all([
+    const [teamRows, userRows, tagRows, vendorRows, availabilityRows, auditRows] = await Promise.all([
       prisma.team.findMany({
         orderBy: [{ status: "asc" }, { name: "asc" }],
         select: {
@@ -108,6 +107,26 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
           notes: true,
         },
       }),
+      viewer.isLevelZero
+        ? prisma.userDataAuditLog.findMany({
+            orderBy: [{ createdAt: "desc" }],
+            take: 300,
+            select: {
+              id: true,
+              actorName: true,
+              actorLoginName: true,
+              action: true,
+              targetType: true,
+              targetId: true,
+              result: true,
+              summary: true,
+              metadata: true,
+              ipAddress: true,
+              userAgent: true,
+              createdAt: true,
+            },
+          })
+        : Promise.resolve([]),
     ]);
 
     const teamNameById = new Map(teamRows.map((team) => [team.id, team.name]));
@@ -189,7 +208,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       notes: row.notes ?? "",
     }));
 
-    const viewer = buildViewerPolicy(currentUser);
+    const auditLogs = viewer.isLevelZero ? auditRows.map(auditLogFromRow) : [];
 
     return {
       sourceLabel: "数据库",
@@ -203,6 +222,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       teams,
       vendors,
       availabilityBlocks,
+      auditLogs,
     };
   } catch (error) {
     console.error("Failed to build user data workbench", error);
@@ -229,6 +249,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       teams,
       vendors: [],
       availabilityBlocks: [],
+      auditLogs: [],
     };
   }
 }
@@ -449,147 +470,50 @@ function buildModuleReadSnapshots(
   }));
 }
 
-async function ensureBaseUserData() {
-  await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(1779396801)`;
-
-    const existingTeams = await tx.team.findMany({ select: { id: true, name: true } });
-    const existingTeamNames = new Set(existingTeams.map((team) => team.name));
-    const missingTeams = baseTeams.filter((team) => !existingTeamNames.has(team.name));
-
-    if (missingTeams.length > 0) {
-      await tx.team.createMany({
-        data: missingTeams.map((team) => ({
-          name: team.name,
-          teamType: team.teamType,
-          status: "启用",
-        })),
-      });
-    }
-
-    const teamsAfterBase = await tx.team.findMany({ select: { id: true, name: true } });
-    const productTeam = teamsAfterBase.find((team) => team.name === "产品团队");
-    const existingProjectGroups = new Set(teamsAfterBase.map((team) => team.name));
-    const missingProjectGroups = baseProductGroups.filter((name) => !existingProjectGroups.has(name));
-
-    if (missingProjectGroups.length > 0) {
-      await tx.team.createMany({
-        data: missingProjectGroups.map((name) => ({
-          name,
-          teamType: "产品",
-          parentTeamId: productTeam?.id,
-          status: "启用",
-          notes: "产品部门下的项目小组。",
-        })),
-      });
-    }
-
-    const teams = await tx.team.findMany({ select: { id: true, name: true } });
-    const teamIdByName = new Map(teams.map((team) => [team.name, team.id]));
-    const userRows = await tx.user.findMany({ select: { name: true } });
-    const existingUserNames = new Set(userRows.map((user) => user.name));
-    const seedUsers = buildSeedUsers(teamIdByName);
-    const seedUserNames = seedUsers.map((user) => user.name);
-    const shouldSeedUsers =
-      userRows.length === 0 || seedUserNames.some((name) => existingUserNames.has(name));
-    const missingUsers = shouldSeedUsers ? seedUsers.filter((user) => !existingUserNames.has(user.name)) : [];
-
-    if (missingUsers.length > 0) {
-      await tx.user.createMany({ data: missingUsers });
-    }
-
-    const vendorRows = await tx.outsourceVendor.findMany({ select: { name: true } });
-    const existingVendorNames = new Set(vendorRows.map((vendor) => vendor.name));
-    const seedVendors = buildSeedVendors();
-    const seedVendorNames = seedVendors.map((vendor) => vendor.name);
-    const shouldSeedVendors =
-      vendorRows.length === 0 || seedVendorNames.some((name) => existingVendorNames.has(name));
-    const missingVendors = shouldSeedVendors
-      ? seedVendors.filter((vendor) => !existingVendorNames.has(vendor.name))
-      : [];
-
-    if (missingVendors.length > 0) {
-      await tx.outsourceVendor.createMany({ data: missingVendors });
-    }
-  });
+function auditLogFromRow(row: {
+  id: string;
+  actorName: string | null;
+  actorLoginName: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  result: string;
+  summary: string | null;
+  metadata: unknown;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: Date;
+}): UserDataAuditLogEntry {
+  return {
+    id: row.id,
+    actorName: row.actorName ?? "未知账号",
+    actorLoginName: row.actorLoginName ?? "",
+    action: row.action,
+    targetType: row.targetType ?? "",
+    targetId: row.targetId ?? "",
+    result: row.result,
+    summary: row.summary ?? "",
+    metadataSummary: auditMetadataSummary(row.metadata),
+    ipAddress: row.ipAddress ?? "",
+    userAgent: row.userAgent ?? "",
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
-function buildSeedUsers(teamIdByName: Map<string, string>) {
-  return [
-    {
-      name: "产品研发待补充",
-      teamId: teamIdByName.get("产品团队"),
-      departmentTeamId: teamIdByName.get("产品团队"),
-      roleTitle: "产品研发",
-      businessRoles: ["产品研发"],
-      userType: "内部",
-      isModeler: false,
-      isSchedulable: true,
-      status: "启用",
-      notes: "基础占位数据，可编辑为真实人员。",
-    },
-    {
-      name: "产品研发美术待补充",
-      teamId: teamIdByName.get("产品团队"),
-      departmentTeamId: teamIdByName.get("产品团队"),
-      roleTitle: "产品研发美术",
-      businessRoles: ["产品研发美术"],
-      userType: "内部",
-      isModeler: false,
-      isSchedulable: true,
-      status: "启用",
-      notes: "基础占位数据，可编辑为真实人员。",
-    },
-    {
-      name: "建模师待补充 A",
-      teamId: teamIdByName.get("建模团队"),
-      departmentTeamId: teamIdByName.get("建模团队"),
-      roleTitle: "建模师",
-      businessRoles: ["建模师"],
-      userType: "内部",
-      isModeler: true,
-      weeklyCapacityStyles: 4,
-      weeklyAvailableWorkdays: 4,
-      isSchedulable: true,
-      status: "启用",
-      notes: "基础占位数据，可编辑为真实人员。",
-    },
-    {
-      name: "建模师待补充 B",
-      teamId: teamIdByName.get("建模团队"),
-      departmentTeamId: teamIdByName.get("建模团队"),
-      roleTitle: "建模师",
-      businessRoles: ["建模师"],
-      userType: "内部",
-      isModeler: true,
-      isSchedulable: true,
-      status: "启用",
-      notes: "基础占位数据，当前故意保留产能缺口用于配置提醒。",
-    },
-  ];
-}
+function auditMetadataSummary(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
 
-function buildSeedVendors() {
-  return [
-    {
-      name: "稳定外包供应商待补充",
-      vendorType: "稳定建模外包",
-      contactName: "联系人待补充",
-      specialtyTags: ["Q版", "常规款"],
-      stableCapacity: true,
-      status: "启用",
-      notes: "基础占位数据，可编辑为真实供应商。",
-    },
-    {
-      name: "临时外包供应商待补充",
-      vendorType: "临时建模外包",
-      contactName: "联系人待补充",
-      specialtyTags: ["复杂结构"],
-      stableCapacity: false,
-      status: "启用",
-      notes: "基础占位数据，可编辑为真实供应商。",
-    },
-  ];
+  const metadata = value as Record<string, unknown>;
+  const parts = [
+    metadata.fileName ? `文件：${String(metadata.fileName)}` : null,
+    metadata.warningCount !== undefined ? `警告：${String(metadata.warningCount)}` : null,
+    metadata.errorCount !== undefined ? `错误：${String(metadata.errorCount)}` : null,
+    metadata.businessReferenceCount !== undefined ? `引用：${String(metadata.businessReferenceCount)}` : null,
+  ].filter(Boolean);
+
+  return parts.join(" · ");
 }
 
 function groupTagsByUserId(

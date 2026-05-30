@@ -26,12 +26,15 @@ const fixedFieldColumns = ["权限"];
 
 const vendorColumns = ["供应商ID", "供应商名称", "供应商类型", "联系人", "联系方式", "状态", "备注"];
 
+const availabilityColumns = ["记录ID", "人员ID", "姓名", "类型", "开始日期", "结束日期", "工作日数", "状态", "备注"];
+
 export async function buildUserDataExportWorkbookBuffer({ includePlainPasswords = false } = {}) {
-  const [teams, users, permissionRoles, vendors] = await Promise.all([
+  const [teams, users, permissionRoles, vendors, availabilityBlocks] = await Promise.all([
     prisma.team.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
     prisma.user.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
     prisma.permissionRole.findMany({ orderBy: [{ status: "asc" }, { roleName: "asc" }] }),
     prisma.outsourceVendor.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
+    prisma.userAvailabilityBlock.findMany({ orderBy: [{ status: "asc" }, { startDate: "asc" }, { endDate: "asc" }] }),
   ]);
 
   const teamById = new Map(teams.map((team) => [team.id, team]));
@@ -88,11 +91,28 @@ export async function buildUserDataExportWorkbookBuffer({ includePlainPasswords 
     备注: vendor.notes ?? "",
   }));
 
+  const availabilityRows = availabilityBlocks.map((block) => {
+    const user = userById.get(block.userId);
+
+    return {
+      记录ID: block.id,
+      人员ID: block.userId,
+      姓名: user?.name ?? "",
+      类型: block.blockType,
+      开始日期: dateOnly(block.startDate),
+      结束日期: dateOnly(block.endDate),
+      工作日数: block.workdayCount ?? "",
+      状态: block.status,
+      备注: block.notes ?? "",
+    };
+  });
+
   const workbook = utils.book_new();
   utils.book_append_sheet(workbook, rowsToSheet(peopleColumns, peopleRows), "人员名单");
   utils.book_append_sheet(workbook, rowsToSheet(fixedFieldColumns, permissionRoleRows), "固定字段");
   utils.book_append_sheet(workbook, rowsToSheet(teamColumns, teamRows), "团队结构");
   utils.book_append_sheet(workbook, rowsToSheet(vendorColumns, vendorRows), "外包供应商");
+  utils.book_append_sheet(workbook, rowsToSheet(availabilityColumns, availabilityRows), "不可排期记录");
 
   return write(workbook, { bookType: "xlsx", type: "buffer" }) as Buffer;
 }
@@ -134,4 +154,8 @@ function businessRoleText(value: unknown, fallback: string | null) {
   }
 
   return fallback ?? "";
+}
+
+function dateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
 }

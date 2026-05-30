@@ -23,6 +23,23 @@ export async function renderUserDataPage(view: UserDataView, selectedPersonId?: 
     );
   }
 
+  if (view === "audit" && currentUser.permissionLevel !== 0) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
+        <section className="mx-auto max-w-2xl rounded-lg border border-slate-200 bg-white p-6">
+          <div className="text-sm font-semibold text-rose-700">无法访问审计记录</div>
+          <h1 className="mt-2 text-2xl font-semibold">审计记录仅权限等级 0 可见</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            该页面包含用户数据高风险操作记录，仅最高权限账号可以查看。
+          </p>
+          <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            当前账号：{currentUser.name} · {formatUserPermissionLevel(currentUser.permissionLevel)}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   const data = await getUserDataWorkbenchData(currentUser);
 
   return <UserDataPortal currentUser={currentUser} data={data} selectedPersonId={selectedPersonId} view={view} />;
@@ -42,6 +59,7 @@ function userDataPathForView(view: UserDataView, selectedPersonId?: string) {
     availability: "/users/availability",
     vendors: "/users/vendors",
     moduleViews: "/users/module-views",
+    audit: "/users/audit",
   };
 
   return paths[view];

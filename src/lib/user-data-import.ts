@@ -10,10 +10,12 @@ import { prisma } from "@/lib/db/prisma";
 import {
   businessRoleList,
   normalizeBoolean,
+  optionalNonNegativeInt,
   normalizeStatus,
   normalizeTeamType,
   normalizeVendorType,
   optionalWorkdays,
+  parseDateOnly,
   requiredText,
 } from "@/lib/user-data-mutation";
 
@@ -43,7 +45,19 @@ type MutableImportState = {
   importedTeamIds: Set<string>;
   importedUserIds: Set<string>;
   importedVendorIds: Set<string>;
+  importedAvailabilityBlockIds: Set<string>;
   importedPermissionRoleNames: Set<string>;
+  existingAvailabilityBlockById: Map<
+    string,
+    {
+      id: string;
+      userId: string;
+      blockType: string;
+      startDate: Date;
+      endDate: Date;
+    }
+  >;
+  existingAvailabilityBlockByKey: Map<string, string>;
   warnings: string[];
 };
 
@@ -62,9 +76,10 @@ export type UserDataImportResult = {
   permissionRoles: { rows: number; created: number; updated: number; skipped: number };
   teams: { rows: number; created: number; updated: number; skipped: number };
   vendors: { rows: number; created: number; updated: number; skipped: number };
+  availabilityBlocks: { rows: number; created: number; updated: number; skipped: number };
   loginUpdated: number;
   passwordsUpdated: number;
-  deactivated: { people: number; teams: number; vendors: number };
+  deactivated: { people: number; teams: number; vendors: number; availabilityBlocks: number };
   warnings: string[];
 };
 
@@ -78,6 +93,7 @@ export type UserDataImportPreviewResult = {
     permissionRoles: number;
     teams: number;
     vendors: number;
+    availabilityBlocks: number;
     total: number;
   };
   checks: {
@@ -101,6 +117,8 @@ type ParsedUserDataWorkbook = {
   permissionRoleRows: SheetRow[];
   teamRows: SheetRow[];
   vendorRows: SheetRow[];
+  availabilityRows: SheetRow[];
+  availabilitySheetExists: boolean;
 };
 
 export async function importUserDataWorkbook({
@@ -113,9 +131,10 @@ export async function importUserDataWorkbook({
   importedBy: string;
 }): Promise<UserDataImportResult> {
   const mode: ImportMode = "replace";
-  const { peopleRows, permissionRoleRows, teamRows, vendorRows } = parseUserDataWorkbook(buffer);
+  const { peopleRows, permissionRoleRows, teamRows, vendorRows, availabilityRows, availabilitySheetExists } =
+    parseUserDataWorkbook(buffer);
 
-  if (peopleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0) {
+  if (peopleRows.length === 0 && permissionRoleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0 && availabilityRows.length === 0) {
     throw new UserDataImportValidationError("Excel 中没有识别到可导入的数据。");
   }
 
@@ -130,7 +149,10 @@ export async function importUserDataWorkbook({
     const peopleResult = await importPeople(tx, peopleRows, state);
     await applyTeamLeaders(tx, teamRows, state);
     const vendorResult = await importVendors(tx, vendorRows, state);
-    const deactivated = await deactivateMissingRows(tx, state);
+    const availabilityBlockResult = availabilitySheetExists
+      ? await importAvailabilityBlocks(tx, availabilityRows, state)
+      : { rows: availabilityRows.length, created: 0, updated: 0, skipped: 0 };
+    const deactivated = await deactivateMissingRows(tx, state, { availabilitySheetExists });
     await assertActiveLoginAdminExists(tx);
 
     await tx.dataImport.create({
@@ -139,7 +161,7 @@ export async function importUserDataWorkbook({
         importType: "用户数据 Excel 导入",
         sourceFileName: fileName,
         sourceFilePath: fileName,
-        rowCount: peopleRows.length + permissionRoleRows.length + teamRows.length + vendorRows.length,
+        rowCount: peopleRows.length + permissionRoleRows.length + teamRows.length + vendorRows.length + availabilityRows.length,
         importStatus: state.warnings.length > 0 ? "部分成功" : "成功",
         importedBy,
         rawMetadata: {
@@ -148,6 +170,8 @@ export async function importUserDataWorkbook({
           permissionRoleRows: permissionRoleRows.length,
           teamRows: teamRows.length,
           vendorRows: vendorRows.length,
+          availabilityRows: availabilityRows.length,
+          availabilitySheetExists,
           warnings: state.warnings.slice(0, 200),
         },
       },
@@ -161,6 +185,7 @@ export async function importUserDataWorkbook({
       permissionRoles: permissionRoleResult,
       teams: teamResult,
       vendors: vendorResult,
+      availabilityBlocks: availabilityBlockResult,
       loginUpdated: peopleResult.loginUpdated,
       passwordsUpdated: peopleResult.passwordsUpdated,
       deactivated,
@@ -177,12 +202,17 @@ export async function previewUserDataWorkbook({
   fileName: string;
 }): Promise<UserDataImportPreviewResult> {
   const mode: ImportMode = "replace";
-  const { workbook, peopleRows, permissionRoleRows, teamRows, vendorRows } = parseUserDataWorkbook(buffer);
+  const { workbook, peopleRows, permissionRoleRows, teamRows, vendorRows, availabilityRows, availabilitySheetExists } =
+    parseUserDataWorkbook(buffer);
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  if (peopleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0) {
+  if (peopleRows.length === 0 && permissionRoleRows.length === 0 && teamRows.length === 0 && vendorRows.length === 0 && availabilityRows.length === 0) {
     throw new UserDataImportValidationError("Excel 中没有识别到可导入的数据。");
+  }
+
+  if (!availabilitySheetExists) {
+    warnings.push("未识别到「不可排期记录」工作表，本次覆盖导入不会更新不可排期记录。");
   }
 
   const existingUsers = await prisma.user.findMany({
@@ -289,7 +319,8 @@ export async function previewUserDataWorkbook({
       permissionRoles: permissionRoleRows.length,
       teams: teamRows.length,
       vendors: vendorRows.length,
-      total: peopleRows.length + permissionRoleRows.length + teamRows.length + vendorRows.length,
+      availabilityBlocks: availabilityRows.length,
+      total: peopleRows.length + permissionRoleRows.length + teamRows.length + vendorRows.length + availabilityRows.length,
     },
     checks: {
       loginUsers,
@@ -308,11 +339,12 @@ export async function previewUserDataWorkbook({
 }
 
 async function buildImportState(tx: Prisma.TransactionClient): Promise<MutableImportState> {
-  const [teams, users, vendors, permissionRoles] = await Promise.all([
+  const [teams, users, vendors, permissionRoles, availabilityBlocks] = await Promise.all([
     tx.team.findMany({ select: { id: true, name: true } }),
     tx.user.findMany({ select: { id: true, name: true, loginName: true, passwordHash: true, passwordExportCiphertext: true } }),
     tx.outsourceVendor.findMany({ select: { id: true, name: true } }),
     tx.permissionRole.findMany({ select: { roleName: true } }),
+    tx.userAvailabilityBlock.findMany({ select: { id: true, userId: true, blockType: true, startDate: true, endDate: true } }),
   ]);
 
   return {
@@ -325,7 +357,10 @@ async function buildImportState(tx: Prisma.TransactionClient): Promise<MutableIm
     importedTeamIds: new Set<string>(),
     importedUserIds: new Set<string>(),
     importedVendorIds: new Set<string>(),
+    importedAvailabilityBlockIds: new Set<string>(),
     importedPermissionRoleNames: new Set<string>(),
+    existingAvailabilityBlockById: new Map(availabilityBlocks.map((block) => [block.id, block])),
+    existingAvailabilityBlockByKey: new Map(availabilityBlocks.map((block) => [availabilityBlockKey(block), block.id])),
     warnings: [],
   };
 }
@@ -683,8 +718,81 @@ async function importVendors(tx: Prisma.TransactionClient, rows: SheetRow[], sta
   return result;
 }
 
-async function deactivateMissingRows(tx: Prisma.TransactionClient, state: MutableImportState) {
-  const [people, teams, vendors] = await Promise.all([
+async function importAvailabilityBlocks(tx: Prisma.TransactionClient, rows: SheetRow[], state: MutableImportState) {
+  const result = { rows: rows.length, created: 0, updated: 0, skipped: 0 };
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = index + 2;
+    const id = text(rowValue(row, ["记录ID", "不可排期ID", "Availability ID"]));
+    const userRef = text(rowValue(row, ["人员ID", "用户ID", "姓名", "人员姓名", "Name"]));
+    const userId = resolveUserRef(userRef, state);
+    const blockType = text(rowValue(row, ["类型", "记录类型", "不可排期类型", "Block Type"])) ?? "不可排期";
+    const startDate = parseDateOnly(rowValue(row, ["开始日期", "开始时间", "Start Date"]));
+    const endDate = parseDateOnly(rowValue(row, ["结束日期", "结束时间", "End Date"]));
+
+    if (!userId) {
+      result.skipped += 1;
+      state.warnings.push(`不可排期记录第 ${rowNumber} 行未匹配到人员，已跳过。`);
+      continue;
+    }
+
+    if (!startDate || !endDate) {
+      result.skipped += 1;
+      state.warnings.push(`不可排期记录第 ${rowNumber} 行缺少有效开始日期或结束日期，已跳过。`);
+      continue;
+    }
+
+    if (endDate.getTime() < startDate.getTime()) {
+      result.skipped += 1;
+      state.warnings.push(`不可排期记录第 ${rowNumber} 行结束日期早于开始日期，已跳过。`);
+      continue;
+    }
+
+    const matchedId = id ?? state.existingAvailabilityBlockByKey.get(availabilityBlockKey({ userId, blockType, startDate, endDate }));
+    const data = {
+      userId,
+      blockType,
+      startDate,
+      endDate,
+      workdayCount: optionalNonNegativeInt(rowValue(row, ["工作日数", "不可排期工作日", "Workdays"])),
+      status: normalizeStatus(rowValue(row, ["状态", "Status"])),
+      notes: text(rowValue(row, ["备注", "Notes"])),
+    };
+
+    if (matchedId) {
+      await tx.userAvailabilityBlock.upsert({
+        where: { id: matchedId },
+        create: { id: matchedId, ...data },
+        update: data,
+      });
+      state.importedAvailabilityBlockIds.add(matchedId);
+
+      if (state.existingAvailabilityBlockById.has(matchedId)) {
+        result.updated += 1;
+      } else {
+        result.created += 1;
+      }
+
+      continue;
+    }
+
+    const created = await tx.userAvailabilityBlock.create({
+      data: id ? { id, ...data } : data,
+      select: { id: true },
+    });
+    state.importedAvailabilityBlockIds.add(created.id);
+    result.created += 1;
+  }
+
+  return result;
+}
+
+async function deactivateMissingRows(
+  tx: Prisma.TransactionClient,
+  state: MutableImportState,
+  { availabilitySheetExists }: { availabilitySheetExists: boolean },
+) {
+  const [people, teams, vendors, availabilityBlocks] = await Promise.all([
     state.importedUserIds.size > 0
       ? tx.user.updateMany({ where: { id: { notIn: Array.from(state.importedUserIds) } }, data: { status: "停用", isSchedulable: false } })
       : Promise.resolve({ count: 0 }),
@@ -694,9 +802,18 @@ async function deactivateMissingRows(tx: Prisma.TransactionClient, state: Mutabl
     state.importedVendorIds.size > 0
       ? tx.outsourceVendor.updateMany({ where: { id: { notIn: Array.from(state.importedVendorIds) } }, data: { status: "停用" } })
       : Promise.resolve({ count: 0 }),
+    availabilitySheetExists
+      ? tx.userAvailabilityBlock.updateMany({
+          where:
+            state.importedAvailabilityBlockIds.size > 0
+              ? { id: { notIn: Array.from(state.importedAvailabilityBlockIds) } }
+              : {},
+          data: { status: "停用" },
+        })
+      : Promise.resolve({ count: 0 }),
   ]);
 
-  return { people: people.count, teams: teams.count, vendors: vendors.count };
+  return { people: people.count, teams: teams.count, vendors: vendors.count, availabilityBlocks: availabilityBlocks.count };
 }
 
 async function assertActiveLoginAdminExists(tx: Prisma.TransactionClient) {
@@ -744,27 +861,34 @@ async function ensureTeamByName(
 
 function parseUserDataWorkbook(buffer: Buffer): ParsedUserDataWorkbook {
   const workbook = read(buffer, { type: "buffer", cellDates: true });
+  const peopleSheet = workbookRowsWithPresence(workbook, ["人员名单", "人员", "工作表一"], 0);
+  const permissionRoleSheet = workbookRowsWithPresence(workbook, ["固定字段", "权限角色", "角色权限"], -1);
+  const teamSheet = workbookRowsWithPresence(workbook, ["团队结构", "团队", "工作表二"], 1);
+  const vendorSheet = workbookRowsWithPresence(workbook, ["外包供应商", "供应商", "工作表三"], 2);
+  const availabilitySheet = workbookRowsWithPresence(workbook, ["不可排期记录", "不可排期", "请假", "Availability"], -1);
 
   return {
     workbook,
-    peopleRows: workbookRows(workbook, ["人员名单", "人员", "工作表一"], 0).filter(hasAnyValue),
-    permissionRoleRows: workbookRows(workbook, ["固定字段", "权限角色", "角色权限"], -1).filter(hasAnyValue),
-    teamRows: workbookRows(workbook, ["团队结构", "团队", "工作表二"], 1).filter(hasAnyValue),
-    vendorRows: workbookRows(workbook, ["外包供应商", "供应商", "工作表三"], 2).filter(hasAnyValue),
+    peopleRows: peopleSheet.rows.filter(hasAnyValue),
+    permissionRoleRows: permissionRoleSheet.rows.filter(hasAnyValue),
+    teamRows: teamSheet.rows.filter(hasAnyValue),
+    vendorRows: vendorSheet.rows.filter(hasAnyValue),
+    availabilityRows: availabilitySheet.rows.filter(hasAnyValue),
+    availabilitySheetExists: availabilitySheet.exists,
   };
 }
 
-function workbookRows(workbook: WorkBook, sheetNameCandidates: string[], fallbackIndex: number) {
+function workbookRowsWithPresence(workbook: WorkBook, sheetNameCandidates: string[], fallbackIndex: number) {
   const sheetName =
     workbook.SheetNames.find((name) => sheetNameCandidates.some((candidate) => normalizeKey(name).includes(normalizeKey(candidate)))) ??
     workbook.SheetNames[fallbackIndex];
   const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
 
   if (!sheet) {
-    return [] as SheetRow[];
+    return { rows: [] as SheetRow[], exists: false };
   }
 
-  return utils.sheet_to_json<SheetRow>(sheet, { defval: "", raw: false });
+  return { rows: utils.sheet_to_json<SheetRow>(sheet, { defval: "", raw: false }), exists: true };
 }
 
 function rowValue(row: SheetRow, keys: string[]) {
@@ -856,6 +980,24 @@ function resolveUserRef(value: string | null, state: MutableImportState) {
   }
 
   return state.importedUserIds.has(value) || value.length >= 8 ? value : (state.userIdByName.get(normalizeKey(value)) ?? null);
+}
+
+function availabilityBlockKey({
+  userId,
+  blockType,
+  startDate,
+  endDate,
+}: {
+  userId: string;
+  blockType: string;
+  startDate: Date;
+  endDate: Date;
+}) {
+  return [userId, normalizeKey(blockType), dateOnly(startDate), dateOnly(endDate)].join("|");
+}
+
+function dateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
 }
 
 function passwordForImport({

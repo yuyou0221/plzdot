@@ -72,6 +72,21 @@ export type UserAvailabilityBlock = {
   notes: string;
 };
 
+export type UserDataAuditLogEntry = {
+  id: string;
+  actorName: string;
+  actorLoginName: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  result: string;
+  summary: string;
+  metadataSummary: string;
+  ipAddress: string;
+  userAgent: string;
+  createdAt: string;
+};
+
 export type UserDataViewerPolicy = {
   permissionLevel: number;
   permissionLevelLabel: string;
@@ -119,4 +134,5 @@ export type UserDataWorkbenchData = {
   teams: UserDataTeam[];
   vendors: UserDataVendor[];
   availabilityBlocks: UserAvailabilityBlock[];
+  auditLogs: UserDataAuditLogEntry[];
 };
