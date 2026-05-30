@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { getProjectDetail } from "@/lib/schedule-repository";
 import { prisma } from "@/lib/db/prisma";
+import { recordPlannedLaunchDateAdjustment } from "@/lib/schedule-planning-adjustments";
 
 export const runtime = "nodejs";
 
@@ -65,21 +66,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 
   try {
-    const project = await prisma.$transaction(async (tx) => {
+    const { project, adjustmentRecord } = await prisma.$transaction(async (tx) => {
       const existingProject = plannedLaunchDate
-        ? await tx.project.findUnique({ where: { id }, select: { plannedLaunchDate: true, projectName: true } })
+        ? await tx.project.findUnique({ where: { id }, select: { id: true, plannedLaunchDate: true, projectName: true } })
         : null;
-
-      if (
-        existingProject &&
-        plannedLaunchDate &&
-        dateOnlyTime(plannedLaunchDate) > dateOnlyTime(existingProject.plannedLaunchDate)
-      ) {
-        throw new MutationError(
-          `${existingProject.projectName} 的计划上线只能提前，不能从 ${formatDate(existingProject.plannedLaunchDate)} 调整到 ${formatDate(plannedLaunchDate)}。`,
-          400,
-        );
-      }
 
       const updatedProject = await tx.project.update({
         where: { id },
@@ -87,7 +77,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         select: { id: true },
       });
 
-      return tx.project.findUniqueOrThrow({
+      const project = await tx.project.findUniqueOrThrow({
         where: { id: updatedProject.id },
         select: {
           id: true,
@@ -97,6 +87,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           projectTeamId: true,
         },
       });
+
+      const adjustmentRecord =
+        existingProject && plannedLaunchDate
+          ? await recordPlannedLaunchDateAdjustment(tx, {
+              projectId: existingProject.id,
+              projectName: existingProject.projectName,
+              fromDate: existingProject.plannedLaunchDate,
+              toDate: plannedLaunchDate,
+              source: "project-patch",
+              adjustmentType: "表格视图规划调整",
+              cardType: "表格视图项目行",
+              createdBy: auth.user.id,
+              createdByName: auth.user.name ?? auth.user.loginName ?? "项目排期页面",
+            })
+          : null;
+
+      return { project, adjustmentRecord };
     });
 
     return NextResponse.json({
@@ -105,7 +112,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         ...project,
         plannedLaunchDate: formatDate(project.plannedLaunchDate),
       },
-      message: `${project.projectName} 已保存。`,
+      message: adjustmentRecord
+        ? `${project.projectName} 已保存。计划上线已从 ${adjustmentRecord.fromValue} ${adjustmentRecord.direction}到 ${adjustmentRecord.toValue}，已记录规划调整。`
+        : `${project.projectName} 已保存。`,
     });
   } catch (error) {
     if (error instanceof MutationError) {
@@ -271,10 +280,6 @@ function daysInMonth(year: number, month: number) {
 
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
-}
-
-function dateOnlyTime(date: Date) {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 class MutationError extends Error {

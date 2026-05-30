@@ -83,6 +83,12 @@ type ApplyResponse = {
     updatedProjects?: number;
     importedTaskFacts?: number;
     taskRuleWarnings?: string[];
+    plannedLaunchAdjustmentSummary?: {
+      total: number;
+      advanced: number;
+      delayed: number;
+      text: string;
+    };
     rowCount: number;
     requiresRecalculation: boolean;
   };
@@ -417,6 +423,9 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
               <span>
                 已写入数据库：新增 {applyResult.createdProjects ?? 0} 个项目，更新 {applyResult.updatedProjects ?? 0} 个项目，写入{" "}
                 {applyResult.importedTaskFacts ?? 0} 条任务事实。
+                {applyResult.plannedLaunchAdjustmentSummary?.total
+                  ? ` 计划上线调整 ${applyResult.plannedLaunchAdjustmentSummary.total} 项，${applyResult.plannedLaunchAdjustmentSummary.text}`
+                  : ""}
                 {applyResult.requiresRecalculation
                   ? analyzeResult
                     ? ` 已完成排期重算：${analyzeResult.projectCount ?? "-"} 个项目，${analyzeResult.futureTaskCount ?? "-"} 条未来任务。`

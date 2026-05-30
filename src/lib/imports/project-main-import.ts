@@ -5,6 +5,11 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { extractProjectWorkbook, previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
+import {
+  plannedLaunchAdjustmentSummary,
+  recordPlannedLaunchDateAdjustment,
+  type PlannedLaunchAdjustmentRecord,
+} from "@/lib/schedule-planning-adjustments";
 
 type ProjectPreviewRow = ProjectMainImportPreview["rows"][number];
 
@@ -24,6 +29,12 @@ export type ProjectMainImportApplyResult = {
   skippedTaskFacts: number;
   failedTaskFacts: number;
   taskRuleWarnings: string[];
+  plannedLaunchAdjustmentSummary: {
+    total: number;
+    advanced: number;
+    delayed: number;
+    text: string;
+  };
   rowCount: number;
   requiresRecalculation: boolean;
   previewSummary: ProjectMainImportPreview["summary"];
@@ -64,29 +75,39 @@ export async function applyProjectMainImport(
 
     let createdProjects = 0;
     let updatedProjects = 0;
+    const plannedLaunchAdjustments: PlannedLaunchAdjustmentRecord[] = [];
     for (const row of preview.rows) {
       if (row.matchStatus === "matched" && row.matchedProjectId) {
         const existingProject = row.plannedLaunchDate
           ? await tx.project.findUnique({
               where: { id: row.matchedProjectId },
-              select: { plannedLaunchDate: true, projectName: true },
+              select: { id: true, plannedLaunchDate: true, projectName: true },
             })
           : null;
-
-        if (
-          existingProject &&
-          row.plannedLaunchDate &&
-          dateOnlyTime(dateOnly(row.plannedLaunchDate)) > dateOnlyTime(existingProject.plannedLaunchDate)
-        ) {
-          throw new ProjectMainImportValidationError(
-            `${existingProject.projectName} 的计划上线只能提前，不能从 ${formatDate(existingProject.plannedLaunchDate)} 调整到 ${row.plannedLaunchDate}。`,
-          );
-        }
 
         await tx.project.update({
           where: { id: row.matchedProjectId },
           data: projectUpdateData(row, importRecord.id),
         });
+
+        if (existingProject && row.plannedLaunchDate) {
+          const adjustmentRecord = await recordPlannedLaunchDateAdjustment(tx, {
+            projectId: existingProject.id,
+            projectName: existingProject.projectName,
+            fromDate: existingProject.plannedLaunchDate,
+            toDate: dateOnly(row.plannedLaunchDate),
+            source: "project-main-import",
+            adjustmentType: "Excel主数据规划调整",
+            cardType: "Excel项目主数据行",
+            reason: `${existingProject.projectName} 计划上线由 Excel 导入从 ${formatDate(existingProject.plannedLaunchDate)} 调整到 ${row.plannedLaunchDate}`,
+            createdByName: importedBy,
+          });
+
+          if (adjustmentRecord) {
+            plannedLaunchAdjustments.push(adjustmentRecord);
+          }
+        }
+
         updatedProjects += 1;
         continue;
       }
@@ -120,6 +141,7 @@ export async function applyProjectMainImport(
           sheets: preview.sheets,
           actualTaskFacts: actualImport,
           taskRuleWarnings,
+          plannedLaunchAdjustments,
         },
       },
     });
@@ -133,6 +155,12 @@ export async function applyProjectMainImport(
       skippedTaskFacts: actualImport.skipped,
       failedTaskFacts: actualImport.failed,
       taskRuleWarnings,
+      plannedLaunchAdjustmentSummary: {
+        total: plannedLaunchAdjustments.length,
+        advanced: plannedLaunchAdjustments.filter((record) => record.direction === "提前").length,
+        delayed: plannedLaunchAdjustments.filter((record) => record.direction === "延期").length,
+        text: plannedLaunchAdjustmentSummary(plannedLaunchAdjustments),
+      },
       rowCount: preview.summary.totalRows,
       requiresRecalculation: true,
       previewSummary: preview.summary,
@@ -474,10 +502,6 @@ function dateOnly(value: string) {
 
 function formatDate(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
-function dateOnlyTime(date: Date) {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 function buildProjectNotes(row: ProjectPreviewRow) {
