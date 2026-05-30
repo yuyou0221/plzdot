@@ -139,7 +139,7 @@ export async function ingestProjectTaskFactEvent(event: ProjectTaskFactEvent): P
       projectTaskId: existingEvent.projectTaskId ?? undefined,
       needsRecalculation: false,
       message: processed
-        ? "任务事实事件已处理，本次未重复写入。"
+        ? "项目排期已接收任务事实事件"
         : (existingEvent.errorMessage ?? "任务事实事件此前处理失败。"),
       status: processed ? undefined : 409,
     };
@@ -218,7 +218,7 @@ export async function ingestProjectTaskFactEvent(event: ProjectTaskFactEvent): P
       processingStatus: "processed",
       projectTaskId: eventLog.projectTaskId ?? undefined,
       needsRecalculation: true,
-      message: "任务事实事件已记录，项目需要重新测算。",
+      message: "项目排期已接收任务事实事件",
     };
   });
 }
@@ -325,7 +325,7 @@ function buildProjectTaskPatch(event: ProjectTaskFactEvent, task: TaskRow) {
     data.blockReason = null;
     data.progressNote = note ?? task.progressNote;
 
-    if (actualStartDate) {
+    if (actualStartDate && !task.actualStartDate) {
       data.actualStartDate = actualStartDate;
     }
 
@@ -510,7 +510,7 @@ function requiredString(value: unknown, fieldName: string) {
     return value.trim();
   }
 
-  throw new TaskFactEventValidationError(`${fieldName} 不能为空。`);
+  throw new TaskFactEventValidationError(`缺少 ${fieldName}`);
 }
 
 function requiredPayloadText(value: unknown, fieldName: string) {
@@ -519,7 +519,7 @@ function requiredPayloadText(value: unknown, fieldName: string) {
     return text;
   }
 
-  throw new TaskFactEventValidationError(`${fieldName} 不能为空。`);
+  throw new TaskFactEventValidationError(`缺少 ${fieldName}`);
 }
 
 function textValue(value: unknown) {
@@ -527,6 +527,10 @@ function textValue(value: unknown) {
 }
 
 function positiveInteger(value: unknown, fieldName: string) {
+  if (value === undefined || value === null || value === "") {
+    throw new TaskFactEventValidationError(`缺少 ${fieldName}`);
+  }
+
   const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
 
   if (Number.isInteger(numberValue) && numberValue > 0) {

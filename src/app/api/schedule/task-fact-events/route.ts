@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON。" }, { status: 400 });
+    return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON" }, { status: 400 });
   }
 
   try {
@@ -39,8 +39,8 @@ export async function POST(request: Request) {
         ok: false,
         message:
           error instanceof Error && error.message
-            ? `任务事实事件写入失败：${error.message}`
-            : "任务事实事件写入失败。",
+            ? `项目排期接收任务事实事件失败：${error.message}`
+            : "项目排期接收任务事实事件失败",
       },
       { status: 500 },
     );

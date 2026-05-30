@@ -92,9 +92,9 @@
       "operatorName": "模拟产品经理A",
       "payload": {
         "actualFinishDate": "2026-05-03",
-        "actualStartDate": "2026-05-01",
+        "actualStartDate": "2026-05-02",
         "status": "已完成",
-        "note": "模拟任务完成"
+        "note": "模拟任务完成，完成事件不应覆盖已有实际开始日期"
       }
     },
     {

@@ -207,6 +207,63 @@ task_resumed
 task_note_updated
 ```
 
+第一版联调契约：
+
+```text
+1. 产品组工作指引第一版只发送 task_started 和 task_completed。
+2. 产品组只提交任务事实，不提交风险、预测、延期、里程碑状态或产能结论。
+3. projectId 必须是系统项目 ID，不用项目编号或项目名匹配。
+4. 日期字段统一 YYYY-MM-DD。
+5. occurredAt 必须是带时区 ISO，例如 2026-05-31T10:30:00+08:00。
+6. task_completed 如果 payload 带 actualStartDate，且原任务没有 actualStartDate，则补写；如果原任务已有 actualStartDate，不覆盖。
+7. 接收成功返回 ok=true、message=项目排期已接收任务事实事件、needsRecalculation=true。
+8. 接收失败返回 ok=false 和可读 message，例如 缺少 projectId。
+```
+
+task_started 示例：
+
+```json
+{
+  "eventId": "product-guide:task-event:uuid",
+  "eventType": "task_started",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 1,
+  "taskKey": "#1",
+  "taskName": "市场调研",
+  "occurredAt": "2026-05-31T10:30:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualStartDate": "2026-05-31",
+    "status": "进行中",
+    "note": "产品组从工作台启动 #1 市场调研。"
+  }
+}
+```
+
+task_completed 示例：
+
+```json
+{
+  "eventId": "product-guide:task-event:uuid",
+  "eventType": "task_completed",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 1,
+  "taskKey": "#1",
+  "taskName": "市场调研",
+  "occurredAt": "2026-05-31T10:35:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualFinishDate": "2026-05-31",
+    "status": "已完成",
+    "note": "产品组从工作台标记 #1 市场调研 完成。"
+  }
+}
+```
+
 ## POST /api/imports/preview
 
 用途：生成 Excel 导入预览，不写入数据库。
