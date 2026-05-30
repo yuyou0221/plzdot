@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { extractProjectWorkbook, previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
+import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 import {
   plannedLaunchAdjustmentSummary,
   recordPlannedLaunchDateAdjustment,
@@ -235,7 +236,7 @@ async function compareWorkbookTaskRules(tx: Prisma.TransactionClient, taskRules:
   }
 
   const dbRules = await tx.taskRule.findMany({
-    where: { isActive: true, taskNo: { gte: 1, lte: 31 } },
+    where: canonicalTaskRuleWhere(),
     select: { taskNo: true, taskName: true, standardWorkdays: true },
   });
   const dbRuleByTaskNo = new Map(dbRules.map((rule) => [rule.taskNo, rule]));
@@ -380,7 +381,7 @@ async function buildTaskNoByName(tx: Prisma.TransactionClient, workbookTaskRules
   }
 
   const dbRules = await tx.taskRule.findMany({
-    where: { isActive: true },
+    where: canonicalTaskRuleWhere(),
     select: { taskNo: true, taskName: true },
   });
   for (const rule of dbRules) {

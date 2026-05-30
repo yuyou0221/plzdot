@@ -15,8 +15,9 @@ import type {
   ProductGuideStyleSummary,
 } from "@/lib/product-guide-types";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
-import { findLatestBusinessScheduleRun } from "@/lib/schedule-run-selector";
+import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
 import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 import type { ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
 type ProjectRow = {
@@ -219,6 +220,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
   try {
     const [projects, teams, users, latestRun, scheduleData] = await Promise.all([
       prisma.project.findMany({
+        where: excludeScheduleSimulationProjectsWhere(),
         orderBy: [{ plannedLaunchDate: "asc" }, { id: "asc" }],
         take: 300,
         select: {
@@ -251,7 +253,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
           status: true,
         },
       }),
-      findLatestBusinessScheduleRun(),
+      getLatestOfficialScheduleRun(),
       getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true }),
     ]);
 

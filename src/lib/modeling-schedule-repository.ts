@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import { buildModelingTodosFromTasks } from "@/lib/modeling-todos";
-import { findLatestBusinessScheduleRun } from "@/lib/schedule-run-selector";
+import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
 import type {
   ModelerCapacity,
   ModelingMilestoneCard,
@@ -17,6 +17,7 @@ import type {
   OutsourceVendorOption,
   ProjectModelingSummary,
 } from "@/lib/modeling-schedule-types";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 
 const statusColumns: ModelingTaskStatus[] = [
   "待确认",
@@ -158,6 +159,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
   try {
     const [projects, realTasks, users, vendors, progressRows, latestRun] = await Promise.all([
       prisma.project.findMany({
+        where: excludeScheduleSimulationProjectsWhere(),
         orderBy: [{ plannedLaunchDate: "asc" }, { id: "asc" }],
         take: 300,
         select: {
@@ -232,7 +234,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
         },
       }),
       prisma.projectModelingProgress.findMany(),
-      findLatestBusinessScheduleRun(),
+      getLatestOfficialScheduleRun(),
     ]);
 
     const userIds = users.map((user) => user.id);

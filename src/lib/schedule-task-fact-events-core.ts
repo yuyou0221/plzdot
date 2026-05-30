@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { canonicalTaskRuleForTaskNoWhere } from "@/lib/schedule-task-rules";
 
 export const STANDARD_SCHEDULE_TASK_COUNT = 31;
 
@@ -286,7 +287,7 @@ async function resolveProjectTask(tx: Prisma.TransactionClient, event: ProjectTa
   }
 
   const taskRule = await tx.taskRule.findFirst({
-    where: { taskNo: event.taskNo, isActive: true },
+    where: canonicalTaskRuleForTaskNoWhere(event.taskNo),
     orderBy: { updatedAt: "desc" },
     select: {
       id: true,

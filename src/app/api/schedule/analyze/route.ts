@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
+import { officialScheduleRunWhere } from "@/lib/schedule-engine/official-runs";
 import { defaultScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
 
 export const runtime = "nodejs";
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
 
 async function nextScheduleCalculatedAt() {
   const latestSuccessfulRun = await prisma.scheduleRun.findFirst({
-    where: { runStatus: "成功" },
+    where: officialScheduleRunWhere(),
     orderBy: { calculatedAt: "desc" },
     select: { calculatedAt: true },
   });

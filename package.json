@@ -13,7 +13,7 @@
     "db:import:actual": "tsx scripts/import-actual-schedule.ts",
     "db:import:users": "tsx scripts/import-user-data-json.ts",
     "db:import:modeling": "tsx scripts/import-modeling-data-json.ts",
-    "schedule:simulate": "tsx scripts/run-schedule-simulations.ts",
+    "schedule:simulate": "tsx --conditions react-server scripts/run-schedule-simulations.ts",
     "db:local:init": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 init",
     "db:local:start": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 start",
     "db:local:stop": "powershell -ExecutionPolicy Bypass -File scripts/local-postgres.ps1 stop",

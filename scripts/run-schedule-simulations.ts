@@ -319,7 +319,7 @@ async function ensureTaskRules(scenario: Scenario, batchId: string) {
         taskName: rule.taskName,
         milestoneType: rule.milestoneType ?? milestoneByTaskNo(rule.taskNo),
         standardWorkdays: rule.standardWorkdays,
-        isActive: true,
+        isActive: false,
       },
       create: {
         taskNo: rule.taskNo,
@@ -327,7 +327,7 @@ async function ensureTaskRules(scenario: Scenario, batchId: string) {
         milestoneType: rule.milestoneType ?? milestoneByTaskNo(rule.taskNo),
         standardWorkdays: rule.standardWorkdays,
         sourceVersion: batchId,
-        isActive: true,
+        isActive: false,
       },
     });
   }
@@ -573,13 +573,11 @@ async function assertScenario(runtime: ScenarioRuntime) {
         const dateText = project.plannedLaunchDate || "";
         return dateText.startsWith(`${year}-`);
       });
-      assertions.push(equalResult(`上线日历包含 ${year} 年模拟项目`, exists, true));
+      assertions.push(equalResult(`正式上线日历不包含 ${year} 年模拟项目`, exists, false));
     }
 
     if (typeof scenario.expect.workbench.minimumProjectCards === "number") {
-      assertions.push(
-        atLeastResult("里程碑看板模拟卡片数量", scenarioCards.length, scenario.expect.workbench.minimumProjectCards),
-      );
+      assertions.push(equalResult("正式里程碑看板模拟卡片数量", scenarioCards.length, 0));
     }
   }
 
@@ -798,16 +796,6 @@ function equalResult(label: string, actual: unknown, expected: unknown): Asserti
     ok,
     label,
     detail: ok ? undefined : `期望 ${String(expected)}，实际 ${String(actual)}`,
-  };
-}
-
-function atLeastResult(label: string, actual: number, expected: number): AssertionResult {
-  const ok = actual >= expected;
-
-  return {
-    ok,
-    label,
-    detail: ok ? undefined : `期望至少 ${expected}，实际 ${actual}`,
   };
 }
 
