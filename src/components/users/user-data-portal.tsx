@@ -42,7 +42,8 @@ export type UserDataView =
   | "modeling"
   | "availability"
   | "vendors"
-  | "moduleViews";
+  | "moduleViews"
+  | "audit";
 
 type ImportPreview = {
   fileName: string;
@@ -51,6 +52,7 @@ type ImportPreview = {
     permissionRoles: number;
     teams: number;
     vendors: number;
+    availabilityBlocks: number;
     total: number;
   };
   checks: {
@@ -66,6 +68,9 @@ type ImportPreview = {
   canApply: boolean;
   warnings: string[];
   errors: string[];
+  previewId: string;
+  expiresAt: string;
+  fileHash: string;
 };
 
 type MutationResponse = {
@@ -76,6 +81,9 @@ type MutationResponse = {
 
 type ImportPreviewResponse = MutationResponse & {
   preview?: ImportPreview;
+  previewId?: string;
+  expiresAt?: string;
+  fileHash?: string;
 };
 
 const viewMeta: Record<UserDataView, { title: string; subtitle: string; icon: ReactNode }> = {
@@ -119,6 +127,11 @@ const viewMeta: Record<UserDataView, { title: string; subtitle: string; icon: Re
     subtitle: "查看其他模块可以读取哪些字段，以及它们实际看到的数据。",
     icon: <Eye size={18} />,
   },
+  audit: {
+    title: "审计记录",
+    subtitle: "查看用户数据高风险操作记录，包括导入、导出、删除停用账号和修改密码。",
+    icon: <Clock3 size={18} />,
+  },
 };
 
 const userDataNavItems: Array<{ view: UserDataView; href: string; label: string; icon: ReactNode }> = [
@@ -130,6 +143,7 @@ const userDataNavItems: Array<{ view: UserDataView; href: string; label: string;
   { view: "availability", href: "/users/availability", label: "不可排期", icon: <CalendarDays size={16} /> },
   { view: "vendors", href: "/users/vendors", label: "外包供应商", icon: <PackageCheck size={16} /> },
   { view: "moduleViews", href: "/users/module-views", label: "模块读取", icon: <Eye size={16} /> },
+  { view: "audit", href: "/users/audit", label: "审计记录", icon: <Clock3 size={16} /> },
 ];
 
 const metricToneClass: Record<UserDataMetric["tone"], string> = {
@@ -240,12 +254,17 @@ export function UserDataPortal({
       });
       const result = (await readMutationResponse(response)) as ImportPreviewResponse;
 
-      if (!response.ok || !result.ok || !result.preview) {
+      if (!response.ok || !result.ok || !result.preview || !result.previewId || !result.expiresAt || !result.fileHash) {
         notify(result.message ?? "安全测试预览失败。", "warning");
         return;
       }
 
-      setImportPreview(result.preview);
+      setImportPreview({
+        ...result.preview,
+        previewId: result.previewId,
+        expiresAt: result.expiresAt,
+        fileHash: result.fileHash,
+      });
       notify(result.message ?? "安全测试预览完成。", result.preview.canApply ? "info" : "warning");
     } catch {
       notify("安全测试预览接口暂时不可用。", "warning");
@@ -277,6 +296,7 @@ export function UserDataPortal({
       const formData = new FormData();
       formData.set("file", importFile);
       formData.set("mode", "replace");
+      formData.set("previewId", importPreview.previewId);
       const response = await fetch("/api/users/import-excel", {
         method: "POST",
         body: formData,
@@ -383,7 +403,7 @@ export function UserDataPortal({
           <div className="mt-5 border-t border-slate-200 pt-5">
             <div className="px-2 text-xs font-semibold uppercase tracking-wide text-slate-400">用户数据</div>
             <nav className="mt-2 grid gap-1">
-              {userDataNavItems.map((item) => (
+              {userDataNavItems.filter((item) => item.view !== "audit" || data.viewer.isLevelZero).map((item) => (
                 <UserDataNavLink key={item.view} href={item.href} active={isActiveUserDataPath(pathname, item.href)} icon={item.icon} label={item.label} />
               ))}
             </nav>
@@ -412,6 +432,7 @@ export function UserDataPortal({
             <div className="flex flex-wrap gap-2">
               <TopLink href="/users/import" icon={<FileSpreadsheet size={16} />} label="Excel 更新" active={view === "import"} />
               <TopLink href="/users/module-views" icon={<Eye size={16} />} label="模块读取" active={view === "moduleViews"} />
+              {data.viewer.isLevelZero ? <TopLink href="/users/audit" icon={<Clock3 size={16} />} label="审计记录" active={view === "audit"} /> : null}
             </div>
           </header>
 
@@ -436,6 +457,7 @@ export function UserDataPortal({
           {view === "availability" ? renderAvailabilityPage() : null}
           {view === "vendors" ? renderVendorsPage() : null}
           {view === "moduleViews" ? renderModuleViewsPage() : null}
+          {view === "audit" ? renderAuditPage() : null}
         </main>
       </div>
     </div>
@@ -448,6 +470,12 @@ export function UserDataPortal({
 
     return (
       <div className="mt-5 grid gap-5">
+        {data.people.length === 0 && data.teams.length === 0 && data.vendors.length === 0 ? (
+          <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            当前数据库还没有用户主数据。请使用标准 Excel 在“Excel 更新”页面完成安全预览后覆盖导入。
+          </section>
+        ) : null}
+
         <section className="grid grid-cols-5 gap-3 max-2xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
           {data.metrics.map((metric) => (
             <MetricCard key={metric.label} metric={metric} />
@@ -611,7 +639,7 @@ export function UserDataPortal({
             />
             <ImportStep
               title="3. 覆盖更新"
-              state={importPreview?.canApply ? "可执行" : "等待通过预览"}
+              state={importPreview?.canApply ? `可执行，有效至 ${formatDateTime(importPreview.expiresAt)}` : "等待通过预览"}
               active={Boolean(importPreview?.canApply)}
             />
           </div>
@@ -628,6 +656,12 @@ export function UserDataPortal({
             </div>
             <p className="mt-2 leading-6">
               该入口会覆盖用户数据主表。服务器操作前建议先备份数据库，并确认 Excel 是最新标准格式。
+            </p>
+          </section>
+          <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">
+            <div className="font-semibold text-slate-800">密码导出说明</div>
+            <p className="mt-2 leading-6">
+              导出的密码只包含系统保存过可解密记录的账号。历史上只有哈希、没有可导出密文的账号，密码列会保持为空。
             </p>
           </section>
           <section className="rounded-lg border border-slate-200 bg-white p-4">
@@ -1215,8 +1249,14 @@ export function UserDataPortal({
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge value={preview.canApply ? "安全测试预览通过" : "安全测试预览未通过"} tone={preview.canApply ? "success" : "warning"} />
           <span className="text-xs text-slate-500">
-            人员 {preview.counts.people} · 权限 {preview.counts.permissionRoles} · 团队 {preview.counts.teams} · 外包 {preview.counts.vendors}
+            人员 {preview.counts.people} · 权限 {preview.counts.permissionRoles} · 团队 {preview.counts.teams} · 外包 {preview.counts.vendors} · 不可排期{" "}
+            {preview.counts.availabilityBlocks}
           </span>
+        </div>
+        <div className="grid gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 sm:grid-cols-3">
+          <DetailLine label="预览编号" value={preview.previewId} />
+          <DetailLine label="有效期" value={formatDateTime(preview.expiresAt)} />
+          <DetailLine label="文件校验" value={preview.fileHash.slice(0, 12)} />
         </div>
         <div className="grid grid-cols-5 gap-2 text-xs text-slate-600 max-lg:grid-cols-2 max-sm:grid-cols-1">
           <PreviewMetric label="登录账号" value={preview.checks.loginUsers} />
@@ -1228,6 +1268,80 @@ export function UserDataPortal({
         {preview.errors.length > 0 ? <PreviewMessages title="必须处理" tone="warning" items={preview.errors} /> : null}
         {preview.warnings.length > 0 ? <PreviewMessages title="预览提示" tone="info" items={preview.warnings.slice(0, 10)} /> : null}
       </div>
+    );
+  }
+
+  function renderAuditPage() {
+    if (!data.viewer.isLevelZero) {
+      return (
+        <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          当前账号不能查看用户数据审计记录。
+        </section>
+      );
+    }
+
+    return (
+      <section className="mt-5 rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-800">高风险操作记录</div>
+            <div className="mt-1 text-xs text-slate-500">只记录用户数据模块内的导入、导出、删除和改密动作，不记录明文密码。</div>
+          </div>
+          <span className="text-sm font-medium text-slate-500">最近 {data.auditLogs.length} 条</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1120px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+              <tr>
+                <th className="px-3 py-2">时间</th>
+                <th className="px-3 py-2">账号</th>
+                <th className="px-3 py-2">动作</th>
+                <th className="px-3 py-2">结果</th>
+                <th className="px-3 py-2">摘要</th>
+                <th className="px-3 py-2">对象</th>
+                <th className="px-3 py-2">补充信息</th>
+                <th className="px-3 py-2">来源</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.auditLogs.map((log) => (
+                <tr key={log.id}>
+                  <td className="px-3 py-3 text-slate-600">{formatDateTime(log.createdAt)}</td>
+                  <td className="px-3 py-3">
+                    <div className="font-semibold text-slate-900">{log.actorName}</div>
+                    <div className="text-xs text-slate-500">{log.actorLoginName || "-"}</div>
+                  </td>
+                  <td className="px-3 py-3 font-semibold text-slate-800">{log.action}</td>
+                  <td className="px-3 py-3">
+                    <StatusBadge
+                      value={log.result}
+                      tone={log.result === "成功" ? "success" : log.result === "拒绝" ? "warning" : "neutral"}
+                    />
+                  </td>
+                  <td className="px-3 py-3 text-slate-600">{log.summary || "-"}</td>
+                  <td className="px-3 py-3 text-xs text-slate-500">
+                    {log.targetType || "-"}
+                    {log.targetId ? <div className="mt-1 max-w-44 truncate">{log.targetId}</div> : null}
+                  </td>
+                  <td className="px-3 py-3 text-slate-500">{log.metadataSummary || "-"}</td>
+                  <td className="px-3 py-3 text-xs text-slate-500">
+                    <div>{log.ipAddress || "-"}</div>
+                    <div className="mt-1 max-w-56 truncate" title={log.userAgent}>{log.userAgent || "-"}</div>
+                  </td>
+                </tr>
+              ))}
+              {data.auditLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-slate-400">
+                    暂无审计记录。
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
     );
   }
 }
