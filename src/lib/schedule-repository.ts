@@ -31,6 +31,8 @@ type ProjectRow = {
   id: string;
   projectCode: string | null;
   projectName: string;
+  licensorName: string | null;
+  ipName: string | null;
   plannedLaunchDate: Date;
   projectTeamId: string | null;
   projectOwnerId: string | null;
@@ -311,6 +313,8 @@ function buildCalendarProjects(
         id: `calendar:${project.id}`,
         projectId: project.id,
         name: project.projectName,
+        licensorName: project.licensorName ?? undefined,
+        ipName: project.ipName ?? undefined,
         month,
         plannedLaunchDate: formatDate(project.plannedLaunchDate),
         forecastLaunchDate: result?.forecastLaunchDate ? formatDate(result.forecastLaunchDate) : undefined,

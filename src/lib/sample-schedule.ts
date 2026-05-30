@@ -19,6 +19,8 @@ export type CalendarProject = {
   id: string;
   projectId: string;
   name: string;
+  licensorName?: string;
+  ipName?: string;
   month: string;
   plannedLaunchDate: string;
   forecastLaunchDate?: string;

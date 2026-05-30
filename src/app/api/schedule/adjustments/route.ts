@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { normalizeProjectLaunchDatesForMonths } from "@/lib/schedule-engine/planned-launch-normalization";
-import { launchMonthKeyFromDate } from "@/lib/schedule-domain/planned-launch-rules";
 
 export const runtime = "nodejs";
 
@@ -83,6 +81,25 @@ export async function POST(request: Request) {
       );
     }
 
+    const delayedAdjustment = normalizedAdjustments.find((adjustment) => {
+      const project = projectById.get(adjustment.projectId);
+      const targetDate = project ? resolveTargetDate(project.plannedLaunchDate, adjustment) : null;
+      return Boolean(project && targetDate && dateOnlyTime(targetDate) > dateOnlyTime(project.plannedLaunchDate));
+    });
+
+    if (delayedAdjustment) {
+      const project = projectById.get(delayedAdjustment.projectId);
+      const targetDate = project ? resolveTargetDate(project.plannedLaunchDate, delayedAdjustment) : null;
+
+      return NextResponse.json(
+        {
+          ok: false,
+          message: `${project?.projectName ?? delayedAdjustment.projectId} 的计划上线只能提前，不能从 ${project ? formatDate(project.plannedLaunchDate) : "-"} 调整到 ${targetDate ? formatDate(targetDate) : "-"}。`,
+        },
+        { status: 400 },
+      );
+    }
+
     const savedAdjustments = await prisma.$transaction(async (tx) => {
       const changedProjects: Array<{
         projectId: string;
@@ -91,7 +108,6 @@ export async function POST(request: Request) {
         targetDate: Date;
         reason?: string;
       }> = [];
-      const affectedMonths = new Set<string>();
 
       for (const adjustment of normalizedAdjustments) {
         const project = projectById.get(adjustment.projectId);
@@ -117,8 +133,6 @@ export async function POST(request: Request) {
           data: { plannedLaunchDate: dateOnly(toValue) },
         });
 
-        affectedMonths.add(launchMonthKeyFromDate(project.plannedLaunchDate));
-        affectedMonths.add(launchMonthKeyFromDate(targetDate));
         changedProjects.push({
           projectId: project.id,
           projectName: project.projectName,
@@ -127,8 +141,6 @@ export async function POST(request: Request) {
           reason: adjustment.reason,
         });
       }
-
-      await normalizeProjectLaunchDatesForMonths(tx, affectedMonths);
 
       const saved: SavedAdjustment[] = [];
 
@@ -324,6 +336,10 @@ function formatMonthLabel(month: MonthPoint) {
 
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function dateOnlyTime(date: Date) {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 function dateOnly(value: string) {

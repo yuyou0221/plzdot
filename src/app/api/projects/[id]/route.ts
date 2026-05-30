@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { getProjectDetail } from "@/lib/schedule-repository";
 import { prisma } from "@/lib/db/prisma";
-import { affectedLaunchMonthKeys, normalizeProjectLaunchDatesForMonths } from "@/lib/schedule-engine/planned-launch-normalization";
 
 export const runtime = "nodejs";
 
@@ -68,18 +67,25 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const project = await prisma.$transaction(async (tx) => {
       const existingProject = plannedLaunchDate
-        ? await tx.project.findUnique({ where: { id }, select: { plannedLaunchDate: true } })
+        ? await tx.project.findUnique({ where: { id }, select: { plannedLaunchDate: true, projectName: true } })
         : null;
+
+      if (
+        existingProject &&
+        plannedLaunchDate &&
+        dateOnlyTime(plannedLaunchDate) > dateOnlyTime(existingProject.plannedLaunchDate)
+      ) {
+        throw new MutationError(
+          `${existingProject.projectName} 的计划上线只能提前，不能从 ${formatDate(existingProject.plannedLaunchDate)} 调整到 ${formatDate(plannedLaunchDate)}。`,
+          400,
+        );
+      }
+
       const updatedProject = await tx.project.update({
         where: { id },
         data,
         select: { id: true },
       });
-
-      await normalizeProjectLaunchDatesForMonths(
-        tx,
-        affectedLaunchMonthKeys(existingProject?.plannedLaunchDate, plannedLaunchDate),
-      );
 
       return tx.project.findUniqueOrThrow({
         where: { id: updatedProject.id },
@@ -102,6 +108,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       message: `${project.projectName} 已保存。`,
     });
   } catch (error) {
+    if (error instanceof MutationError) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
+    }
+
     return NextResponse.json(
       {
         ok: false,
@@ -130,17 +140,40 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     await prisma.$transaction(async (tx) => {
-      const [projectTasks, modelingTasks, adjustments] = await Promise.all([
-        tx.projectTask.findMany({ where: { projectId: id }, select: { id: true } }),
-        tx.modelingTask.findMany({ where: { projectId: id }, select: { id: true } }),
-        tx.scheduleAdjustment.findMany({
-          where: { entityType: "Project", entityId: id },
-          select: { id: true },
-        }),
-      ]);
+      const [
+        projectTasks,
+        modelingTasks,
+        adjustments,
+        factEventCount,
+        scheduleProjectResultCount,
+        scheduleTaskResultCount,
+        modelingProgressCount,
+      ] = await Promise.all([
+          tx.projectTask.findMany({ where: { projectId: id }, select: { id: true } }),
+          tx.modelingTask.findMany({ where: { projectId: id }, select: { id: true } }),
+          tx.scheduleAdjustment.findMany({
+            where: { entityType: "Project", entityId: id },
+            select: { id: true },
+          }),
+          tx.projectTaskFactEventLog.count({ where: { projectId: id } }),
+          tx.scheduleProjectResult.count({ where: { projectId: id } }),
+          tx.scheduleTaskResult.count({ where: { projectId: id } }),
+          tx.projectModelingProgress.count({ where: { projectId: id } }),
+        ]);
       const projectTaskIds = projectTasks.map((task) => task.id);
       const modelingTaskIds = modelingTasks.map((task) => task.id);
       const adjustmentIds = adjustments.map((adjustment) => adjustment.id);
+
+      const hasBusinessRecords =
+        projectTaskIds.length > 0 ||
+        modelingTaskIds.length > 0 ||
+        factEventCount > 0 ||
+        scheduleProjectResultCount > 0 ||
+        scheduleTaskResultCount > 0 ||
+        modelingProgressCount > 0;
+      if (hasBusinessRecords) {
+        throw new MutationError("该项目已有任务事实或建模数据，不能从表格视图直接删除。请通过项目主数据归档流程处理。", 409);
+      }
 
       if (adjustmentIds.length > 0) {
         await tx.scheduleSimulation.deleteMany({ where: { adjustmentId: { in: adjustmentIds } } });
@@ -187,6 +220,10 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
       message: `${existingProject.projectName} 已删除。`,
     });
   } catch (error) {
+    if (error instanceof MutationError) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
+    }
+
     return NextResponse.json(
       {
         ok: false,
@@ -234,4 +271,17 @@ function daysInMonth(year: number, month: number) {
 
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function dateOnlyTime(date: Date) {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+class MutationError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
 }

@@ -311,67 +311,71 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
 
           <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap gap-2">
-                <div className="inline-flex h-9 rounded-lg bg-slate-100 p-1">
-                  <button
-                    onClick={() => setMainView("planning")}
-                    className={clsx(
-                      "rounded-md px-3 text-sm font-semibold",
-                      mainView === "planning" ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
-                    )}
-                  >
-                    规划视图
-                  </button>
-                  <button
-                    onClick={() => setMainView("forecast")}
-                    className={clsx(
-                      "rounded-md px-3 text-sm font-semibold",
-                      mainView === "forecast" ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
-                    )}
-                  >
-                    压力预测
-                  </button>
+              <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+                <div className="max-w-full overflow-x-auto pb-1">
+                  <div className="inline-flex h-9 shrink-0 rounded-lg bg-slate-100 p-1">
+                    <button
+                      onClick={() => setMainView("planning")}
+                      className={clsx(
+                        "shrink-0 whitespace-nowrap rounded-md px-3 text-sm font-semibold",
+                        mainView === "planning" ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
+                      )}
+                    >
+                      规划视图
+                    </button>
+                    <button
+                      onClick={() => setMainView("forecast")}
+                      className={clsx(
+                        "shrink-0 whitespace-nowrap rounded-md px-3 text-sm font-semibold",
+                        mainView === "forecast" ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
+                      )}
+                    >
+                      压力预测
+                    </button>
+                  </div>
                 </div>
                 {mainView === "planning" ? (
-                  <div className="inline-flex h-9 rounded-lg bg-slate-100 p-1">
-                    <PlanningViewButton
-                      active={planningView === "milestone-plan"}
-                      icon={<CalendarRange size={15} />}
-                      label="里程碑看板（规划）"
-                      onClick={() => setPlanningView("milestone-plan")}
-                    />
-                    <PlanningViewButton
-                      active={planningView === "calendar"}
-                      icon={<CalendarDays size={15} />}
-                      label="上线日历"
-                      onClick={() => setPlanningView("calendar")}
-                    />
-                    <PlanningViewButton
-                      active={planningView === "table"}
-                      icon={<Table2 size={15} />}
-                      label="表格视图"
-                      onClick={() => setPlanningView("table")}
-                    />
-                    <PlanningViewButton
-                      active={planningView === "task-detail"}
-                      icon={<ListFilter size={15} />}
-                      label="任务明细"
-                      onClick={() => setPlanningView("task-detail")}
-                    />
-                    <PlanningViewButton
-                      active={planningView === "project-entry"}
-                      icon={<FilePenLine size={15} />}
-                      label="项目录入视图"
-                      onClick={() => setPlanningView("project-entry")}
-                    />
+                  <div className="max-w-full overflow-x-auto pb-1">
+                    <div className="inline-flex h-9 shrink-0 rounded-lg bg-slate-100 p-1">
+                      <PlanningViewButton
+                        active={planningView === "milestone-plan"}
+                        icon={<CalendarRange size={15} />}
+                        label="里程碑看板（规划）"
+                        onClick={() => setPlanningView("milestone-plan")}
+                      />
+                      <PlanningViewButton
+                        active={planningView === "calendar"}
+                        icon={<CalendarDays size={15} />}
+                        label="上线日历"
+                        onClick={() => setPlanningView("calendar")}
+                      />
+                      <PlanningViewButton
+                        active={planningView === "table"}
+                        icon={<Table2 size={15} />}
+                        label="表格视图"
+                        onClick={() => setPlanningView("table")}
+                      />
+                      <PlanningViewButton
+                        active={planningView === "task-detail"}
+                        icon={<ListFilter size={15} />}
+                        label="任务明细"
+                        onClick={() => setPlanningView("task-detail")}
+                      />
+                      <PlanningViewButton
+                        active={planningView === "project-entry"}
+                        icon={<FilePenLine size={15} />}
+                        label="项目录入视图"
+                        onClick={() => setPlanningView("project-entry")}
+                      />
+                    </div>
                   </div>
                 ) : null}
-                <label className="flex h-9 min-w-64 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500">
-                  <Search size={16} />
+                <label className="flex h-9 min-w-64 max-w-full flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500 max-sm:min-w-0">
+                  <Search size={16} className="shrink-0" />
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    className="w-full bg-transparent text-slate-900 outline-none placeholder:text-slate-400"
+                    className="w-full min-w-0 bg-transparent text-slate-900 outline-none placeholder:text-slate-400"
                     placeholder="搜索项目名称"
                   />
                 </label>
@@ -393,7 +397,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                 <button
                   onClick={() => setRiskOnly((value) => !value)}
                   className={clsx(
-                    "inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-semibold",
+                    "inline-flex h-9 shrink-0 items-center gap-2 rounded-full px-3 text-sm font-semibold",
                     riskOnly ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600",
                   )}
                 >
@@ -564,6 +568,13 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
 
   async function saveCalendarDrafts() {
     if (calendarDrafts.length === 0 || isSavingCalendarDrafts) {
+      return;
+    }
+
+    const delayedDraft = calendarDrafts.find((draft) => compareDateStrings(draft.toDate, draft.fromDate) > 0);
+    if (delayedDraft) {
+      setOperationTone("warning");
+      setOperationMessage(`${delayedDraft.projectName} 的计划上线只能提前，不能向后延期。`);
       return;
     }
 
@@ -1493,6 +1504,8 @@ type PlanningTableDraft = {
   rowId: string;
   projectId?: string;
   name: string;
+  licensorName: string;
+  ipName: string;
   plannedLaunchDate: string;
   routeType: string;
   projectTeam: string;
@@ -1548,10 +1561,12 @@ function PlanningTableView({
       </div>
 
       <div className="max-h-[72vh] overflow-auto">
-        <table className="w-full min-w-[1120px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1360px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold text-slate-500">
             <tr>
               <th className="border-b border-slate-200 px-3 py-2">项目</th>
+              <th className="border-b border-slate-200 px-3 py-2">版权方</th>
+              <th className="border-b border-slate-200 px-3 py-2">IP</th>
               <th className="border-b border-slate-200 px-3 py-2">上线月份</th>
               <th className="border-b border-slate-200 px-3 py-2">计划上线</th>
               <th className="border-b border-slate-200 px-3 py-2">预测 / 完成</th>
@@ -1570,6 +1585,22 @@ function PlanningTableView({
                     value={row.name}
                     placeholder="项目名称"
                     onChange={(value) => updateNewRow(row.rowId, { name: value })}
+                  />
+                </td>
+                <td className="border-b border-slate-100 px-3 py-2">
+                  <PlanningTableInput
+                    ariaLabel={`${row.name || "新项目"} 版权方`}
+                    value={row.licensorName}
+                    placeholder="版权方"
+                    onChange={(value) => updateNewRow(row.rowId, { licensorName: value })}
+                  />
+                </td>
+                <td className="border-b border-slate-100 px-3 py-2">
+                  <PlanningTableInput
+                    ariaLabel={`${row.name || "新项目"} IP`}
+                    value={row.ipName}
+                    placeholder="IP"
+                    onChange={(value) => updateNewRow(row.rowId, { ipName: value })}
                   />
                 </td>
                 <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
@@ -1639,6 +1670,8 @@ function PlanningTableView({
                   )}
                 >
                   <td className="border-b border-slate-100 px-3 py-2 font-semibold text-slate-900">{project.name}</td>
+                  <td className="border-b border-slate-100 px-3 py-2 text-slate-600">{project.licensorName ?? "-"}</td>
+                  <td className="border-b border-slate-100 px-3 py-2 text-slate-600">{project.ipName ?? "-"}</td>
                   <td className="border-b border-slate-100 px-3 py-2 text-slate-700">
                     {monthLabelFromDateString(draft.plannedLaunchDate) ?? project.month}
                   </td>
@@ -1695,7 +1728,7 @@ function PlanningTableView({
 
             {!hasRows ? (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-400">
+                <td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-400">
                   暂无匹配项目
                 </td>
               </tr>
@@ -1711,6 +1744,8 @@ function PlanningTableView({
       {
         rowId: `new-${Date.now()}`,
         name: "",
+        licensorName: "",
+        ipName: "",
         plannedLaunchDate: new Date().toISOString().slice(0, 10),
         routeType: "",
         projectTeam: "",
@@ -1745,10 +1780,22 @@ function PlanningTableView({
 
   async function saveNewProject(row: PlanningTableDraft) {
     const name = row.name.trim();
+    const licensorName = row.licensorName.trim();
+    const ipName = row.ipName.trim();
     const plannedLaunchDate = row.plannedLaunchDate.trim();
 
     if (!name) {
       onNotify("请先填写项目名称。", "warning");
+      return;
+    }
+
+    if (!licensorName) {
+      onNotify("请先填写版权方。", "warning");
+      return;
+    }
+
+    if (!ipName) {
+      onNotify("请先填写 IP。", "warning");
       return;
     }
 
@@ -1764,6 +1811,8 @@ function PlanningTableView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectName: name,
+          licensorName,
+          ipName,
           plannedLaunchDate,
           routeType: row.routeType,
           projectTeamId: row.projectTeam,
@@ -1796,6 +1845,11 @@ function PlanningTableView({
 
     if (!isValidDateString(draft.plannedLaunchDate)) {
       onNotify("请填写有效的计划上线日期。", "warning");
+      return;
+    }
+
+    if (compareDateStrings(draft.plannedLaunchDate, project.plannedLaunchDate) > 0) {
+      onNotify("计划上线只能提前，不能向后延期。", "warning");
       return;
     }
 
@@ -1862,6 +1916,8 @@ function PlanningTableView({
     const rows = [
       ...newRows.map((row) => ({
         name: row.name || "未命名项目",
+        licensorName: row.licensorName,
+        ipName: row.ipName,
         month: monthLabelFromDateString(row.plannedLaunchDate) ?? "",
         plannedLaunchDate: row.plannedLaunchDate,
         forecastLaunchDate: "待测算",
@@ -1874,6 +1930,8 @@ function PlanningTableView({
 
         return {
           name: project.name,
+          licensorName: project.licensorName ?? "",
+          ipName: project.ipName ?? "",
           month: monthLabelFromDateString(draft.plannedLaunchDate) ?? project.month,
           plannedLaunchDate: draft.plannedLaunchDate,
           forecastLaunchDate: project.forecastLaunchDate ?? "待测算",
@@ -1892,9 +1950,11 @@ function PlanningTableView({
     downloadPlanningTableCsv(
       "项目上线规划.csv",
       [
-        ["项目名称", "上线月份", "计划上线", "预测 / 完成", "状态", "路线", "项目组"],
+        ["项目名称", "版权方", "IP", "上线月份", "计划上线", "预测 / 完成", "状态", "路线", "项目组"],
         ...rows.map((row) => [
           row.name,
+          row.licensorName,
+          row.ipName,
           row.month,
           row.plannedLaunchDate,
           row.forecastLaunchDate,
@@ -1973,6 +2033,8 @@ function draftFromProject(project: CalendarProject): PlanningTableDraft {
     rowId: project.projectId,
     projectId: project.projectId,
     name: project.name,
+    licensorName: project.licensorName ?? "",
+    ipName: project.ipName ?? "",
     plannedLaunchDate: project.plannedLaunchDate,
     routeType: project.routeType,
     projectTeam: project.projectTeam,
@@ -2190,7 +2252,7 @@ function PlanningViewButton({
     <button
       onClick={onClick}
       className={clsx(
-        "inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-semibold",
+        "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-semibold",
         active ? "bg-white text-rose-700 shadow-sm" : "text-slate-500",
       )}
     >
@@ -2372,6 +2434,20 @@ function dateStringInTargetMonth(sourceDate: string, targetMonthLabel: string) {
 
 function isValidDateString(value: string) {
   return parseDateString(value) !== null;
+}
+
+function compareDateStrings(left: string, right: string) {
+  const leftDate = parseDateString(left);
+  const rightDate = parseDateString(right);
+
+  if (!leftDate || !rightDate) {
+    return 0;
+  }
+
+  return (
+    Date.UTC(leftDate.year, leftDate.month - 1, leftDate.day) -
+    Date.UTC(rightDate.year, rightDate.month - 1, rightDate.day)
+  );
 }
 
 function parseDateString(value: string) {

@@ -14,6 +14,7 @@ let runAndPersistScheduleAnalysis: typeof import("../src/lib/schedule-engine/ser
 let getScheduleWorkbenchData: typeof import("../src/lib/schedule-repository").getScheduleWorkbenchData;
 let ingestProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").ingestProjectTaskFactEvent;
 let parseProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").parseProjectTaskFactEvent;
+let ingestTaskFactEventAndRecalculate: typeof import("../src/lib/schedule-task-fact-events-service").ingestTaskFactEventAndRecalculate;
 let runtimeLoaded = false;
 
 type Scenario = {
@@ -77,11 +78,13 @@ type ScenarioEvent = {
   operatorId: string;
   operatorName: string;
   payload: Record<string, unknown>;
+  autoRecalculate?: boolean;
 };
 
 type ScenarioExpect = {
   processedEvents?: number;
   duplicateResponses?: number;
+  autoRecalculationRuns?: number;
   projects?: ProjectExpectation[];
   workbench?: {
     calendarYears?: number[];
@@ -122,6 +125,7 @@ type ScenarioRuntime = {
   batchId: string;
   projectIdByRef: Map<string, string>;
   duplicateResponses: number;
+  autoRecalculationRuns: number;
   scheduleRunId: string;
 };
 
@@ -185,12 +189,13 @@ async function loadRuntime() {
     return;
   }
 
-  const [db, domain, adapters, repository, events] = await Promise.all([
+  const [db, domain, adapters, repository, events, eventService] = await Promise.all([
     import("../src/lib/db/prisma"),
     import("../src/lib/schedule-domain"),
     import("../src/lib/schedule-engine/service"),
     import("../src/lib/schedule-repository"),
     import("../src/lib/schedule-task-fact-events-core"),
+    import("../src/lib/schedule-task-fact-events-service"),
   ]);
 
   prisma = db.prisma;
@@ -199,6 +204,7 @@ async function loadRuntime() {
   getScheduleWorkbenchData = repository.getScheduleWorkbenchData;
   ingestProjectTaskFactEvent = events.ingestProjectTaskFactEvent;
   parseProjectTaskFactEvent = events.parseProjectTaskFactEvent;
+  ingestTaskFactEventAndRecalculate = eventService.ingestTaskFactEventAndRecalculate;
   runtimeLoaded = true;
 }
 
@@ -241,15 +247,23 @@ async function runScenario(scenario: Scenario): Promise<ScenarioRuntime> {
   }
 
   let duplicateResponses = 0;
+  let autoRecalculationRuns = 0;
 
   for (const event of scenario.events ?? []) {
     const replayCount = event.replayCount ?? 1;
 
     for (let index = 0; index < replayCount; index += 1) {
-      const result = await ingestProjectTaskFactEvent(parseProjectTaskFactEvent(buildEvent(batchId, event, projectIdByRef)));
+      const parsedEvent = parseProjectTaskFactEvent(buildEvent(batchId, event, projectIdByRef));
+      const result = event.autoRecalculate
+        ? await ingestTaskFactEventAndRecalculate(parsedEvent)
+        : await ingestProjectTaskFactEvent(parsedEvent);
 
       if (result.duplicate) {
         duplicateResponses += 1;
+      }
+
+      if (recalculationStatus(result) === "success") {
+        autoRecalculationRuns += 1;
       }
 
       if (!result.ok) {
@@ -265,6 +279,7 @@ async function runScenario(scenario: Scenario): Promise<ScenarioRuntime> {
     batchId,
     projectIdByRef,
     duplicateResponses,
+    autoRecalculationRuns,
     scheduleRunId,
   };
 }
@@ -370,6 +385,19 @@ function buildEvent(
   };
 }
 
+function recalculationStatus(result: unknown) {
+  if (!result || typeof result !== "object" || !("recalculation" in result)) {
+    return undefined;
+  }
+
+  const recalculation = (result as { recalculation?: unknown }).recalculation;
+  if (!recalculation || typeof recalculation !== "object" || !("status" in recalculation)) {
+    return undefined;
+  }
+
+  return (recalculation as { status?: unknown }).status;
+}
+
 async function runScenarioScheduleAnalysis(scenario: Scenario, batchId: string, projectIds: string[]) {
   const calculatedAt = new Date();
   const scheduleRun = await prisma.scheduleRun.create({
@@ -417,6 +445,10 @@ async function assertScenario(runtime: ScenarioRuntime) {
 
   if (typeof scenario.expect?.duplicateResponses === "number") {
     assertions.push(equalResult("重复事件响应数量", runtime.duplicateResponses, scenario.expect.duplicateResponses));
+  }
+
+  if (typeof scenario.expect?.autoRecalculationRuns === "number") {
+    assertions.push(equalResult("任务事实自动重算次数", runtime.autoRecalculationRuns, scenario.expect.autoRecalculationRuns));
   }
 
   for (const expectation of scenario.expect?.projects ?? []) {

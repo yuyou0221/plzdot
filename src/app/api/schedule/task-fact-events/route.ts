@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import {
-  ingestProjectTaskFactEvent,
   parseProjectTaskFactEvent,
   TaskFactEventValidationError,
 } from "@/lib/schedule-task-fact-events";
+import { ingestTaskFactEventAndRecalculate } from "@/lib/schedule-task-fact-events-service";
 
 export const runtime = "nodejs";
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
   try {
     const event = parseProjectTaskFactEvent(eventInputFromPayload(payload));
-    const result = await ingestProjectTaskFactEvent(event);
+    const result = await ingestTaskFactEventAndRecalculate(event);
 
     if (!result.ok) {
       return NextResponse.json(result, { status: result.status ?? 422 });

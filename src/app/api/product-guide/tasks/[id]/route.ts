@@ -1,11 +1,32 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import { formatDate, optionalText, parseDateOnly, requiredText, todayDateOnly } from "@/lib/product-guide-mutation";
+import {
+  parseProjectTaskFactEvent,
+  TaskFactEventValidationError,
+  type ProjectTaskFactEvent,
+} from "@/lib/schedule-task-fact-events";
+import { ingestTaskFactEventAndRecalculate } from "@/lib/schedule-task-fact-events-service";
 
 export const runtime = "nodejs";
 
 type TaskAction = "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review";
+
+type ProductGuideTaskRow = {
+  id: string;
+  projectId: string;
+  taskNo: number;
+  taskName: string;
+  status: string;
+  actualStartDate: Date | null;
+  actualFinishDate: Date | null;
+  expectedFinishDate: Date | null;
+  isBlocked: boolean;
+};
+
+const allowedTaskActions: TaskAction[] = ["complete", "progress", "expected-finish", "block", "unblock", "submit-review"];
 const allowedTaskStatuses = new Set(["未开始", "进行中", "已完成", "阻塞", "暂停", "取消", "送审中", "已送审"]);
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -23,7 +44,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
   const action = optionalText(payload.action) as TaskAction | undefined;
 
-  if (!action || !["complete", "progress", "expected-finish", "block", "unblock", "submit-review"].includes(action)) {
+  if (!action || !allowedTaskActions.includes(action)) {
     return NextResponse.json({ ok: false, message: "无法识别任务动作。" }, { status: 400 });
   }
 
@@ -33,13 +54,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       select: {
         id: true,
         projectId: true,
+        taskNo: true,
         taskName: true,
         status: true,
+        actualStartDate: true,
         actualFinishDate: true,
         expectedFinishDate: true,
         isBlocked: true,
-        blockReason: true,
-        progressNote: true,
       },
     });
 
@@ -47,275 +68,36 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ ok: false, message: "找不到对应任务。" }, { status: 404 });
     }
 
-    const operatorName = optionalText(payload.operatorName) ?? "产品组工作指引";
-    const note = optionalText(payload.note);
-    const now = new Date();
-    const updateType = updateTypeForAction(action);
-
-    const result = await prisma.$transaction(async (tx) => {
-      if (action === "complete") {
-        const actualFinishDate = parseDateOnly(payload.actualFinishDate) ?? todayDateOnly();
-
-        const updatedTask = await tx.projectTask.update({
-          where: { id: task.id },
-          data: {
-            status: "已完成",
-            actualFinishDate,
-            isBlocked: false,
-            progressNote: note ?? task.progressNote,
-            lastUpdatedAt: now,
-            lastUpdatedBy: operatorName,
-          },
-          select: { id: true, taskName: true },
-        });
-
-        await tx.progressUpdate.create({
-          data: {
-            projectId: task.projectId,
-            projectTaskId: task.id,
-            updateType,
-            oldValue: {
-              status: task.status,
-              actualFinishDate: task.actualFinishDate ? formatDate(task.actualFinishDate) : null,
-              isBlocked: task.isBlocked,
-            },
-            newValue: {
-              status: "已完成",
-              actualFinishDate: formatDate(actualFinishDate),
-              isBlocked: false,
-            },
-            note,
-            updatedByName: operatorName,
-          },
-        });
-
-        return {
-          id: updatedTask.id,
-          taskName: updatedTask.taskName,
-          message: "已记录完成时间。该项目需要重新测算，预测视图将在重新测算后更新。",
-        };
-      }
-
-      if (action === "progress") {
-        const status = optionalText(payload.status);
-
-        if (status && !allowedTaskStatuses.has(status)) {
-          throw new MutationError("任务状态不在允许范围内。", 400);
-        }
-
-        if (!status && !note) {
-          throw new MutationError("请填写任务状态或当前进度。", 400);
-        }
-
-        const nextStatus = status ?? task.status;
-        const updatedTask = await tx.projectTask.update({
-          where: { id: task.id },
-          data: {
-            status: nextStatus,
-            progressNote: note ?? task.progressNote,
-            lastUpdatedAt: now,
-            lastUpdatedBy: operatorName,
-          },
-          select: { id: true, taskName: true },
-        });
-
-        await tx.progressUpdate.create({
-          data: {
-            projectId: task.projectId,
-            projectTaskId: task.id,
-            updateType,
-            oldValue: {
-              status: task.status,
-              progressNote: task.progressNote,
-            },
-            newValue: {
-              status: nextStatus,
-              progressNote: note ?? task.progressNote,
-            },
-            note,
-            updatedByName: operatorName,
-          },
-        });
-
-        return {
-          id: updatedTask.id,
-          taskName: updatedTask.taskName,
-          message: "已记录任务进度。进行中任务超过 3 天未更新时会继续提醒。",
-        };
-      }
-
-      if (action === "expected-finish") {
-        const expectedFinishDate = parseDateOnly(payload.expectedFinishDate);
-
-        if (!expectedFinishDate) {
-          throw new MutationError("请填写有效的预计完成日期。", 400);
-        }
-
-        const updatedTask = await tx.projectTask.update({
-          where: { id: task.id },
-          data: {
-            expectedFinishDate,
-            progressNote: note ?? task.progressNote,
-            lastUpdatedAt: now,
-            lastUpdatedBy: operatorName,
-          },
-          select: { id: true, taskName: true },
-        });
-
-        await tx.progressUpdate.create({
-          data: {
-            projectId: task.projectId,
-            projectTaskId: task.id,
-            updateType,
-            oldValue: {
-              expectedFinishDate: task.expectedFinishDate ? formatDate(task.expectedFinishDate) : null,
-              progressNote: task.progressNote,
-            },
-            newValue: {
-              expectedFinishDate: formatDate(expectedFinishDate),
-              progressNote: note ?? task.progressNote,
-            },
-            note,
-            updatedByName: operatorName,
-          },
-        });
-
-        return {
-          id: updatedTask.id,
-          taskName: updatedTask.taskName,
-          message: "已更新预计完成时间。该项目需要重新测算，预测视图将在重新测算后更新。",
-        };
-      }
-
-      if (action === "block") {
-        const blockReason = requiredText(payload.blockReason);
-
-        if (!blockReason) {
-          throw new MutationError("请填写阻塞原因。", 400);
-        }
-
-        const updatedTask = await tx.projectTask.update({
-          where: { id: task.id },
-          data: {
-            isBlocked: true,
-            blockReason,
-            progressNote: note ?? blockReason,
-            lastUpdatedAt: now,
-            lastUpdatedBy: operatorName,
-          },
-          select: { id: true, taskName: true },
-        });
-
-        await tx.progressUpdate.create({
-          data: {
-            projectId: task.projectId,
-            projectTaskId: task.id,
-            updateType,
-            oldValue: {
-              isBlocked: task.isBlocked,
-              blockReason: task.blockReason,
-              progressNote: task.progressNote,
-            },
-            newValue: {
-              isBlocked: true,
-              blockReason,
-              progressNote: note ?? blockReason,
-            },
-            note: note ?? blockReason,
-            updatedByName: operatorName,
-          },
-        });
-
-        return {
-          id: updatedTask.id,
-          taskName: updatedTask.taskName,
-          message: "已记录阻塞原因。该任务会继续出现在工作指引和管理层提醒中。",
-        };
-      }
-
-      if (action === "submit-review") {
-        const submittedAt = parseDateOnly(payload.submittedAt) ?? todayDateOnly();
-        const reviewTarget = optionalText(payload.reviewTarget) ?? "版权方 / 审核方";
-        const progressNote = note ?? `已于 ${formatDate(submittedAt)} 送审至${reviewTarget}，等待反馈。`;
-
-        const updatedTask = await tx.projectTask.update({
-          where: { id: task.id },
-          data: {
-            status: "送审中",
-            progressNote,
-            lastUpdatedAt: now,
-            lastUpdatedBy: operatorName,
-          },
-          select: { id: true, taskName: true },
-        });
-
-        await tx.progressUpdate.create({
-          data: {
-            projectId: task.projectId,
-            projectTaskId: task.id,
-            updateType,
-            oldValue: {
-              status: task.status,
-              progressNote: task.progressNote,
-            },
-            newValue: {
-              status: "送审中",
-              submittedAt: formatDate(submittedAt),
-              reviewTarget,
-              progressNote,
-            },
-            note: progressNote,
-            updatedByName: operatorName,
-          },
-        });
-
-        return {
-          id: updatedTask.id,
-          taskName: updatedTask.taskName,
-          message: "已记录送审状态。该项目需要重新测算，预测视图将在重新测算后更新。",
-        };
-      }
-
-      const updatedTask = await tx.projectTask.update({
-        where: { id: task.id },
-        data: {
-          isBlocked: false,
-          progressNote: note ?? task.progressNote,
-          lastUpdatedAt: now,
-          lastUpdatedBy: operatorName,
-        },
-        select: { id: true, taskName: true },
-      });
-
-      await tx.progressUpdate.create({
-        data: {
-          projectId: task.projectId,
-          projectTaskId: task.id,
-          updateType,
-          oldValue: {
-            isBlocked: task.isBlocked,
-            blockReason: task.blockReason,
-            progressNote: task.progressNote,
-          },
-          newValue: {
-            isBlocked: false,
-            blockReason: task.blockReason,
-            progressNote: note ?? task.progressNote,
-          },
-          note,
-          updatedByName: operatorName,
-        },
-      });
-
-      return {
-        id: updatedTask.id,
-        taskName: updatedTask.taskName,
-        message: "已解除阻塞。该项目需要重新测算，预测视图将在重新测算后更新。",
-      };
+    const event = buildProjectTaskFactEvent({
+      payload,
+      action,
+      task,
+      operatorId: auth.user.id,
+      operatorName: optionalText(payload.operatorName) ?? auth.user.name ?? auth.user.loginName,
     });
+    const parsedEvent = parseProjectTaskFactEvent(event);
+    const result = await ingestTaskFactEventAndRecalculate(parsedEvent);
 
-    return NextResponse.json({ ok: true, ...result, needsRecalculation: true });
+    if (!result.ok) {
+      return NextResponse.json(result, { status: result.status ?? 422 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      id: result.projectTaskId ?? task.id,
+      taskName: task.taskName,
+      eventId: result.eventId,
+      duplicate: result.duplicate,
+      needsRecalculation: result.needsRecalculation,
+      scheduleRunId: result.scheduleRunId,
+      recalculation: result.recalculation,
+      message: result.message,
+    });
   } catch (error) {
+    if (error instanceof TaskFactEventValidationError) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
+    }
+
     if (error instanceof MutationError) {
       return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
     }
@@ -333,13 +115,180 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-function updateTypeForAction(action: TaskAction) {
-  if (action === "complete") return "产品组标记任务完成";
-  if (action === "progress") return "产品组更新任务进度";
-  if (action === "expected-finish") return "产品组更新预计完成日期";
-  if (action === "block") return "产品组标记任务阻塞";
-  if (action === "submit-review") return "产品组标记任务送审";
-  return "产品组解除任务阻塞";
+function buildProjectTaskFactEvent({
+  payload,
+  action,
+  task,
+  operatorId,
+  operatorName,
+}: {
+  payload: Record<string, unknown>;
+  action: TaskAction;
+  task: ProductGuideTaskRow;
+  operatorId: string;
+  operatorName: string;
+}): ProjectTaskFactEvent {
+  const now = new Date();
+  const note = optionalText(payload.note);
+  const eventPayload = eventPayloadForAction(action, payload, task, note);
+
+  return {
+    eventId: optionalText(payload.eventId) ?? deterministicEventId(task.id, action, eventPayload),
+    eventType: eventTypeForAction(action, payload, task),
+    sourceModule: "product-guide",
+    projectId: task.projectId,
+    taskNo: task.taskNo,
+    taskKey: `#${task.taskNo}`,
+    taskName: task.taskName,
+    occurredAt: toIsoWithLocalOffset(now),
+    operatorId,
+    operatorName,
+    payload: eventPayload,
+  };
+}
+
+function eventTypeForAction(
+  action: TaskAction,
+  payload: Record<string, unknown>,
+  task: ProductGuideTaskRow,
+): ProjectTaskFactEvent["eventType"] {
+  if (action === "complete") return "task_completed";
+  if (action === "expected-finish") return "task_expected_finish_updated";
+  if (action === "block") return "task_blocked";
+  if (action === "unblock") return "task_unblocked";
+  if (action === "submit-review") return "task_submitted_for_review";
+
+  const status = normalizeStatus(optionalText(payload.status));
+  if (status === "进行中" && !task.actualStartDate) {
+    return "task_started";
+  }
+
+  return "task_note_updated";
+}
+
+function eventPayloadForAction(
+  action: TaskAction,
+  payload: Record<string, unknown>,
+  task: ProductGuideTaskRow,
+  note: string | undefined,
+) {
+  if (action === "complete") {
+    const actualFinishDate = parseDateOnly(payload.actualFinishDate) ?? todayDateOnly();
+
+    return {
+      actualFinishDate: formatDate(actualFinishDate),
+      ...(task.actualStartDate ? { actualStartDate: formatDate(task.actualStartDate) } : {}),
+      status: "已完成",
+      ...(note ? { note } : {}),
+    };
+  }
+
+  if (action === "expected-finish") {
+    const expectedFinishDate = parseDateOnly(payload.expectedFinishDate);
+    if (!expectedFinishDate) {
+      throw new MutationError("请填写有效的预计完成日期。", 400);
+    }
+
+    return {
+      expectedFinishDate: formatDate(expectedFinishDate),
+      status: "进行中",
+      ...(note ? { note } : {}),
+    };
+  }
+
+  if (action === "block") {
+    const blockReason = requiredText(payload.blockReason);
+    if (!blockReason) {
+      throw new MutationError("请填写阻塞原因。", 400);
+    }
+
+    const expectedFinishDate = parseDateOnly(payload.expectedFinishDate);
+
+    return {
+      status: "阻塞",
+      blockReason,
+      ...(expectedFinishDate ? { expectedFinishDate: formatDate(expectedFinishDate) } : {}),
+      ...(note ? { note } : {}),
+    };
+  }
+
+  if (action === "unblock") {
+    const expectedFinishDate = parseDateOnly(payload.expectedFinishDate);
+
+    return {
+      status: "进行中",
+      ...(expectedFinishDate ? { expectedFinishDate: formatDate(expectedFinishDate) } : {}),
+      ...(note ? { note } : {}),
+    };
+  }
+
+  if (action === "submit-review") {
+    const submittedAt = parseDateOnly(payload.submittedAt) ?? todayDateOnly();
+    const expectedFinishDate = parseDateOnly(payload.expectedFinishDate) ?? task.expectedFinishDate ?? submittedAt;
+    const reviewTarget = optionalText(payload.reviewTarget) ?? "版权方 / 审核方";
+
+    return {
+      submittedAt: formatDate(submittedAt),
+      expectedFinishDate: formatDate(expectedFinishDate),
+      status: "送审中",
+      reviewTarget,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  const status = normalizeStatus(optionalText(payload.status));
+  if (status && !allowedTaskStatuses.has(status)) {
+    throw new MutationError(`任务状态不在允许范围内：${status}`, 400);
+  }
+
+  if (!status && !note) {
+    throw new MutationError("请填写任务状态或当前进度。", 400);
+  }
+
+  if (status === "进行中" && !task.actualStartDate) {
+    return {
+      actualStartDate: formatDate(todayDateOnly()),
+      status: "进行中",
+      ...(note ? { note } : {}),
+    };
+  }
+
+  return {
+    ...(status ? { status } : {}),
+    ...(note ? { note } : {}),
+  };
+}
+
+function normalizeStatus(status: string | undefined) {
+  if (!status) {
+    return undefined;
+  }
+
+  if (status.includes("送审")) return "送审中";
+  if (status.includes("阻塞")) return "阻塞";
+  if (status.includes("暂停")) return "暂停";
+  if (status.includes("取消")) return "取消";
+  if (status.includes("完成")) return "已完成";
+  if (status.includes("进行")) return "进行中";
+  if (status.includes("未开始")) return "未开始";
+
+  return status;
+}
+
+function deterministicEventId(taskId: string, action: TaskAction, payload: Record<string, unknown>) {
+  const hash = createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 20);
+  return `product-guide:task-event:${taskId}:${action}:${hash}`;
+}
+
+function toIsoWithLocalOffset(date: Date) {
+  const timezoneOffset = -date.getTimezoneOffset();
+  const sign = timezoneOffset >= 0 ? "+" : "-";
+  const absoluteOffset = Math.abs(timezoneOffset);
+  const hours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
+  const minutes = String(absoluteOffset % 60).padStart(2, "0");
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+
+  return `${local.toISOString().slice(0, 19)}${sign}${hours}:${minutes}`;
 }
 
 class MutationError extends Error {

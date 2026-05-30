@@ -193,6 +193,7 @@ model ProjectTask {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  @@unique([projectId, taskNo])
   @@index([projectId, taskNo])
   @@index([status])
   @@index([milestoneType])

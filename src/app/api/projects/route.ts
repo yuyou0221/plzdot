@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
-import { normalizeProjectLaunchDatesForMonths } from "@/lib/schedule-engine/planned-launch-normalization";
-import { launchMonthKeyFromDate } from "@/lib/schedule-domain/planned-launch-rules";
 
 export const runtime = "nodejs";
 
 type CreateProjectRequest = {
   projectName?: string;
+  licensorName?: string;
+  ipName?: string;
   plannedLaunchDate?: string;
   routeType?: string;
   projectTeamId?: string;
@@ -26,10 +26,20 @@ export async function POST(request: Request) {
   }
 
   const projectName = normalizeRequiredText(payload.projectName);
+  const licensorName = normalizeRequiredText(payload.licensorName);
+  const ipName = normalizeRequiredText(payload.ipName);
   const plannedLaunchDate = parseDateOnly(payload.plannedLaunchDate);
 
   if (!projectName) {
     return NextResponse.json({ ok: false, message: "请填写项目名称。" }, { status: 400 });
+  }
+
+  if (!licensorName) {
+    return NextResponse.json({ ok: false, message: "请填写版权方。" }, { status: 400 });
+  }
+
+  if (!ipName) {
+    return NextResponse.json({ ok: false, message: "请填写 IP。" }, { status: 400 });
   }
 
   if (!plannedLaunchDate) {
@@ -37,30 +47,25 @@ export async function POST(request: Request) {
   }
 
   try {
-    const project = await prisma.$transaction(async (tx) => {
-      const createdProject = await tx.project.create({
-        data: {
-          projectName,
-          plannedLaunchDate,
-          routeType: normalizeOptionalText(payload.routeType),
-          projectTeamId: normalizeOptionalText(payload.projectTeamId),
-          status: "进行中",
-        },
-        select: { id: true },
-      });
-
-      await normalizeProjectLaunchDatesForMonths(tx, [launchMonthKeyFromDate(plannedLaunchDate)]);
-
-      return tx.project.findUniqueOrThrow({
-        where: { id: createdProject.id },
-        select: {
-          id: true,
-          projectName: true,
-          plannedLaunchDate: true,
-          routeType: true,
-          projectTeamId: true,
-        },
-      });
+    const project = await prisma.project.create({
+      data: {
+        projectName,
+        licensorName,
+        ipName,
+        plannedLaunchDate,
+        routeType: normalizeOptionalText(payload.routeType),
+        projectTeamId: normalizeOptionalText(payload.projectTeamId),
+        status: "进行中",
+      },
+      select: {
+        id: true,
+        projectName: true,
+        licensorName: true,
+        ipName: true,
+        plannedLaunchDate: true,
+        routeType: true,
+        projectTeamId: true,
+      },
     });
 
     return NextResponse.json({
