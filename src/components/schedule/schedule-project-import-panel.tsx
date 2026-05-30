@@ -82,6 +82,7 @@ type ApplyResponse = {
     createdProjects?: number;
     updatedProjects?: number;
     importedTaskFacts?: number;
+    taskRuleWarnings?: string[];
     rowCount: number;
     requiresRecalculation: boolean;
   };
@@ -433,6 +434,16 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
                   {isAnalyzing ? "重算中" : analyzeResult ? "已重算" : "一键重算排期"}
                 </button>
               ) : null}
+            </div>
+          ) : null}
+
+          {applyResult?.taskRuleWarnings?.length ? (
+            <div className="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <div className="font-semibold">任务规则v4 已按只读处理</div>
+              {applyResult.taskRuleWarnings.slice(0, 5).map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+              {applyResult.taskRuleWarnings.length > 5 ? <div>还有 {applyResult.taskRuleWarnings.length - 5} 条提醒。</div> : null}
             </div>
           ) : null}
 

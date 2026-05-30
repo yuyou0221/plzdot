@@ -5,9 +5,6 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { extractProjectWorkbook, previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
-import { milestoneByTaskNo } from "@/lib/schedule-domain";
-import { affectedLaunchMonthKeys, normalizeProjectLaunchDatesForMonths } from "@/lib/schedule-engine/planned-launch-normalization";
-import { launchMonthKeyFromDate } from "@/lib/schedule-domain/planned-launch-rules";
 
 type ProjectPreviewRow = ProjectMainImportPreview["rows"][number];
 
@@ -26,6 +23,7 @@ export type ProjectMainImportApplyResult = {
   importedTaskFacts: number;
   skippedTaskFacts: number;
   failedTaskFacts: number;
+  taskRuleWarnings: string[];
   rowCount: number;
   requiresRecalculation: boolean;
   previewSummary: ProjectMainImportPreview["summary"];
@@ -66,20 +64,23 @@ export async function applyProjectMainImport(
 
     let createdProjects = 0;
     let updatedProjects = 0;
-    const affectedMonths = new Set<string>();
-
     for (const row of preview.rows) {
-      if (row.plannedLaunchDate) {
-        affectedMonths.add(launchMonthKeyFromDate(dateOnly(row.plannedLaunchDate)));
-      }
-
       if (row.matchStatus === "matched" && row.matchedProjectId) {
-        const existingProject = await tx.project.findUnique({
-          where: { id: row.matchedProjectId },
-          select: { plannedLaunchDate: true },
-        });
-        for (const monthKey of affectedLaunchMonthKeys(existingProject?.plannedLaunchDate)) {
-          affectedMonths.add(monthKey);
+        const existingProject = row.plannedLaunchDate
+          ? await tx.project.findUnique({
+              where: { id: row.matchedProjectId },
+              select: { plannedLaunchDate: true, projectName: true },
+            })
+          : null;
+
+        if (
+          existingProject &&
+          row.plannedLaunchDate &&
+          dateOnlyTime(dateOnly(row.plannedLaunchDate)) > dateOnlyTime(existingProject.plannedLaunchDate)
+        ) {
+          throw new ProjectMainImportValidationError(
+            `${existingProject.projectName} 的计划上线只能提前，不能从 ${formatDate(existingProject.plannedLaunchDate)} 调整到 ${row.plannedLaunchDate}。`,
+          );
         }
 
         await tx.project.update({
@@ -100,10 +101,8 @@ export async function applyProjectMainImport(
       }
     }
 
-    await upsertTaskRulesFromWorkbook(tx, workbook.taskRules);
-    const actualImport = await applyActualTaskFactsFromWorkbook(tx, workbook.actuals, workbook.taskRules, importRecord.id, importedBy);
-
-    await normalizeProjectLaunchDatesForMonths(tx, affectedMonths);
+    const taskRuleWarnings = await compareWorkbookTaskRules(tx, workbook.taskRules);
+    const actualImport = await applyActualTaskFactsFromWorkbook(tx, workbook.actuals, workbook.taskRules, importedBy);
 
     await tx.dataImport.update({
       where: { id: importRecord.id },
@@ -120,6 +119,7 @@ export async function applyProjectMainImport(
           monthBuckets: preview.monthBuckets,
           sheets: preview.sheets,
           actualTaskFacts: actualImport,
+          taskRuleWarnings,
         },
       },
     });
@@ -132,6 +132,7 @@ export async function applyProjectMainImport(
       importedTaskFacts: actualImport.imported,
       skippedTaskFacts: actualImport.skipped,
       failedTaskFacts: actualImport.failed,
+      taskRuleWarnings,
       rowCount: preview.summary.totalRows,
       requiresRecalculation: true,
       previewSummary: preview.summary,
@@ -200,48 +201,55 @@ function projectUpdateData(row: ProjectPreviewRow, importId: string) {
   };
 }
 
-async function upsertTaskRulesFromWorkbook(tx: Prisma.TransactionClient, taskRules: Array<Record<string, unknown>>) {
+async function compareWorkbookTaskRules(tx: Prisma.TransactionClient, taskRules: Array<Record<string, unknown>>) {
+  if (taskRules.length === 0) {
+    return [];
+  }
+
+  const dbRules = await tx.taskRule.findMany({
+    where: { isActive: true, taskNo: { gte: 1, lte: 31 } },
+    select: { taskNo: true, taskName: true, standardWorkdays: true },
+  });
+  const dbRuleByTaskNo = new Map(dbRules.map((rule) => [rule.taskNo, rule]));
+  const warnings: string[] = [];
+
   for (const record of taskRules) {
     const taskNo = numberFieldAny(record, ["taskId", "taskNo", "任务编号", "任务ID"]);
-    if (!taskNo || taskNo < 1 || taskNo > 31) {
-      continue;
-    }
-
     const taskName = stringFieldAny(record, ["taskName", "任务名称"]);
-    if (!taskName) {
+    const standardWorkdays = numberFieldAny(record, ["durationDays", "标准工期"]);
+
+    if (!taskNo || taskNo < 1 || taskNo > 31 || !taskName) {
       continue;
     }
 
-    await tx.taskRule.upsert({
-      where: {
-        taskNo_sourceVersion: {
-          taskNo,
-          sourceVersion: "任务规则v4",
-        },
-      },
-      update: {
-        taskName,
-        milestoneType: milestoneByTaskNo(taskNo),
-        standardWorkdays: numberFieldAny(record, ["durationDays", "标准工期"]) ?? undefined,
-        isActive: true,
-      },
-      create: {
-        taskNo,
-        taskName,
-        milestoneType: milestoneByTaskNo(taskNo),
-        standardWorkdays: numberFieldAny(record, ["durationDays", "标准工期"]) ?? undefined,
-        sourceVersion: "任务规则v4",
-        isActive: true,
-      },
-    });
+    const dbRule = dbRuleByTaskNo.get(taskNo);
+    if (!dbRule) {
+      warnings.push(`任务规则v4 中 #${taskNo} ${taskName} 在系统规则中不存在，导入已忽略该规则。`);
+      continue;
+    }
+
+    if (normalizeKey(dbRule.taskName) !== normalizeKey(taskName)) {
+      warnings.push(`任务规则v4 中 #${taskNo} 名称为“${taskName}”，系统规则为“${dbRule.taskName}”，导入未修改系统规则。`);
+    }
+
+    if (
+      typeof standardWorkdays === "number" &&
+      typeof dbRule.standardWorkdays === "number" &&
+      standardWorkdays !== dbRule.standardWorkdays
+    ) {
+      warnings.push(
+        `任务规则v4 中 #${taskNo} 标准工期为 ${standardWorkdays}，系统规则为 ${dbRule.standardWorkdays}，导入未修改系统规则。`,
+      );
+    }
   }
+
+  return warnings;
 }
 
 async function applyActualTaskFactsFromWorkbook(
   tx: Prisma.TransactionClient,
   actuals: Array<Record<string, unknown>>,
   taskRules: Array<Record<string, unknown>>,
-  importId: string,
   importedBy: string,
 ) {
   const result = {
@@ -266,7 +274,7 @@ async function applyActualTaskFactsFromWorkbook(
   const projectByName = uniqueMap(projects, (project) => normalizeKey(project.projectName));
   const taskNoByName = await buildTaskNoByName(tx, taskRules);
 
-  for (const [index, record] of actuals.entries()) {
+  for (const record of actuals) {
     const recordKey = stringFieldAny(record, ["recordKey", "记录Key"]);
     const projectId = stringFieldAny(record, ["项目ID", "系统项目ID", "projectId"]);
     const projectName = stringFieldAny(record, ["项目名称"]);
@@ -293,8 +301,9 @@ async function applyActualTaskFactsFromWorkbook(
     }
 
     const eventType = actualFinishDate ? "task_completed" : "task_started";
+    const factDate = actualFinishDate || actualStartDate;
     const event = parseProjectTaskFactEvent({
-      eventId: `excel-import:${importId}:actual:${index + 2}:${project.id}:${taskNo}:${eventType}`,
+      eventId: `manual-excel:task-fact:${project.id}:${taskNo}:${eventType}:${factDate}`,
       eventType,
       sourceModule: "manual-excel",
       projectId: project.id,
@@ -465,6 +474,10 @@ function dateOnly(value: string) {
 
 function formatDate(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function dateOnlyTime(date: Date) {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 function buildProjectNotes(row: ProjectPreviewRow) {

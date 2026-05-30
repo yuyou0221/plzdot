@@ -1,0 +1,65 @@
+{
+  "id": "task-fact-auto-recalculation",
+  "name": "任务事实自动重算",
+  "description": "任务事实事件写入后自动创建测算批次并写回预测结果。",
+  "today": "2026-05-31",
+  "taskRules": [
+    { "taskNo": 1, "taskName": "市场调研", "standardWorkdays": 7 },
+    { "taskNo": 2, "taskName": "可行性研究", "standardWorkdays": 5 }
+  ],
+  "projects": [
+    {
+      "ref": "auto",
+      "projectCode": "AUTO01",
+      "projectName": "自动重算验证项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-AUTO",
+      "productType": "手办",
+      "plannedLaunchDate": "2026-08-20",
+      "projectStartDate": "2026-05-01",
+      "projectTeamId": "模拟项目组AUTO",
+      "projectOwnerId": "模拟产品研发AUTO",
+      "artOwnerId": "模拟产品美术AUTO"
+    }
+  ],
+  "events": [
+    {
+      "ref": "task-1-start",
+      "projectRef": "auto",
+      "eventType": "task_started",
+      "taskNo": 1,
+      "taskKey": "#1",
+      "taskName": "市场调研",
+      "occurredAt": "2026-05-01T09:00:00+08:00",
+      "operatorId": "schedule-simulation:auto-recalculation",
+      "operatorName": "模拟产品经理AUTO",
+      "autoRecalculate": true,
+      "payload": {
+        "actualStartDate": "2026-05-01",
+        "status": "进行中",
+        "note": "模拟产品组启动任务并触发自动重算"
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 1,
+    "duplicateResponses": 0,
+    "autoRecalculationRuns": 1,
+    "projects": [
+      {
+        "ref": "auto",
+        "taskCount": 1,
+        "tasks": [
+          {
+            "taskNo": 1,
+            "status": "进行中",
+            "actualStartDate": "2026-05-01"
+          }
+        ],
+        "scheduleResult": {
+          "exists": true
+        }
+      }
+    ]
+  }
+}

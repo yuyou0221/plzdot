@@ -57,7 +57,7 @@ projectDetails
 
 ```text
 1. 创建 Project 记录。
-2. 必填项目名称和计划上线日期。
+2. 必填项目名称、版权方、IP 和计划上线日期。
 3. 可选写入路线 routeType 和项目组 projectTeamId。
 4. 页面保存成功后会触发 /api/schedule/analyze 刷新预测和风险。
 ```
@@ -67,6 +67,8 @@ projectDetails
 ```json
 {
   "projectName": "小狗7代",
+  "licensorName": "版权方",
+  "ipName": "番茄IP",
   "plannedLaunchDate": "2026-09-15",
   "routeType": "常规路线",
   "projectTeamId": "产品一组"
@@ -85,6 +87,13 @@ routeType
 projectTeamId
 ```
 
+规则：
+
+```text
+1. plannedLaunchDate 只能调早，不能晚于原计划上线日期。
+2. 需要推迟整体计划时，不通过普通规划编辑静默写入，应走后续确认过的管理层重新规划流程。
+```
+
 ## DELETE /api/projects/:id
 
 用途：从表格视图删除项目。
@@ -92,7 +101,8 @@ projectTeamId
 当前行为：
 
 ```text
-删除 Project，并清理该项目关联的排期结果、建模进度、工作任务、任务卡、上线调整、拖拽日志和提醒。
+1. 只允许删除尚未产生任务事实、排期结果、建模进度、工作任务、任务卡或提醒的新项目。
+2. 已产生业务数据的项目会拒绝直接删除，后续应走归档或停用流程。
 ```
 
 ## POST /api/schedule/analyze
@@ -133,9 +143,10 @@ projectTeamId
 ```text
 1. 接收项目 ID 和目标上线日期，也兼容只传目标月份。
 2. 如果传 `toDate`，精确写入该日期；如果只传 `toMonth`，保留原计划上线日期的“日”，只替换年月；如目标月份天数不足则自动落到月底。
-3. 更新 Project.plannedLaunchDate。
-4. 生成 ScheduleAdjustment 和 TaskDragLog。
-5. 接口本身只负责保存；页面上的“保存调整”会在保存成功后继续调用 /api/schedule/analyze 刷新预测、风险和财务影响。
+3. 目标计划上线日期只能早于或等于原计划上线日期，不能向后推迟。
+4. 更新 Project.plannedLaunchDate。
+5. 生成 ScheduleAdjustment 和 TaskDragLog。
+6. 接口本身只负责保存；页面上的“保存调整”会在保存成功后继续调用 /api/schedule/analyze 刷新预测、风险和财务影响。
 ```
 
 请求示例：
@@ -168,8 +179,9 @@ projectTeamId
 6. 写入 ProjectTask 任务事实字段。
 7. 写入 ProgressUpdate。
 8. 写入 ProjectTaskFactEventLog。
-9. 返回 needsRecalculation=true，提示后续应由统一排期内核重新测算。
-10. 不写入 ScheduleProjectResult / ScheduleTaskResult，不计算风险、延期、预测上线和里程碑状态。
+9. 事件写入成功后创建 ScheduleRun，并通过统一排期内核端口触发重算。
+10. 重算成功后返回 scheduleRunId、项目数和任务数；重算失败时保留任务事实，并明确返回“事实已接收，重算失败”。
+11. 不在事件接收层计算风险、延期、预测上线和里程碑状态，这些结论只能来自统一排期内核结果。
 ```
 
 请求示例：
@@ -218,7 +230,7 @@ task_note_updated
 5. 日期字段统一 YYYY-MM-DD。
 6. occurredAt 必须是带时区 ISO，例如 2026-05-31T10:30:00+08:00。
 7. task_completed 如果 payload 带 actualStartDate，且原任务没有 actualStartDate，则补写；如果原任务已有 actualStartDate，不覆盖。
-8. 接收成功返回 ok=true、message=项目排期已接收任务事实事件、needsRecalculation=true。
+8. 接收成功返回 ok=true、message、needsRecalculation=true、scheduleRunId 和 recalculation。
 9. 接收失败返回 ok=false 和可读 message，例如 缺少 projectId。
 ```
 
@@ -283,8 +295,9 @@ project-main：项目主数据 Excel，格式参考“番茄项目规划信息�
 2. 接收 .xlsx 文件和 importType。
 3. 复用 legacy/schedule-engine/extract_project_excel.py 解析项目信息表、实际进度录入表、任务规则。
 4. 按项目编号、项目名称 + IP + 版权方、项目名称 + IP、项目名称依次尝试匹配现有项目。
-5. 返回已匹配、待新增、需确认、不可导入、基础资料新增、月度上线数量异常。
-6. 只读预览，不会创建项目，不会覆盖项目，不会触发排期重算。
+5. `任务规则v4` 只做只读校验；如果 Excel 规则和系统规则不一致，只给警告，不修改系统 TaskRule。
+6. 返回已匹配、待新增、需确认、不可导入、基础资料新增、月度上线数量异常和任务规则警告。
+7. 只读预览，不会创建项目，不会覆盖项目，不会触发排期重算。
 ```
 
 ## POST /api/imports/apply
@@ -307,8 +320,11 @@ project-main：项目主数据 Excel，合并补充模式。
 5. 已匹配项目会更新 Project 的基础字段。
 6. 会把“实际进度录入表”的开始 / 完成记录转成 ProjectTaskFactEvent 写入任务事实，sourceModule=manual-excel。
 7. 写入 DataImport 批次记录。
-8. 导入完成后只提示需要重新测算，不会静默触发排期内核。
-9. 当前不支持全量替换，也不删除 Excel 中缺失的旧项目。
+8. 实际进度事件 ID 按 projectId + taskNo + 事件类型 + 日期生成，重复导入同一事实不会重复写入。
+9. 导入时不写入 `任务规则v4` 到系统 TaskRule，只保留规则差异警告。
+10. 已匹配项目的计划上线日期只能调早，不能通过 Excel 向后推迟。
+11. 导入完成后只提示需要重新测算，不会静默触发排期内核。
+12. 当前不支持全量替换，也不删除 Excel 中缺失的旧项目。
 ```
 
 ## GET /api/schedule/export-excel
@@ -393,13 +409,12 @@ POST /api/product-guide/modeling-tasks
 当前行为：
 
 ```text
-1. PATCH /api/product-guide/tasks/:id 支持 complete、expected-finish、submit-review、block、unblock。
-2. complete 写入 ProjectTask.actualFinishDate、status=已完成，并记录 ProgressUpdate。
-3. expected-finish 写入 ProjectTask.expectedFinishDate 和进度备注，并记录 ProgressUpdate。
-4. submit-review 写入 ProjectTask.status=已送审、送审备注，并记录 ProgressUpdate。
-5. block / unblock 写入 ProjectTask.isBlocked、blockReason 和进度备注，并记录 ProgressUpdate。
+1. PATCH /api/product-guide/tasks/:id 是兼容层：页面动作先转换成 ProjectTaskFactEvent，再调用项目排期任务事实接收服务。
+2. 该接口不再直接写 ProjectTask / ProgressUpdate。
+3. progress 且状态为“进行中”、原任务没有 actualStartDate 时，转换为 task_started。
+4. complete 转换为 task_completed；expected-finish、submit-review、block、unblock 转换为对应扩展事件。
+5. 任务事实服务会负责写入事实、记录事件日志并触发统一排期内核重算。
 6. POST /api/product-guide/modeling-tasks 写入真实 ModelingTask，并轻量更新 ProjectModelingProgress。
-7. 这些写入只记录执行事实，不直接重算预测；页面会提示需要重新测算。
 ```
 
 ## 建模排期 API
