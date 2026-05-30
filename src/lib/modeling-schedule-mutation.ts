@@ -118,6 +118,7 @@ export async function updateModelingWorkTimer(taskId: string, action: "start" | 
       };
     }
 
+    await createWorkLogIfNeeded(tx, existing, now, "manual_stop", operatorName);
     const timerData = buildStopTimerData(existing.activeWorkStartedAt, now);
     const updated = await tx.modelingTask.update({
       where: { id: taskId },
@@ -228,6 +229,8 @@ export async function submitModelingWork(taskId: string, payload: Record<string,
       },
     });
 
+    await createWorkLogIfNeeded(tx, existing, now, "submit_modeling_work", submitterName);
+
     const updated = await tx.modelingTask.update({
       where: { id: taskId },
       data: {
@@ -259,6 +262,7 @@ export async function submitModelingWork(taskId: string, payload: Record<string,
       styleName: updated.styleName,
       modelingStatus: updated.status,
       feedbackId: submissionFeedback.id,
+      submissionFeedbackId: submissionFeedback.id,
       reviewRound: submissionFeedback.roundNo,
       submittedFromStatus: submissionSnapshot.submittedFromStatus,
       restoreStatusOnRejection: submissionSnapshot.restoreStatusOnRejection,
@@ -403,6 +407,7 @@ export async function updateModelingTask(taskId: string, payload: Record<string,
     }
 
     let nextStatus = explicitStatus ?? currentStatus;
+    let assignmentOutsourceVendorId = outsourceVendorId;
 
     if (modelerId !== undefined) {
       if (modelerId) {
@@ -448,6 +453,7 @@ export async function updateModelingTask(taskId: string, payload: Record<string,
       data.outsourceVendorId = vendor.id;
       data.stableOutsourceCapacity = vendor.stableCapacity;
       data.modelerId = null;
+      assignmentOutsourceVendorId = vendor.id;
       nextStatus = explicitStatus ?? "外包中";
     } else if (requestedOutsource === false) {
       data.isOutsourced = false;
@@ -497,8 +503,23 @@ export async function updateModelingTask(taskId: string, payload: Record<string,
       existing.activeWorkStartedAt &&
       (!timerActiveStatuses.has(nextStatus) || requestedOutsource === true || (modelerId !== undefined && modelerId !== existing.modelerId))
     ) {
+      await createWorkLogIfNeeded(
+        tx,
+        existing,
+        now,
+        requestedOutsource === true ? "mark_outsourced" : modelerId !== undefined && modelerId !== existing.modelerId ? "assignment_changed" : "status_changed",
+        "建模排期页面",
+      );
       Object.assign(data, buildStopTimerData(existing.activeWorkStartedAt, now));
     }
+
+    await recordAssignmentHistoryIfNeeded(tx, existing, {
+      modelerId,
+      requestedOutsource,
+      outsourceVendorId: assignmentOutsourceVendorId,
+      changedBy: "建模排期页面",
+      reason: optionalText(payload.assignmentReason) ?? optionalText(payload.reason),
+    });
 
     if (hasFeedback) {
       const latestFeedback = await tx.modelingFeedback.findFirst({
@@ -842,11 +863,15 @@ async function stopActiveTasksForModeler(
     },
     select: {
       id: true,
+      projectId: true,
+      projectTaskId: true,
+      modelerId: true,
       activeWorkStartedAt: true,
     },
   });
 
   for (const task of activeTasks) {
+    await createWorkLogIfNeeded(tx, task, now, "start_other_task", operatorName);
     await tx.modelingTask.update({
       where: { id: task.id },
       data: {
@@ -858,6 +883,97 @@ async function stopActiveTasksForModeler(
   }
 
   return activeTasks.map((task) => task.id);
+}
+
+async function createWorkLogIfNeeded(
+  tx: Prisma.TransactionClient,
+  task: {
+    id: string;
+    projectId: string;
+    projectTaskId: string;
+    modelerId: string | null;
+    activeWorkStartedAt: Date | null;
+  },
+  endedAt: Date,
+  stopReason: string,
+  stoppedBy: string,
+) {
+  const durationMinutes = minutesBetween(task.activeWorkStartedAt, endedAt);
+
+  if (!task.activeWorkStartedAt || durationMinutes <= 0) {
+    return;
+  }
+
+  await tx.modelingWorkLog.create({
+    data: {
+      modelingTaskId: task.id,
+      projectId: task.projectId,
+      projectTaskId: task.projectTaskId,
+      modelerId: task.modelerId,
+      startedAt: task.activeWorkStartedAt,
+      endedAt,
+      durationMinutes,
+      stopReason,
+      stoppedBy,
+    },
+  });
+}
+
+async function recordAssignmentHistoryIfNeeded(
+  tx: Prisma.TransactionClient,
+  existing: {
+    id: string;
+    projectId: string;
+    projectTaskId: string;
+    modelerId: string | null;
+    outsourceVendorId: string | null;
+    isOutsourced: boolean;
+  },
+  options: {
+    modelerId?: string | null;
+    requestedOutsource?: boolean;
+    outsourceVendorId?: string | null;
+    changedBy: string;
+    reason: string | null;
+  },
+) {
+  let assignmentType: string | null = null;
+  let toModelerId: string | null | undefined;
+  let toOutsourceVendorId: string | null | undefined;
+
+  if (options.modelerId !== undefined && options.modelerId !== existing.modelerId) {
+    assignmentType = options.modelerId ? "assign_modeler" : "clear_modeler";
+    toModelerId = options.modelerId;
+    toOutsourceVendorId = null;
+  }
+
+  if (options.requestedOutsource === true && options.outsourceVendorId !== existing.outsourceVendorId) {
+    assignmentType = "mark_outsourced";
+    toModelerId = null;
+    toOutsourceVendorId = options.outsourceVendorId ?? null;
+  } else if (options.requestedOutsource === false && (existing.isOutsourced || existing.outsourceVendorId)) {
+    assignmentType = "clear_outsource";
+    toOutsourceVendorId = null;
+  }
+
+  if (!assignmentType) {
+    return;
+  }
+
+  await tx.modelingAssignmentHistory.create({
+    data: {
+      modelingTaskId: existing.id,
+      projectId: existing.projectId,
+      projectTaskId: existing.projectTaskId,
+      assignmentType,
+      fromModelerId: existing.modelerId,
+      toModelerId,
+      fromOutsourceVendorId: existing.outsourceVendorId,
+      toOutsourceVendorId,
+      changedBy: options.changedBy,
+      reason: options.reason,
+    },
+  });
 }
 
 function buildStopTimerData(startedAt: Date | null, now: Date): Prisma.ModelingTaskUpdateInput {

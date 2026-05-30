@@ -278,6 +278,8 @@ POST /api/modeling/style-submissions
 POST /api/modeling/style-confirmations
 POST /api/modeling/style-start-events
 POST /api/modeling/review-results
+POST /api/modeling/style-cancellations
+POST /api/modeling/style-reopen-events
 GET /api/modeling/product-guide-events
 GET /api/modeling/projects/:projectId/styles
 GET /api/modeling/projects/:projectId/progress
@@ -291,11 +293,12 @@ GET /api/modeling/projects/:projectId/progress
 3. `status` 不能通过通用更新接口手动写入；状态由分配、外包、计时、提交成果和产品审核 / 送审结果自动生成。
 4. `feedbackContent` / `feedbackType` 不能通过通用更新接口写入；产品检修、版权反馈、内部通过 / 不通过、送审通过 / 不通过由 `POST /api/modeling/review-results` 写入。
 5. 建模师提交成果后状态进入“待验收”，写入 ModelingFeedback，供产品组工作指引读取。
-6. 建模计时按分钟累计，同一建模师同时只能有一个正在运行的计时；停止计时不作为手动输入，由开始其他款式或提交成果自动生成。
+6. 建模计时按分钟累计，同一建模师同时只能有一个正在运行的计时；停止计时不作为手动输入，由开始其他款式、提交成果、取消款式等事件自动生成，并写入 ModelingWorkLog。
 7. 每次保存会重算 ProjectModelingProgress。
 8. 所有必做款式已通过时，只生成 canWritebackProjectTask=true 和回写提示，不静默修改项目排期基线。
 9. 输出给产品组工作指引的主动事件会写入 ModelingProductGuideEvent，并随当前接口返回。
 10. 通用更新入口会返回 `eventType`，第一版用于标识当前保存动作，后续逐步拆成独立事件接口。
+11. 分配建模师、清空建模师、标记外包、取消外包会写入 ModelingAssignmentHistory。
 ```
 
 `PATCH /api/modeling/tasks/:id` 当前返回的 `eventType`：
@@ -326,6 +329,8 @@ update_modeler_inputs：保存建模侧可填写信息，例如剩余工时、�
 8. 匹配顺序：sourceStyleId、projectId+projectTaskId+styleCode、projectId+projectTaskId+styleSequence、projectId+projectTaskId+styleName。
 9. 返回建模排期专属 todos；存在待确认款式时生成“款式清单待确认”。
 10. `FIX-...`、`LOCAL-...`、`RESUBMIT-...`、`fixture-...` 等本地模拟自动编号属于测试字段，不等同于业务款式编号；对外展示时仅 admin 可见。
+11. 每次提交记录 `styleSubmissionBatchId` 和 `styleSubmissionVersion`；同一批次重复提交沿用原版本。
+12. 退回补充后的重新提交如果缺少原系列款式，会被拒绝；删除 / 取消款式必须走单独取消事件。
 ```
 
 ### POST /api/modeling/style-confirmations
@@ -335,11 +340,12 @@ update_modeler_inputs：保存建模侧可填写信息，例如剩余工时、�
 核心规则：
 
 ```text
-1. action=confirm 时，当前系列待确认款式统一转为 未启动。
+1. action=confirm 时，当前系列待确认款式默认转为 未启动；若对应任务 7 / 10 已经启动，则补充款式直接转为 未分配。
 2. action=return 时，必须填写 note，当前系列待确认款式统一转为 退回补充，并写入 ModelingFeedback。
 3. 确认前，款式不能分配、外包、排期、计时、提交成果或进入审核/送审。
 4. 确认时会校验第一款唯一、任务 7/10 归属、款式序号、难度、预计天数和原画过审信息。
 5. 第一版不支持部分确认；确认 / 退回都按系列整批处理。
+6. 如果对应任务 7 / 10 已经启动，补充确认的新款式会直接进入 未分配，并返回 autoStartedAfterConfirmation=true。
 ```
 
 确认 / 退回成功后返回 `styles`，作为产品组程序保存映射用的款式级任务清单：
@@ -350,6 +356,8 @@ projectTaskId
 taskNo
 modelingTaskId
 sourceStyleId
+styleSubmissionBatchId
+styleSubmissionVersion
 styleCode
 styleSequence
 styleName
@@ -362,6 +370,7 @@ difficulty
 estimatedWorkdays
 previousStatus
 modelingStatus
+autoStartedAfterConfirmation
 ```
 
 同时返回顶层 `productGuideEvent`，其中 `productGuideEvent.eventType` 为：
@@ -404,8 +413,11 @@ skippedStyles：被跳过的款式和跳过原因
 
 ```text
 1. 内部通过可送审 / 内部不通过：只能在款式状态为 待验收 时写入。
-2. 送审通过 / 送审不通过：只能在款式状态为 待送审 / 已送审 / 等反馈 时写入。
-3. 未提交建模成果的款式不能直接写入产品审核或版权方送审结果。
+2. 已送审：只能在款式状态为 待送审 时写入。
+3. 等反馈：只能在款式状态为 待送审 / 已送审 时写入。
+4. 送审通过 / 送审不通过：只能在款式状态为 待送审 / 已送审 / 等反馈 时写入。
+5. 未提交建模成果的款式不能直接写入产品审核或版权方送审结果。
+6. 审核结果必须对应最近一次建模师提交成果；请求可传 `submissionFeedbackId` / `feedbackId`，若不是最新提交会被拒绝。
 ```
 
 状态映射：
@@ -413,6 +425,8 @@ skippedStyles：被跳过的款式和跳过原因
 ```text
 内部通过可送审 -> 待送审，写入 internalApprovedDate
 内部不通过 -> 排队中，必须有文字反馈，生成内部审核反馈
+已送审 -> 已送审，生成送审记录
+等反馈 -> 等反馈，生成等待版权方反馈记录
 送审通过 -> 已通过，写入 copyrightApprovedDate
 送审不通过 -> 排队中，必须有文字反馈，生成版权方反馈
 ```
@@ -432,6 +446,7 @@ skippedStyles：被跳过的款式和跳过原因
 {
   "projectId": "project-id",
   "modelingTaskId": "modeling-task-id",
+  "submissionFeedbackId": "latest-modeling-submission-feedback-id",
   "reviewResult": "内部不通过",
   "reviewAt": "2026-05-29",
   "reviewerName": "产品组",
@@ -445,7 +460,35 @@ skippedStyles：被跳过的款式和跳过原因
 }
 ```
 
-返回字段会包含 `feedbackContent`、`feedbackAttachments`、`attachmentUrls`、`modelingStatus`、`restoreStatusOnRejection` 和 `writebackDraft`。
+返回字段会包含 `submissionFeedbackId`、`reviewedSubmissionRound`、`feedbackContent`、`feedbackAttachments`、`attachmentUrls`、`modelingStatus`、`restoreStatusOnRejection` 和 `writebackDraft`。
+
+### POST /api/modeling/style-cancellations
+
+用途：管理侧取消一个建模款式，避免通过重新提交缺少款式的方式静默删除。
+
+核心规则：
+
+```text
+1. 必须传 modelingTaskId 和 cancelReason / reason。
+2. 已通过款式不能直接取消，应先走 style-reopen-events。
+3. 必做款式取消必须显式传 releaseScheduleRequirement=true，表示该款不再计入项目必做建模完成口径。
+4. 如果款式存在运行中的计时，会自动停止并写入 ModelingWorkLog。
+5. 写入 ModelingFeedback，feedbackType=款式取消，并重算 ProjectModelingProgress。
+```
+
+### POST /api/modeling/style-reopen-events
+
+用途：管理侧将已通过款式重开，让它重新进入建模队列。
+
+核心规则：
+
+```text
+1. 必须传 modelingTaskId 和 reopenReason / reason。
+2. 只有 已通过 款式可以重开。
+3. 重开后状态回到 排队中，清空当前 internalApprovedDate、copyrightApprovedDate、actualFinishDate 和 actualWorkdays。
+4. 已累计工时和历史反馈保留。
+5. 写入 ModelingFeedback，feedbackType=已通过款式重开，并重算 ProjectModelingProgress。
+```
 
 ### POST /api/modeling/tasks/:id/work-submissions
 
@@ -478,6 +521,7 @@ styleSequence
 styleName
 modelingStatus=待验收
 feedbackId
+submissionFeedbackId
 reviewRound
 submittedFromStatus
 restoreStatusOnRejection
