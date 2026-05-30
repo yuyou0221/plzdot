@@ -1,13 +1,18 @@
 "use client";
 
-import { UserCircle } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { KeyRound, UserCircle } from "lucide-react";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { authRoleLabels, type AuthUser } from "@/lib/auth/permissions";
 
-type AccountPanelUser = Pick<AuthUser, "name" | "loginName" | "authRole">;
+type AccountPanelUser = Pick<AuthUser, "id" | "name" | "loginName" | "authRole">;
 
 export function AccountPanel({ currentUser }: { currentUser: AccountPanelUser }) {
+  const pathname = usePathname();
   const roleLabel = authRoleLabels[currentUser.authRole] ?? currentUser.authRole;
+  const canManageOwnAccount = currentUser.id !== "auth-disabled";
+  const passwordPageHref = `/account/password?next=${encodeURIComponent(pathname || "/")}`;
 
   return (
     <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -34,7 +39,16 @@ export function AccountPanel({ currentUser }: { currentUser: AccountPanelUser })
           <span className="font-medium text-slate-700">{roleLabel}</span>
         </div>
       </div>
-      <LogoutButton />
+      {canManageOwnAccount ? (
+        <Link
+          href={passwordPageHref}
+          className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+        >
+          <KeyRound size={15} />
+          修改密码
+        </Link>
+      ) : null}
+      <LogoutButton isAvailable={canManageOwnAccount} />
     </div>
   );
 }

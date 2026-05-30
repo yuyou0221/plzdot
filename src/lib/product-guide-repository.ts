@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
+import { getModelingProductGuideEvents } from "@/lib/modeling-product-guide-events";
 import type {
   ProductGuideData,
   ProductGuideDueBucket,
@@ -114,9 +115,15 @@ type ModelingTaskRow = {
   id: string;
   projectId: string;
   projectTaskId: string;
+  sourceStyleId: string | null;
+  styleSubmissionBatchId: string | null;
+  styleSubmissionVersion: number | null;
   styleCode: string;
+  styleSequence: string | null;
   styleName: string;
+  isFirstModelingStyle: boolean;
   isRequired: boolean;
+  referenceImageUrls: unknown;
   originalArtStatus: string;
   originalArtApprovedDate: Date | null;
   difficulty: string;
@@ -179,6 +186,8 @@ type WorkTaskRow = {
   updatedAt: Date;
 };
 
+type ModelingProductGuideEventRow = Awaited<ReturnType<typeof getModelingProductGuideEvents>>[number];
+
 type RefLabel = {
   key: string;
   label: string;
@@ -190,6 +199,8 @@ type ContextMaps = {
   taskById: Map<string, ProjectTaskRow>;
   projectResultById: Map<string, ProjectResultRow>;
   modelingProgressByProjectId: Map<string, ModelingProgressRow>;
+  latestModelingEventByTaskId: Map<string, ModelingProductGuideEventRow>;
+  latestModelingEventByProjectId: Map<string, ModelingProductGuideEventRow>;
   recentUpdatesByProjectId: Map<string, ProductGuideRecentUpdate[]>;
   recentUpdatesByTaskId: Map<string, ProductGuideRecentUpdate[]>;
 };
@@ -243,7 +254,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
         where: { runStatus: "成功" },
         orderBy: { calculatedAt: "desc" },
       }),
-      getScheduleWorkbenchData(),
+      getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true }),
     ]);
 
     if (projects.length === 0) {
@@ -251,7 +262,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
     }
 
     const projectIds = projects.map((project) => project.id);
-    const [projectResults, taskResults, projectTasks, modelingProgress, modelingTasks, alerts, workTasks, progressUpdates] =
+    const [projectResults, taskResults, projectTasks, modelingProgress, modelingTasks, modelingEvents, alerts, workTasks, progressUpdates] =
       await Promise.all([
         latestRun
           ? prisma.scheduleProjectResult.findMany({
@@ -339,9 +350,15 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
             id: true,
             projectId: true,
             projectTaskId: true,
+            sourceStyleId: true,
+            styleSubmissionBatchId: true,
+            styleSubmissionVersion: true,
             styleCode: true,
+            styleSequence: true,
             styleName: true,
+            isFirstModelingStyle: true,
             isRequired: true,
+            referenceImageUrls: true,
             originalArtStatus: true,
             originalArtApprovedDate: true,
             difficulty: true,
@@ -360,6 +377,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
             updatedAt: true,
           },
         }),
+        getModelingProductGuideEvents({ limit: 200, status: "pending" }),
         prisma.alert.findMany({
           where: {
             projectId: { in: projectIds },
@@ -428,6 +446,14 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       taskById: new Map(projectTasks.map((task) => [task.id, task])),
       projectResultById: new Map(projectResults.map((result) => [result.projectId, result])),
       modelingProgressByProjectId: new Map(modelingProgress.map((progress) => [progress.projectId, progress])),
+      latestModelingEventByTaskId: latestModelingEventsByKey(
+        modelingEvents.filter((event) => projectById.has(event.projectId)),
+        "modelingTaskId",
+      ),
+      latestModelingEventByProjectId: latestModelingEventsByKey(
+        modelingEvents.filter((event) => projectById.has(event.projectId)),
+        "projectId",
+      ),
       recentUpdatesByProjectId: groupRecentUpdates(progressUpdates, "projectId"),
       recentUpdatesByTaskId: groupRecentUpdates(progressUpdates, "projectTaskId"),
     };
@@ -618,12 +644,13 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
 
       const status = normalizeModelingStatus(modelingTask.status, modelingTask.isOutsourced);
       const staleDays = daysSince(modelingTask.lastUpdatedAt);
-      const isStale = status === "建模中" && staleDays > 3;
-      const needsArtReview = status === "已送审" || status === "等反馈" || status.includes("修改");
+      const isStale = (status === "建模中" || status === "待确认" || status === "退回补充") && staleDays > 3;
+      const needsArtReview = status === "待验收" || status === "待送审" || status === "已送审" || status === "等反馈" || status.includes("修改");
+      const needsStyleListFix = status === "退回补充";
       const isUnassigned = status === "未分配";
-      const isBlocked = needsArtReview || Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 0);
+      const isBlocked = needsStyleListFix || needsArtReview || Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 0);
 
-      if (!isUnassigned && !needsArtReview && !isStale && !isBlocked) {
+      if (!isUnassigned && !needsStyleListFix && !needsArtReview && !isStale && !isBlocked) {
         continue;
       }
 
@@ -638,6 +665,23 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
           isStale,
         }),
       );
+    }
+
+    for (const event of modelingEvents) {
+      const project = projectById.get(event.projectId);
+      if (!project || isCompletedProject(project, maps.projectResultById.get(project.id)) || isProjectPastModeling(project)) {
+        continue;
+      }
+
+      if (event.eventType !== "style_list_returned" && event.eventType !== "modeling_work_submitted") {
+        continue;
+      }
+
+      if (event.modelingTaskId && itemsById.has(`modeling:${event.modelingTaskId}`)) {
+        continue;
+      }
+
+      addOrMergeItem(itemsById, buildModelingEventItem({ project, event, maps }));
     }
 
     const items = Array.from(itemsById.values()).sort(sortGuideItems);
@@ -971,7 +1015,7 @@ function buildModelingProgressItem({
   const suggestion =
     kind === "unassigned"
       ? "该项目建模款式仍有未分配，请确认是否需要外包。"
-      : "该款式卡在送审 / 修改，请产品美术确认下一步反馈。";
+      : "该款式等待产品美术验收，请确认内部通过、退回修改或后续送审。";
   const count = kind === "unassigned" ? progress.unassignedStyles : progress.submittedStyles;
 
   return {
@@ -999,7 +1043,7 @@ function buildModelingProgressItem({
     isStale: daysSince(progress.lastCalculatedAt) > 3,
     isBlocked: kind === "submitted",
     requiresArtReview: true,
-    waitingLicensor: kind === "submitted",
+    waitingLicensor: false,
     dueDate: formatDate(progress.projectedAllApprovedDate),
     dueBucket: dueBucket(progress.projectedAllApprovedDate),
     reasonTags: [kind === "unassigned" ? "未分配款式" : "等待产品美术验收", "建模进度"],
@@ -1029,24 +1073,42 @@ function buildModelingTaskItem({
   isStale: boolean;
 }): ProductGuideItem {
   const projectRefs = projectReference(project, maps);
-  const owner = status === "未分配" ? projectRefs.productOwner : projectRefs.artOwner;
-  const needsArtReview = status === "已送审" || status === "等反馈" || status.includes("修改");
-  const isWaitingLicensor = status === "等反馈" || isWaitingLicensorText(modelingTask.blockType ?? "");
+  const owner = status === "未分配" || status === "待确认" || status === "退回补充" ? projectRefs.productOwner : projectRefs.artOwner;
+  const needsArtReview = status === "待验收" || status === "待送审" || status === "已送审" || status === "等反馈" || status.includes("修改");
+  const needsStyleListFix = status === "退回补充";
+  const isWaitingLicensor = status === "已送审" || status === "等反馈" || isWaitingLicensorText(modelingTask.blockType ?? "");
   const riskLevel: ProductGuideRiskLevel =
-    Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 3) || isWaitingLicensor ? "risk" : isStale ? "watch" : "watch";
+    needsStyleListFix || Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 3) || isWaitingLicensor ? "risk" : isStale ? "watch" : "watch";
   const suggestion =
     status === "未分配"
       ? "该项目建模款式仍有未分配，请确认是否需要外包。"
+      : status === "待确认"
+        ? "款式清单已提交给建模排期，等待建模侧确认；确认前不会进入正式建模。"
+      : status === "退回补充"
+        ? "建模侧退回了款式清单，请补齐完整系列款式后重新提交。"
       : needsArtReview
-        ? "该款式卡在送审 / 修改，请产品美术确认下一步反馈。"
+        ? status === "待验收"
+          ? "该款式已由建模师提交成果，请产品美术检修并给出内部审核结果。"
+          : status === "待送审"
+            ? "内部审核已通过，请产品美术提交版权方送审并记录送审结果。"
+          : "该款式卡在送审 / 修改，请产品美术确认下一步反馈。"
         : "请确认建模进度并补录最新更新时间。";
   const styleName = modelingTask.styleName || modelingTask.styleCode;
+  const latestEvent = maps.latestModelingEventByTaskId.get(modelingTask.id);
+  const eventPayload = rawObject(latestEvent?.payload);
+  const submissionFeedbackId = stringValue(eventPayload.submissionFeedbackId) ?? stringValue(eventPayload.feedbackId);
+  const feedbackId = stringValue(eventPayload.feedbackId) ?? submissionFeedbackId;
 
   return {
     id: `modeling:${modelingTask.id}`,
     source: "modeling",
     projectId: project.id,
     projectName: project.projectName,
+    modelingTaskId: modelingTask.id,
+    submissionFeedbackId,
+    feedbackId,
+    modelingEventType: latestEvent?.eventType === "modeling_work_submitted" ? "modeling_work_submitted" : undefined,
+    deliverableUrls: stringArray(eventPayload.deliverableUrls),
     ...projectRefs,
     taskId: modelingTask.projectTaskId,
     taskName: styleName,
@@ -1062,24 +1124,95 @@ function buildModelingTaskItem({
     lastUpdatedAt: formatDate(modelingTask.lastUpdatedAt ?? modelingTask.updatedAt),
     staleDays,
     isStale,
-    isBlocked: Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 0),
+    isBlocked: needsStyleListFix || Boolean(modelingTask.blockedDays && modelingTask.blockedDays > 0),
     requiresArtReview: needsArtReview,
     waitingLicensor: isWaitingLicensor,
     dueDate: formatDate(modelingTask.plannedFinishDate),
     dueBucket: dueBucket(modelingTask.plannedFinishDate),
     reasonTags: [
       status === "未分配" ? "未分配款式" : null,
+      status === "待确认" ? "等待建模确认" : null,
+      status === "退回补充" ? "款式清单退回补充" : null,
       needsArtReview ? "等待产品美术验收" : null,
+      status === "待送审" ? "等待送审" : null,
       isStale ? "超 3 天未更新" : null,
       isWaitingLicensor ? "等待版权方反馈" : null,
     ].filter(isString),
     projectProgressPercent: maps.projectResultById.get(project.id)?.projectProgressPercent ?? 0,
     modelingSummary: modelingSummary(project.id, maps),
-    reminderReason: `${styleName} 当前状态为 ${status}，需要产品组继续推进。`,
+    reminderReason:
+      status === "退回补充"
+        ? `${styleName} 所在款式清单被建模侧退回，需要补齐后重新提交。`
+        : `${styleName} 当前状态为 ${status}，需要产品组继续推进。`,
     nextStep: suggestion,
     relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
     riskCopy: modelingTask.blockType ?? `${styleName} 当前需要处理。`,
     recentUpdates: recentUpdatesFor(project.id, modelingTask.projectTaskId, maps),
+  };
+}
+
+function buildModelingEventItem({
+  project,
+  event,
+  maps,
+}: {
+  project: ProjectRow;
+  event: ModelingProductGuideEventRow;
+  maps: ContextMaps;
+}): ProductGuideItem {
+  const projectRefs = projectReference(project, maps);
+  const payload = rawObject(event.payload);
+  const styles = arrayOfObjects(payload.styles);
+  const firstStyle = rawObject(styles[0]);
+  const isReturned = event.eventType === "style_list_returned";
+  const modelingTaskId = event.modelingTaskId ?? stringValue(payload.modelingTaskId);
+  const submissionFeedbackId = stringValue(payload.submissionFeedbackId) ?? stringValue(payload.feedbackId);
+  const feedbackId = stringValue(payload.feedbackId) ?? submissionFeedbackId;
+  const styleName = stringValue(payload.styleName) ?? stringValue(firstStyle.styleName) ?? "建模款式";
+  const eventDate = new Date(event.occurredAt);
+  const staleDays = daysSince(Number.isNaN(eventDate.getTime()) ? undefined : eventDate);
+  const returnReason = stringValue(payload.returnReason) ?? "建模侧退回了款式清单，需要产品组补充。";
+  const title = isReturned ? "补充建模款式清单" : `${styleName} 建模成果验收`;
+  const suggestion = isReturned
+    ? "请按建模侧反馈补齐完整系列款式清单后重新提交，不要通过少传款式删除。"
+    : "请产品美术检修建模成果，并提交内部通过、内部不通过或后续送审结果。";
+
+  return {
+    id: `modeling-event:${event.eventId}`,
+    source: "modeling",
+    projectId: project.id,
+    projectName: project.projectName,
+    modelingTaskId: modelingTaskId ?? undefined,
+    submissionFeedbackId,
+    feedbackId,
+    modelingEventType: isReturned ? "style_list_returned" : "modeling_work_submitted",
+    deliverableUrls: stringArray(payload.deliverableUrls),
+    ...projectRefs,
+    taskId: event.projectTaskId ?? stringValue(payload.projectTaskId) ?? undefined,
+    taskName: title,
+    milestone: "建模里程碑",
+    ownerKey: isReturned ? projectRefs.productOwnerKey : projectRefs.artOwnerKey,
+    ownerName: isReturned ? projectRefs.productOwnerName : projectRefs.artOwnerName,
+    statusLabel: isReturned ? "退回补充" : "待验收",
+    riskLevel: isReturned ? "risk" : "watch",
+    riskLabel: riskLabel[isReturned ? "risk" : "watch"],
+    suggestion,
+    lastUpdatedAt: event.occurredAt.slice(0, 10),
+    staleDays,
+    isStale: staleDays > 3,
+    isBlocked: isReturned,
+    requiresArtReview: !isReturned,
+    waitingLicensor: false,
+    dueDate: event.occurredAt.slice(0, 10),
+    dueBucket: dueBucket(Number.isNaN(eventDate.getTime()) ? undefined : eventDate),
+    reasonTags: [isReturned ? "款式清单退回补充" : "建模成果待验收", "建模排期回传"],
+    projectProgressPercent: maps.projectResultById.get(project.id)?.projectProgressPercent ?? 0,
+    modelingSummary: modelingSummary(project.id, maps),
+    reminderReason: isReturned ? returnReason : "建模师已提交成果，等待产品美术验收。",
+    nextStep: suggestion,
+    relatedProjectProgress: projectProgressText(maps.projectResultById.get(project.id), project),
+    riskCopy: isReturned ? returnReason : "若不及时验收，建模任务会停在待验收状态。",
+    recentUpdates: recentUpdatesFor(project.id, event.projectTaskId ?? undefined, maps),
   };
 }
 
@@ -1133,11 +1266,18 @@ function buildStyleSummaries(modelingTasks: ModelingTaskRow[]): ProductGuideStyl
   return modelingTasks
     .map((task) => ({
       id: task.id,
+      modelingTaskId: task.id,
+      sourceStyleId: task.sourceStyleId ?? undefined,
+      styleSubmissionBatchId: task.styleSubmissionBatchId ?? undefined,
+      styleSubmissionVersion: task.styleSubmissionVersion ?? undefined,
       projectId: task.projectId,
       projectTaskId: task.projectTaskId,
       styleCode: task.styleCode,
       styleName: task.styleName || task.styleCode,
+      styleSequence: task.styleSequence ?? undefined,
+      isFirstModelingStyle: task.isFirstModelingStyle,
       isRequired: task.isRequired,
+      referenceImageUrls: referenceImagesFromJson(task.referenceImageUrls),
       originalArtStatus: task.originalArtStatus,
       originalArtApprovedDate: formatDate(task.originalArtApprovedDate),
       difficulty: task.difficulty,
@@ -1148,6 +1288,43 @@ function buildStyleSummaries(modelingTasks: ModelingTaskRow[]): ProductGuideStyl
       lastUpdatedAt: formatDate(task.lastUpdatedAt ?? task.updatedAt),
     }))
     .sort((a, b) => a.projectId.localeCompare(b.projectId) || a.styleCode.localeCompare(b.styleCode, "zh-CN"));
+}
+
+function latestModelingEventsByKey(
+  events: ModelingProductGuideEventRow[],
+  key: "projectId" | "projectTaskId" | "modelingTaskId",
+) {
+  const map = new Map<string, ModelingProductGuideEventRow>();
+
+  for (const event of events) {
+    const mapKey = event[key];
+    if (!mapKey || map.has(mapKey)) {
+      continue;
+    }
+
+    map.set(mapKey, event);
+  }
+
+  return map;
+}
+
+function referenceImagesFromJson(value: unknown): ProductGuideStyleSummary["referenceImageUrls"] {
+  const images: NonNullable<ProductGuideStyleSummary["referenceImageUrls"]> = [];
+
+  for (const item of arrayOfObjects(value)) {
+    const url = stringValue(item.url);
+    if (!url) {
+      continue;
+    }
+
+    images.push({
+      name: stringValue(item.name),
+      url,
+      type: stringValue(item.type),
+    });
+  }
+
+  return images;
 }
 
 function groupRecentUpdates(rows: ProgressUpdateRow[], key: "projectId" | "projectTaskId") {
@@ -1592,7 +1769,7 @@ function modelingSummary(projectId: string, maps: ContextMaps) {
     return "暂无建模款式进度。";
   }
 
-  return `建模 ${progress.approvedStyles}/${progress.totalRequiredStyles} 款通过，${progress.inProgressStyles} 款进行中，${progress.submittedStyles} 款送审，${progress.outsourcedStyles} 款外包，${progress.unassignedStyles} 款未分配。`;
+  return `建模 ${progress.approvedStyles}/${progress.totalRequiredStyles} 款通过，${progress.inProgressStyles} 款进行中，${progress.submittedStyles} 款待验收/送审，${progress.outsourcedStyles} 款外包，${progress.unassignedStyles} 款未分配。`;
 }
 
 function riskCopyForLevel(projectName: string, riskLevel: ProductGuideRiskLevel, isStale: boolean) {
@@ -1855,18 +2032,26 @@ function isDoneText(value?: string | null) {
 }
 
 function normalizeModelingStatus(value: string, isOutsourced: boolean) {
-  if (isOutsourced && (value.includes("排期") || value.includes("建模") || value.includes("进行"))) {
+  if (isOutsourced && (value.includes("排队") || value.includes("排期") || value.includes("建模") || value.includes("进行"))) {
     return "外包中";
   }
 
+  if (value.includes("待确认")) return "待确认";
+  if (value.includes("退回")) return "退回补充";
+  if (value.includes("未启动")) return "未启动";
   if (value.includes("未分配")) return "未分配";
+  if (value.includes("待验收") || value.includes("待内审") || value.includes("待审核")) return "待验收";
+  if (value.includes("待送审")) return "待送审";
   if (value.includes("送审")) return "已送审";
   if (value.includes("反馈")) return "等反馈";
+  if (value.includes("排队")) return "排队中";
   if (value.includes("修改") || value.includes("返修")) return "修改中";
   if (value.includes("建模")) return "建模中";
   if (value.includes("通过") || value.includes("完成")) return "已通过";
   if (value.includes("外包")) return "外包中";
   if (value.includes("排期")) return "已排期";
+  if (value.includes("暂停")) return "暂停";
+  if (value.includes("取消")) return "取消";
 
   return value || "待确认";
 }
@@ -1902,6 +2087,14 @@ function completionDateForRaw(value: unknown) {
 
 function rawObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function arrayOfObjects(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(stringValue).filter((item): item is string => Boolean(item)) : [];
 }
 
 function dateFromRawValue(value: unknown) {

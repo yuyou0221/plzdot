@@ -1,16 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
-import { appendMockIntegrationEntry, getMockIntegrationSnapshot } from "@/lib/product-guide-integration-mock";
+import { ModelingContractError, startModelingStyles } from "@/lib/modeling-product-guide-contract";
 
 export const runtime = "nodejs";
-
-export async function GET() {
-  const auth = await requireApiRole(["admin", "manager"]);
-  if ("response" in auth) return auth.response;
-
-  const snapshot = await getMockIntegrationSnapshot();
-  return NextResponse.json({ ok: true, events: snapshot.styleStartEvents });
-}
 
 export async function POST(request: Request) {
   const auth = await requireApiRole(["admin", "manager"]);
@@ -24,25 +16,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON。" }, { status: 400 });
   }
 
-  const taskNo = typeof payload.taskNo === "number" ? payload.taskNo : Number.NaN;
-  const scope = text(payload.startScope);
+  try {
+    const result = await startModelingStyles(payload, auth.user);
+    const message =
+      result.startedCount > 0
+        ? `已启动 ${result.startedCount} 个建模款式，跳过 ${result.skippedCount} 个。`
+        : `没有新的建模款式需要启动，跳过 ${result.skippedCount} 个。`;
 
-  if (taskNo !== 7 && taskNo !== 10) {
-    return NextResponse.json({ ok: false, message: "taskNo 必须是 7 或 10。" }, { status: 400 });
+    return NextResponse.json({
+      ok: true,
+      message,
+      ...result,
+    });
+  } catch (error) {
+    if (error instanceof ModelingContractError) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: error.statusCode });
+    }
+
+    return NextResponse.json(
+      {
+        ok: false,
+        message: error instanceof Error && error.message ? `启动建模款式失败：${error.message}` : "启动建模款式失败。",
+      },
+      { status: 500 },
+    );
   }
-
-  if ((taskNo === 7 && scope !== "first-style") || (taskNo === 10 && scope !== "remaining-styles")) {
-    return NextResponse.json({ ok: false, message: "taskNo 和 startScope 不匹配。" }, { status: 400 });
-  }
-
-  await appendMockIntegrationEntry("styleStartEvents", payload);
-
-  return NextResponse.json({
-    ok: true,
-    message: taskNo === 7 ? "模拟建模排期已启动第一款建模款式。" : "模拟建模排期已启动其余建模款式。",
-  });
-}
-
-function text(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
 }

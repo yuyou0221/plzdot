@@ -24,7 +24,7 @@ import {
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
 import { ScheduleProjectImportPanel } from "@/components/schedule/schedule-project-import-panel";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import {
   type CalendarProject,
   type Metric,
@@ -39,6 +39,7 @@ import {
 type MainView = "planning" | "forecast";
 type PlanningView = "milestone-plan" | "calendar" | "table" | "task-detail" | "project-entry";
 type ViewMode = "plan" | "forecast";
+type TaskRowsLoadState = "idle" | "loading" | "loaded" | "error";
 type MonthPoint = { year: number; month: number };
 type CalendarMoveDraft = {
   projectId: string;
@@ -105,6 +106,7 @@ const planningViewLabel: Record<PlanningView, string> = {
 
 export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ScheduleWorkbenchData }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [search, setSearch] = useState("");
   const [milestone, setMilestone] = useState<Milestone | "全部里程碑">("全部里程碑");
   const [riskOnly, setRiskOnly] = useState(false);
@@ -113,6 +115,11 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   const [selectedCalendarCycleStart, setSelectedCalendarCycleStart] = useState(data.calendarMonths[0] ?? "");
   const [calendarDateOverrides, setCalendarDateOverrides] = useState<Record<string, string>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string>(data.projectCards[0]?.projectId ?? "");
+  const [scheduleTasks, setScheduleTasks] = useState<ScheduleTaskRow[]>(data.scheduleTasks);
+  const [taskRowsLoadState, setTaskRowsLoadState] = useState<TaskRowsLoadState>(
+    data.scheduleTasks.length > 0 ? "loaded" : "idle",
+  );
+  const [projectDetails, setProjectDetails] = useState<Record<string, ProjectDetail>>(data.projectDetails);
   const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [operationTone, setOperationTone] = useState<"info" | "warning">("info");
   const [isSavingCalendarDrafts, setIsSavingCalendarDrafts] = useState(false);
@@ -153,14 +160,14 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   }, [calendarProjects, riskOnly, search]);
 
   const visibleScheduleTaskRows = useMemo(() => {
-    return data.scheduleTasks.filter((task) => {
+    return scheduleTasks.filter((task) => {
       const keyword = search.trim();
       const matchSearch = !keyword || task.projectName.includes(keyword) || task.taskName.includes(keyword);
       const matchRisk = !riskOnly || task.riskLevel === "risk" || task.riskLevel === "delay";
 
       return matchSearch && matchRisk;
     });
-  }, [data.scheduleTasks, riskOnly, search]);
+  }, [riskOnly, scheduleTasks, search]);
 
   const calendarDrafts = useMemo(() => {
     return Object.entries(calendarDateOverrides)
@@ -198,7 +205,82 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   }, [isPlanningCalendarLikeView, isTaskDetailView, visibleCalendarProjects, visibleCards, visibleScheduleTaskRows]);
   const activeProjectId =
     visibleProjectIds.length > 0 && !visibleProjectIds.includes(selectedProjectId) ? visibleProjectIds[0] : selectedProjectId;
-  const selectedProject = data.projectDetails[activeProjectId] ?? fallbackDetail(activeProjectId, data.projectCards);
+  const selectedProject = projectDetails[activeProjectId] ?? fallbackDetail(activeProjectId, data.projectCards);
+
+  useEffect(() => {
+    if (mainView !== "planning" || planningView !== "task-detail" || taskRowsLoadState !== "loading") {
+      return;
+    }
+
+    let isCancelled = false;
+
+    fetch("/api/schedule/tasks")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load schedule task rows");
+        }
+
+        return (await response.json()) as { tasks?: ScheduleTaskRow[] };
+      })
+      .then((payload) => {
+        if (isCancelled) {
+          return;
+        }
+
+        setScheduleTasks(payload.tasks ?? []);
+        setTaskRowsLoadState("loaded");
+      })
+      .catch(() => {
+        if (isCancelled) {
+          return;
+        }
+
+        setTaskRowsLoadState("error");
+        setOperationTone("warning");
+        setOperationMessage("任务明细加载失败，请刷新后再试。");
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [mainView, planningView, taskRowsLoadState]);
+
+  useEffect(() => {
+    if (!activeProjectId || projectDetails[activeProjectId]) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    fetch(`/api/projects/${encodeURIComponent(activeProjectId)}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load project detail");
+        }
+
+        return (await response.json()) as ProjectDetail;
+      })
+      .then((project) => {
+        if (isCancelled) {
+          return;
+        }
+
+        setProjectDetails((value) => ({ ...value, [project.id]: project }));
+      })
+      .catch(() => {
+        if (isCancelled) {
+          return;
+        }
+
+        setOperationTone("warning");
+        setOperationMessage("项目详情加载失败，当前先显示项目名称。");
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeProjectId, projectDetails]);
+
   const dateRangeLabel =
     isPlanningCalendarLikeView && selectedCalendarMonths.length > 0
       ? `${selectedCalendarMonths[0]} - ${selectedCalendarMonths[selectedCalendarMonths.length - 1]}`
@@ -243,13 +325,15 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               建模排期
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
             </button>
-            <button
-              onClick={() => router.push("/users")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              用户数据
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
-            </button>
+            {canOpenUserData ? (
+              <button
+                onClick={() => router.push("/users")}
+                className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+              >
+                用户数据
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
+              </button>
+            ) : null}
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>
@@ -354,7 +438,12 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                       active={planningView === "task-detail"}
                       icon={<ListFilter size={15} />}
                       label="任务明细"
-                      onClick={() => setPlanningView("task-detail")}
+                      onClick={() => {
+                        if (taskRowsLoadState === "idle") {
+                          setTaskRowsLoadState("loading");
+                        }
+                        setPlanningView("task-detail");
+                      }}
                     />
                     <PlanningViewButton
                       active={planningView === "project-entry"}
@@ -458,6 +547,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
             ) : planningView === "task-detail" ? (
               <TaskDetailView
                 tasks={visibleScheduleTaskRows}
+                loadState={taskRowsLoadState}
                 selectedProjectId={activeProjectId}
                 onSelect={setSelectedProjectId}
                 onNotify={notifyOperation}
@@ -1353,11 +1443,13 @@ const taskDetailColumns: TaskDetailColumn[] = [
 
 function TaskDetailView({
   tasks,
+  loadState,
   selectedProjectId,
   onSelect,
   onNotify,
 }: {
   tasks: ScheduleTaskRow[];
+  loadState: TaskRowsLoadState;
   selectedProjectId: string;
   onSelect: (projectId: string) => void;
   onNotify: (message: string, tone?: "info" | "warning") => void;
@@ -1378,6 +1470,7 @@ function TaskDetailView({
           </span>
           <button
             onClick={exportTaskDetails}
+            disabled={loadState === "loading"}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
           >
             <Download size={14} />

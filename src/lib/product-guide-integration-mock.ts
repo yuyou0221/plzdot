@@ -83,7 +83,7 @@ export async function buildMockStyleCreateResult(payload: Record<string, unknown
         styleCode,
         styleName,
         modelingTaskId: mockModelingTaskId(projectId, text(style.projectTaskId) || projectTaskId, styleCode, text(style.styleSequence)),
-        modelingStatus: "未启动",
+        modelingStatus: "待确认",
         createdOrUpdated: "created" as const,
       };
     }),
@@ -114,7 +114,7 @@ export async function buildMockModelingStyles(projectId: string) {
         styleSequence,
         isFirstModelingStyle: style.isFirstModelingStyle === true,
         isRequired: style.isRequired !== false,
-        status: "未启动",
+        status: "待确认",
         estimatedWorkdays: numberValue(style.estimatedWorkdays) ?? 7,
         internalApprovedDate: null,
         copyrightApprovedDate: null,
@@ -139,8 +139,9 @@ export async function buildMockModelingProgress(projectId: string) {
   const totalRequiredStyles = requiredStyles.length;
   const approvedStyles = requiredStyles.filter((style) => style.status === "已通过").length;
   const inProgressStyles = requiredStyles.filter((style) => ["已排期", "建模中", "修改中"].includes(style.status)).length;
-  const submittedStyles = requiredStyles.filter((style) => ["待送审", "已送审", "等反馈"].includes(style.status)).length;
+  const submittedStyles = requiredStyles.filter((style) => ["待验收", "待送审", "已送审", "等反馈"].includes(style.status)).length;
   const unassignedStyles = requiredStyles.filter((style) => style.status === "未分配").length;
+  const unstartedStyles = requiredStyles.filter((style) => style.status === "待确认" || style.status === "未启动").length;
 
   return {
     projectId,
@@ -149,7 +150,9 @@ export async function buildMockModelingProgress(projectId: string) {
     approvedStyles,
     inProgressStyles,
     submittedStyles,
+    waitingSubmissionStyles: requiredStyles.filter((style) => style.status === "待送审").length,
     outsourcedStyles: 0,
+    unstartedStyles,
     unassignedStyles,
     progressPercent: totalRequiredStyles > 0 ? Math.round((approvedStyles / totalRequiredStyles) * 100) : 0,
     canWritebackProjectTask: totalRequiredStyles > 0 && approvedStyles === totalRequiredStyles,
@@ -193,11 +196,15 @@ function applyReviewResults(styleMap: Map<string, MockStyle>, entries: MockInteg
     if (result === "内部通过可送审") {
       style.status = "待送审";
       style.internalApprovedDate = text(payload.reviewAt) || null;
+    } else if (result === "已送审") {
+      style.status = "已送审";
+    } else if (result === "等反馈") {
+      style.status = "等反馈";
     } else if (result === "送审通过") {
       style.status = "已通过";
       style.copyrightApprovedDate = text(payload.reviewAt) || null;
     } else {
-      style.status = "修改中";
+      style.status = "排队中";
       style.blockType = result === "内部不通过" ? "内部审核反馈" : "版权方反馈";
       style.blockedDays = 0;
     }

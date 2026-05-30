@@ -32,6 +32,9 @@ export async function POST(request: Request) {
       loginName: true,
       passwordHash: true,
       authRole: true,
+      permissionLevel: true,
+      roleTitle: true,
+      businessRoles: true,
     },
   });
 
@@ -56,6 +59,9 @@ export async function POST(request: Request) {
       name: user.name,
       loginName: user.loginName,
       authRole: user.authRole,
+      permissionLevel: user.permissionLevel,
+      roleTitle: user.roleTitle,
+      businessRoles: user.businessRoles,
     },
   });
 

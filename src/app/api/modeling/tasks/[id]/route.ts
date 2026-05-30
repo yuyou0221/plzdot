@@ -27,6 +27,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return NextResponse.json({
       ok: true,
       message: result.message,
+      eventType: result.eventType,
       task,
       projectSummary,
       writebackDraft: result.writebackDraft,

@@ -125,7 +125,7 @@ const mockActions: MockActionMeta[] = [
     title: "录入款式清单",
     target: "建模排期",
     output: "style-submissions",
-    description: "提交两条款式，并标记第一款建模款式。",
+    description: "提交完整系列款式，并标记第一款；提交后先等待建模侧确认。",
   },
   {
     key: "task-7-start",
@@ -524,20 +524,20 @@ async function fetchSnapshot() {
 }
 
 async function fetchReadableData(projectId: string) {
-  const [stylesResponse, progressResponse] = await Promise.all([
-    fetch(`/api/modeling/projects/${encodeURIComponent(projectId)}/styles`, { cache: "no-store" }),
-    fetch(`/api/modeling/projects/${encodeURIComponent(projectId)}/progress`, { cache: "no-store" }),
-  ]);
-  const [styles, progress] = await Promise.all([stylesResponse.json(), progressResponse.json()]);
+  const response = await fetch(`/api/product-guide/mock-lab?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+  const result = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
-  return { styles, progress };
+  return {
+    styles: result.styles ?? { ok: false, message: "未读取到模拟款式状态。" },
+    progress: result.progress ?? { ok: false, message: "未读取到模拟建模进度。" },
+  };
 }
 
 async function postJson(path: string, payload: Record<string, unknown>) {
-  const response = await fetch(path, {
+  const response = await fetch("/api/product-guide/mock-lab", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ path, payload }),
   });
   const result = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
@@ -730,7 +730,7 @@ function taskFactEventRequest(
 
 function styleSubmissionRequest(context: SimulationContext): SimulationRequest {
   return {
-    label: "录入款式清单 -> 建模排期创建未启动款式任务",
+    label: "录入款式清单 -> 建模排期创建待确认款式任务",
     path: "/api/modeling/style-submissions",
     payload: {
       sourceRequestId: createRequestId("styles"),
@@ -811,6 +811,8 @@ function modelingReviewRequest(context: SimulationContext): SimulationRequest {
       projectId: context.projectId,
       projectTaskId: context.firstTaskId,
       modelingTaskId: context.firstModelingTaskId,
+      submissionFeedbackId: "mock-feedback-latest-001",
+      feedbackId: "mock-feedback-latest-001",
       reviewResult: "内部通过可送审",
       reviewAt: "2026-05-30",
       reviewerId: mockOperatorId,

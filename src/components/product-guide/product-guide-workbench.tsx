@@ -24,7 +24,7 @@ import {
   type StyleListImage,
   type StyleListTaskRefs,
 } from "@/components/product-guide/style-list-modal";
-import type { AuthUser } from "@/lib/auth/permissions";
+import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
   ProductGuideItem,
@@ -55,7 +55,7 @@ type TaskActionForm = {
   expectedFinishDate: string;
   submittedAt: string;
   reviewTarget: string;
-  modelingReviewResult: "内部通过可送审" | "内部不通过" | "送审通过" | "送审不通过";
+  modelingReviewResult: "内部通过可送审" | "内部不通过" | "已送审" | "等反馈" | "送审通过" | "送审不通过";
   blockReason: string;
   note: string;
 };
@@ -135,6 +135,7 @@ const taskStatusOptions = ["未开始", "进行中", "暂停", "取消"];
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
+  const canOpenUserData = canAccessUserData(currentUser);
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [artFilter, setArtFilter] = useState("all");
@@ -351,22 +352,22 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         }
 
         let nextMessage = result.message ?? "已保存。";
+        let nextTone: "info" | "warning" = "info";
         if (result.modelingStartEvent) {
           const startResult = await submitModelingStartEvent(result.modelingStartEvent);
           if (!startResult.ok) {
-            setActiveAction(null);
-            notify(startResult.message, "warning");
-            router.refresh();
-            return;
+            nextMessage = `${nextMessage} 建模启动通知未完成：${startResult.message}`;
+            nextTone = "warning";
+          } else {
+            nextMessage = `${nextMessage} ${startResult.message}`;
           }
-          nextMessage = `${nextMessage} ${startResult.message}`;
         }
 
         setActiveAction(null);
         setStyleListProjectTaskId("");
         setStyleListTaskRefs(null);
         setStyleListHandoffMessage("");
-        notify(nextMessage);
+        notify(nextMessage, nextTone);
         router.refresh();
       },
     });
@@ -400,7 +401,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         setStyleListTaskRefs(null);
         setStyleListHandoffMessage("");
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已提交款式清单给建模排期，默认状态为未启动。");
+        notify(result.message ?? "已提交款式清单给建模排期，等待建模侧确认。");
         router.refresh();
       },
     });
@@ -408,9 +409,15 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
 
   async function saveModelingReviewResult(item: ProductGuideItem) {
     const modelingTaskId = modelingTaskIdFromItem(item);
+    const needsFeedback = taskForm.modelingReviewResult === "内部不通过" || taskForm.modelingReviewResult === "送审不通过";
 
     if (!modelingTaskId || !item.taskId) {
       notify("当前建模款式缺少建模任务编号，不能提交审核结果。", "warning");
+      return;
+    }
+
+    if (needsFeedback && !taskForm.note.trim()) {
+      notify("内部不通过或送审不通过时，请填写具体修改意见。", "warning");
       return;
     }
 
@@ -426,6 +433,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         reviewAt: taskForm.submittedAt,
         reviewerId: currentUser.id,
         reviewerName: currentUser.name,
+        submissionFeedbackId: item.submissionFeedbackId,
+        feedbackId: item.feedbackId,
         feedbackContent: taskForm.note || undefined,
       },
       onSuccess: (result) => {
@@ -457,7 +466,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setStyleListProjectTaskId(options?.taskRefs?.firstStyleTask?.id ?? "");
     setStyleListTaskRefs(options?.taskRefs ?? null);
     setStyleListHandoffMessage(
-      options?.message ?? "请填写完整款式清单，并标记哪一款是第一款建模款式。提交后款式默认未启动。",
+      options?.message ?? "请填写完整款式清单，并标记哪一款是第一款建模款式。提交后先等待建模侧确认，确认前不会启动建模。",
     );
     setActiveAction("style-list");
 
@@ -621,7 +630,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
             <SideNavButton label="项目排期" badge="P0" onClick={() => router.push("/")} />
             <SideNavButton label="产品组工作指引" badge="P0" active />
             <SideNavButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
-            <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} />
+            {canOpenUserData ? <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} /> : null}
             <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
           <AccountPanel currentUser={currentUser} />
@@ -1400,6 +1409,7 @@ function DetailPanel({
               form={taskForm}
               setForm={setTaskForm}
               isModelingReview={item.source === "modeling"}
+              statusLabel={item.statusLabel}
               saving={saving}
               onCancel={() => setActiveAction(null)}
               onSubmit={() => onSaveTaskAction("submit-review")}
@@ -1750,6 +1760,7 @@ function SubmitReviewForm({
   form,
   setForm,
   isModelingReview,
+  statusLabel,
   saving,
   onCancel,
   onSubmit,
@@ -1757,10 +1768,13 @@ function SubmitReviewForm({
   form: TaskActionForm;
   setForm: (form: TaskActionForm) => void;
   isModelingReview: boolean;
+  statusLabel: string;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const reviewOptions = modelingReviewOptions(statusLabel);
+
   return (
     <div className="grid gap-3">
       <div className="text-sm font-semibold text-slate-900">{isModelingReview ? "提交建模审核 / 送审结果" : "记录任务已送审"}</div>
@@ -1777,10 +1791,11 @@ function SubmitReviewForm({
             }
             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
           >
-            <option value="内部通过可送审">内部通过可送审</option>
-            <option value="内部不通过">内部不通过</option>
-            <option value="送审通过">送审通过</option>
-            <option value="送审不通过">送审不通过</option>
+            {reviewOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
           </select>
         </label>
       ) : null}
@@ -2240,6 +2255,10 @@ function parseNonNegativeInteger(value: string) {
 }
 
 function modelingTaskIdFromItem(item: ProductGuideItem) {
+  if (item.modelingTaskId) {
+    return item.modelingTaskId;
+  }
+
   return item.source === "modeling" && item.id.startsWith("modeling:") ? item.id.slice("modeling:".length) : null;
 }
 
@@ -2260,6 +2279,14 @@ function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
 function defaultModelingReviewResult(item?: ProductGuideItem): TaskActionForm["modelingReviewResult"] {
   const text = `${item?.statusLabel ?? ""} ${item?.taskName ?? ""} ${item?.riskCopy ?? ""}`;
 
+  if (text.includes("待验收")) {
+    return "内部通过可送审";
+  }
+
+  if (text.includes("待送审")) {
+    return "已送审";
+  }
+
   if (text.includes("不通过") || text.includes("驳回") || text.includes("修改")) {
     return "送审不通过";
   }
@@ -2269,6 +2296,22 @@ function defaultModelingReviewResult(item?: ProductGuideItem): TaskActionForm["m
   }
 
   return "内部通过可送审";
+}
+
+function modelingReviewOptions(statusLabel: string): TaskActionForm["modelingReviewResult"][] {
+  if (statusLabel.includes("待验收")) {
+    return ["内部通过可送审", "内部不通过"];
+  }
+
+  if (statusLabel.includes("待送审")) {
+    return ["已送审", "等反馈", "送审通过", "送审不通过"];
+  }
+
+  if (statusLabel.includes("已送审") || statusLabel.includes("等反馈")) {
+    return ["等反馈", "送审通过", "送审不通过"];
+  }
+
+  return ["内部通过可送审", "内部不通过", "已送审", "等反馈", "送审通过", "送审不通过"];
 }
 
 function normalizeTaskStatus(value?: string) {

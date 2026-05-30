@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
-import { bypassAuthUser, isAuthEnabled, type AuthUser } from "@/lib/auth/permissions";
+import { bypassAuthUser, isAuthEnabled, normalizeUserPermissionLevel, type AuthUser } from "@/lib/auth/permissions";
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
   if (!isAuthEnabled()) {
@@ -26,6 +26,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       name: true,
       loginName: true,
       authRole: true,
+      permissionLevel: true,
+      roleTitle: true,
+      businessRoles: true,
       passwordHash: true,
       status: true,
     },
@@ -40,6 +43,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     name: user.name,
     loginName: user.loginName,
     authRole: user.authRole,
+    permissionLevel: normalizeUserPermissionLevel(user.permissionLevel),
+    roleTitle: user.roleTitle ?? undefined,
+    businessRoles: jsonStringList(user.businessRoles),
   };
 }
 
@@ -51,4 +57,10 @@ export async function requireCurrentUser(nextPath: string) {
   }
 
   return user;
+}
+
+function jsonStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
 }

@@ -178,7 +178,7 @@ export function StyleListModal({
             <div className="text-sm font-medium text-slate-500">建模款式清单</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">{projectName}</h2>
             <div className="mt-1 text-sm text-slate-500">
-              {message || "原画里程碑完成后登记完整款式清单；建模任务默认未启动，任务 7/10 启动时再进入未分配。"}
+              {message || "原画里程碑完成后登记完整款式清单；提交后先等待建模侧确认，任务 7/10 启动时再进入未分配。"}
             </div>
           </div>
           <button

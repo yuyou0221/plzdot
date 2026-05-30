@@ -325,7 +325,7 @@ async function buildOriginalArtStyleListHandoff(projectId: string, completedTask
     styleListProjectTaskId: modelingProjectTask?.id,
     styleListTaskRefs: taskRefs,
     styleListMessage: modelingProjectTask
-      ? "原画里程碑已完成，请录入建模款式清单。提交后款式默认未启动，任务 7 / 10 启动时再通知建模排期。"
+      ? "原画里程碑已完成，请录入建模款式清单。提交后先等待建模侧确认，任务 7 / 10 启动时再通知建模排期。"
       : "原画里程碑已完成，请录入建模款式清单；但当前项目缺少建模任务 7 / 10，请先确认任务模板。",
   };
 }
