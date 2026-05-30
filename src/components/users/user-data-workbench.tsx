@@ -586,7 +586,6 @@ export function UserDataWorkbench({ data, currentUser }: { data: UserDataWorkben
             <SideNavButton label="产品组工作指引" badge="P0" onClick={() => router.push("/product-guide")} />
             <SideNavButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
             <SideNavButton label="用户数据" badge="基础" active />
-            <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>

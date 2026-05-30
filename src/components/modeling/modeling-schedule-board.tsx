@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
-  FileSpreadsheet,
   GripVertical,
   ListChecks,
   Loader2,
@@ -650,13 +649,6 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
               </button>
             ) : null}
-            <button
-              onClick={() => router.push("/imports")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              数据导入
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">预览</span>
-            </button>
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>
@@ -688,14 +680,6 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
               >
                 <Workflow size={16} />
                 模拟器
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push("/imports?importType=modeling")}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-50"
-              >
-                <FileSpreadsheet size={16} />
-                导入建模款式
               </button>
               <div className="inline-flex h-10 rounded-lg bg-slate-100 p-1">
                 <button

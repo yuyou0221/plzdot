@@ -378,7 +378,6 @@ export function UserDataPortal({
             <SideNavLink href="/" label="项目排期" badge="P0" />
             <SideNavLink href="/product-guide" label="产品组工作指引" badge="P0" />
             <SideNavLink href="/modeling" label="建模排期" badge="P0" />
-            <SideNavLink href="/imports" label="数据导入" badge="预览" />
           </nav>
 
           <div className="mt-5 border-t border-slate-200 pt-5">
