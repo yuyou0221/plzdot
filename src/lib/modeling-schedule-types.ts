@@ -22,6 +22,17 @@ export type ModelingReferenceImage = {
   type?: string;
 };
 
+export type ModelingFeedbackSummary = {
+  id: string;
+  feedbackType: string;
+  roundNo: number;
+  feedbackByName?: string;
+  feedbackAt: string;
+  content: string;
+  status: string;
+  attachmentUrl?: string;
+};
+
 export type ModelingMetric = {
   label: string;
   value: number;
@@ -40,6 +51,8 @@ export type ModelingTaskCard = {
   styleSequence?: string;
   styleName: string;
   isFirstModelingStyle: boolean;
+  isRequired: boolean;
+  affectsProjectSchedule: boolean;
   referenceImageUrls: ModelingReferenceImage[];
   status: ModelingTaskStatus;
   difficulty: string;
@@ -73,6 +86,13 @@ export type ModelingTaskCard = {
   blockType?: string;
   latestFeedback?: string;
   feedbackStatus?: string;
+  latestSubmissionFeedbackId?: string;
+  latestSubmissionContent?: string;
+  latestSubmissionDeliverableUrls: string[];
+  latestSubmissionAt?: string;
+  latestSubmissionBy?: string;
+  latestSubmissionStatus?: string;
+  feedbackHistory: ModelingFeedbackSummary[];
   isVirtual: boolean;
   canDragAssign: boolean;
 };
@@ -107,6 +127,12 @@ export type ProjectModelingSummary = {
   outsourcedStyles: number;
   unassignedStyles: number;
   progressPercent: number;
+  allRequiredStylesApproved: boolean;
+  canProjectScheduleTreatModelingDone: boolean;
+  requiredStyleCount: number;
+  approvedRequiredStyleCount: number;
+  lastRequiredStyleApprovedDate?: string;
+  sourceTaskNos: number[];
   isVirtual: boolean;
 };
 
@@ -187,6 +213,22 @@ export type ModelingWorkSubmissionRequest = {
   deliverableUrl?: string | null;
 };
 
+export type ModelingReviewResult =
+  | "内部通过可送审"
+  | "内部不通过"
+  | "已送审"
+  | "等反馈"
+  | "送审通过"
+  | "送审不通过";
+
+export type ModelingReviewSimulationRequest = {
+  reviewResult: ModelingReviewResult;
+  reviewAt: string;
+  feedbackContent?: string | null;
+  feedbackAttachments?: ModelingFeedbackAttachments | null;
+  submissionFeedbackId?: string | null;
+};
+
 export type ModelingWritebackDraft = {
   projectId: string;
   projectTaskId: string;
@@ -196,6 +238,8 @@ export type ModelingWritebackDraft = {
   message: string;
 };
 
+export type ModelingProjectScheduleReadiness = ModelingWritebackDraft;
+
 export type ModelingTaskUpdateResponse = {
   ok: boolean;
   message: string;
@@ -203,7 +247,7 @@ export type ModelingTaskUpdateResponse = {
   task?: ModelingTaskCard;
   updatedTasks?: ModelingTaskCard[];
   projectSummary?: ProjectModelingSummary;
-  writebackDraft?: ModelingWritebackDraft;
+  projectScheduleReadiness?: ModelingProjectScheduleReadiness;
 };
 
 export type ModelingScheduleData = {

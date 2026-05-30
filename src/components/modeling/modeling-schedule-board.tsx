@@ -38,6 +38,8 @@ import type {
   ModelingScheduleData,
   ModelingTaskCard,
   ModelingTaskStatus,
+  ModelingReviewResult,
+  ModelingReviewSimulationRequest,
   ModelingTaskUpdateRequest,
   ModelingTaskUpdateResponse,
   ModelingWorkSubmissionRequest,
@@ -49,6 +51,19 @@ type CapacityRow = ModelerCapacity & {
   weekTasks: ModelingTaskCard[];
   staleTasks: ModelingTaskCard[];
   isOverloaded: boolean;
+};
+type ReviewSimulationForm = {
+  reviewResult: ModelingReviewResult;
+  reviewAt: string;
+  feedbackContent: string;
+  imageUrl: string;
+  pdfUrl: string;
+  pptUrl: string;
+};
+type ModelingReviewSimulationResponse = ModelingTaskUpdateResponse & {
+  modelingStatus?: ModelingTaskStatus;
+  restoredFromSubmissionSnapshot?: boolean;
+  restoreStatusOnRejection?: ModelingTaskStatus;
 };
 type ModelingView = "milestones" | "style-board" | "profile";
 type StyleBoardMode = "active" | "approved";
@@ -390,7 +405,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
       }
 
       setDraftAssignments((current) => omitKey(current, task.id));
-      setOperationMessage({ tone: result.writebackDraft ? "warning" : "success", text: result.message });
+      setOperationMessage({ tone: result.projectScheduleReadiness ? "warning" : "success", text: result.message });
     } catch (error) {
       setOperationMessage({
         tone: "danger",
@@ -561,6 +576,61 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
     }
   }
 
+  async function submitReviewSimulation(task: ModelingTaskCard, payload: ModelingReviewSimulationRequest) {
+    if (task.isVirtual) {
+      setOperationMessage({ tone: "warning", text: "虚拟款式不能模拟审核，请先录入真实款式。" });
+      return;
+    }
+
+    if (!task.latestSubmissionFeedbackId) {
+      setOperationMessage({ tone: "danger", text: "当前款式没有最新建模成果提交记录，不能模拟产品审核。" });
+      return;
+    }
+
+    setSavingTaskId(task.id);
+    setOperationMessage(null);
+
+    try {
+      const response = await fetch("/api/modeling/review-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: task.projectId,
+          projectTaskId: task.projectTaskId,
+          modelingTaskId: task.id,
+          ...payload,
+        }),
+      });
+      const result = (await response.json()) as ModelingReviewSimulationResponse;
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "模拟产品审核失败。");
+      }
+
+      if (result.task) {
+        const updatedTask = result.task;
+        setSavedTasksById((current) => ({ ...current, [updatedTask.id]: updatedTask }));
+        setSelectedTaskId(updatedTask.id);
+        setDetailTaskId((current) => (current === task.id ? updatedTask.id : current));
+      }
+
+      if (result.projectSummary) {
+        const updatedProject = result.projectSummary;
+        setSavedProjectSummariesById((current) => ({ ...current, [updatedProject.projectId]: updatedProject }));
+      }
+
+      setClockNow(Date.now());
+      setOperationMessage({ tone: result.restoredFromSubmissionSnapshot ? "warning" : "success", text: result.message });
+    } catch (error) {
+      setOperationMessage({
+        tone: "danger",
+        text: error instanceof Error && error.message ? error.message : "模拟产品审核失败。",
+      });
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
   function handleStyleBoardModeChange(nextMode: StyleBoardMode) {
     setStyleBoardMode(nextMode);
   }
@@ -600,6 +670,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
           onSubmitWork={submitTaskWork}
           onWorkTimer={submitWorkTimer}
           onConfirmStyleList={submitStyleListConfirmation}
+          onReviewSimulation={submitReviewSimulation}
         />
       ) : null}
       {confirmationTodo && confirmationProjectTasks.length > 0 ? (
@@ -816,6 +887,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
                       onSubmitWork={submitTaskWork}
                       onWorkTimer={submitWorkTimer}
                       onConfirmStyleList={submitStyleListConfirmation}
+                      onReviewSimulation={submitReviewSimulation}
                     />
                   </div>
                 </aside>
@@ -1616,45 +1688,86 @@ function CompactTaskCard({
 }
 
 function ProjectProgressPanel({ projects }: { projects: ProjectModelingSummary[] }) {
-  const activeProjects = projects.filter((project) => project.totalStyles === 0 || project.approvedStyles < project.totalStyles);
+  const visibleProjects = projects.filter((project) => project.totalStyles > 0 || project.requiredStyleCount > 0);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
-      <SectionTitle icon={<CheckCircle2 size={18} />} title="项目建模进度" helper={`${activeProjects.length} 个项目`} compact />
+      <SectionTitle icon={<CheckCircle2 size={18} />} title="项目建模进度" helper={`${visibleProjects.length} 个项目`} compact />
       <div className="mt-3 max-h-[430px] overflow-y-auto pr-1">
         <div className="grid gap-3">
-          {activeProjects.length > 0 ? (
-            activeProjects.map((project) => (
+          {visibleProjects.length > 0 ? (
+            visibleProjects.map((project) => (
               <div key={project.projectId} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="break-words text-sm font-semibold text-slate-900">{project.projectName}</div>
                     <div className="mt-1 text-xs text-slate-500">{project.currentStage}</div>
                   </div>
-                  {project.isVirtual ? (
-                    <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-500">虚拟</span>
-                  ) : null}
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    {project.canProjectScheduleTreatModelingDone ? (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">项目排期可读完成</span>
+                    ) : null}
+                    {project.isVirtual ? (
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-500">虚拟</span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="mt-3">
                   <ProgressBar value={project.progressPercent} />
                 </div>
                 <div className="mt-3 grid grid-cols-5 gap-1 text-center text-[11px] text-slate-500">
-                  <PanelMiniStat label="总款" value={project.totalStyles} />
-                  <PanelMiniStat label="通过" value={project.approvedStyles} />
+                  <PanelMiniStat label="必做" value={project.requiredStyleCount} />
+                  <PanelMiniStat label="通过" value={project.approvedRequiredStyleCount} />
                   <PanelMiniStat label="进行" value={project.inProgressStyles} />
                   <PanelMiniStat label="未分" value={project.unassignedStyles} />
                   <PanelMiniStat label="外包" value={project.outsourcedStyles} />
                 </div>
+                <ProjectScheduleReadableStatus project={project} compact />
               </div>
             ))
           ) : (
             <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-8 text-center text-sm text-slate-400">
-              暂无未完成项目
+              暂无项目建模进度
             </div>
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+function ProjectScheduleReadableStatus({ project, compact = false }: { project?: ProjectModelingSummary; compact?: boolean }) {
+  if (!project) {
+    return (
+      <div className={clsx("rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600", compact && "mt-3 text-xs")}>
+        项目排期读取状态：暂无项目级建模事实。
+      </div>
+    );
+  }
+
+  const sourceTaskText = project.sourceTaskNos.length > 0 ? `任务 ${project.sourceTaskNos.join(" / ")}` : "任务 7 / 10";
+
+  return (
+    <div
+      className={clsx(
+        "rounded-lg border px-3 py-3 text-sm leading-6",
+        compact && "mt-3 text-xs",
+        project.canProjectScheduleTreatModelingDone
+          ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+          : "border-slate-200 bg-white text-slate-600",
+      )}
+    >
+      <div className="font-semibold">项目排期读取状态</div>
+      <div className="mt-1">
+        {project.canProjectScheduleTreatModelingDone
+          ? `${sourceTaskText} 必做款式已全部通过，项目排期可读取为建模完成。`
+          : `${sourceTaskText} 必做款式尚未全部通过，项目排期不应视为建模完成。`}
+      </div>
+      <div className="mt-1 text-xs opacity-80">
+        必做通过：{project.approvedRequiredStyleCount}/{project.requiredStyleCount}
+        {project.lastRequiredStyleApprovedDate ? ` · 最后通过：${project.lastRequiredStyleApprovedDate}` : ""}
+      </div>
+    </div>
   );
 }
 
@@ -1673,6 +1786,7 @@ function RealTaskDetailOverlay({
   onSubmitWork,
   onWorkTimer,
   onConfirmStyleList,
+  onReviewSimulation,
 }: {
   task: ModelingTaskCard;
   projectTasks: ModelingTaskCard[];
@@ -1688,6 +1802,7 @@ function RealTaskDetailOverlay({
   onSubmitWork: (task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) => Promise<void>;
   onWorkTimer: (task: ModelingTaskCard, action: "start") => Promise<void>;
   onConfirmStyleList: (task: ModelingTaskCard, action: "confirm" | "return", note?: string) => Promise<void>;
+  onReviewSimulation: (task: ModelingTaskCard, payload: ModelingReviewSimulationRequest) => Promise<void>;
 }) {
   const approvedCount = projectSummary?.approvedStyles ?? projectTasks.filter((item) => item.status === "已通过").length;
   const totalCount = projectSummary?.totalStyles ?? projectTasks.length;
@@ -1770,6 +1885,8 @@ function RealTaskDetailOverlay({
                   <DetailItem label="剩余工时" value={task.remainingWorkdays === null || task.remainingWorkdays === undefined ? "待填写" : `${task.remainingWorkdays} 天`} />
                   <DetailItem label="累计工时" value={formatWorkTimeSummary(workSummary)} />
                   <DetailItem label="反馈次数" value={`${task.feedbackCount} 次`} />
+                  <DetailItem label="内部通过" value={task.internalApprovedDate ?? "待定"} />
+                  <DetailItem label="版权过审" value={task.copyrightApprovedDate ?? "待定"} />
                   <DetailItem label="实际开始" value={task.actualStartDate ?? "待定"} />
                   <DetailItem label="实际完成" value={task.actualFinishDate ?? "待定"} />
                 </div>
@@ -1797,6 +1914,7 @@ function RealTaskDetailOverlay({
                 onSubmitWork={onSubmitWork}
                 onWorkTimer={onWorkTimer}
                 onConfirmStyleList={onConfirmStyleList}
+                onReviewSimulation={onReviewSimulation}
               />
             </div>
           </main>
@@ -1815,11 +1933,7 @@ function RealTaskDetailOverlay({
               <PanelMiniStat label="外包" value={projectSummary?.outsourcedStyles ?? projectTasks.filter((item) => item.isOutsourced).length} />
             </div>
 
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">
-              {approvedCount === totalCount && totalCount > 0
-                ? "所有款式已通过，产品组工作指引可读取建模完成事实。"
-                : "所有必做款式通过前，不会推进项目排期完成。"}
-            </div>
+            <ProjectScheduleReadableStatus project={projectSummary} />
 
             <section className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
               <div className="text-sm font-semibold text-slate-900">状态流转</div>
@@ -1850,6 +1964,7 @@ function TaskDetailPanel({
   onSubmitWork,
   onWorkTimer,
   onConfirmStyleList,
+  onReviewSimulation,
 }: {
   task?: ModelingTaskCard;
   vendors: OutsourceVendorOption[];
@@ -1861,6 +1976,7 @@ function TaskDetailPanel({
   onSubmitWork: (task: ModelingTaskCard, payload: ModelingWorkSubmissionRequest) => Promise<void>;
   onWorkTimer: (task: ModelingTaskCard, action: "start") => Promise<void>;
   onConfirmStyleList: (task: ModelingTaskCard, action: "confirm" | "return", note?: string) => Promise<void>;
+  onReviewSimulation: (task: ModelingTaskCard, payload: ModelingReviewSimulationRequest) => Promise<void>;
 }) {
   const realVendors = useMemo(() => vendors.filter((vendor) => !vendor.isVirtual), [vendors]);
   const [vendorId, setVendorId] = useState(task?.outsourceVendorId ?? realVendors[0]?.id ?? "");
@@ -1869,6 +1985,7 @@ function TaskDetailPanel({
   const [submissionContent, setSubmissionContent] = useState("");
   const [submissionUrl, setSubmissionUrl] = useState("");
   const [confirmationNote, setConfirmationNote] = useState("");
+  const [reviewForm, setReviewForm] = useState<ReviewSimulationForm>(() => defaultReviewSimulationForm(task?.status));
 
   if (!task) {
     return (
@@ -1887,6 +2004,22 @@ function TaskDetailPanel({
   const isReviewManagedStatus = productReviewManagedStatuses.has(currentTask.status);
   const canEditOperationalFields = canEditManagementFields && !isReviewManagedStatus;
   const canEditModelerInputs = canUseModelerActions && !isReviewManagedStatus;
+  const reviewOptions = reviewOptionsForStatus(currentTask.status);
+  const hasReviewSimulationEntry = reviewOptions.length > 0 && !currentTask.isVirtual && Boolean(currentTask.latestSubmissionFeedbackId);
+  const canSubmitReviewSimulation =
+    canManageTask &&
+    hasReviewSimulationEntry &&
+    !saving &&
+    reviewForm.reviewAt.trim().length > 0 &&
+    !isRejectionReviewResult(reviewForm.reviewResult);
+  const canSubmitReviewWithFeedback =
+    canManageTask &&
+    hasReviewSimulationEntry &&
+    !saving &&
+    reviewForm.reviewAt.trim().length > 0 &&
+    isRejectionReviewResult(reviewForm.reviewResult) &&
+    reviewForm.feedbackContent.trim().length > 0;
+  const canSubmitReview = canSubmitReviewSimulation || canSubmitReviewWithFeedback;
   const canStartTimer =
     canUseModelerActions &&
     !isTimerActive &&
@@ -1952,6 +2085,24 @@ function TaskDetailPanel({
     });
   }
 
+  function handleReviewSimulation() {
+    if (!canSubmitReview) {
+      return;
+    }
+
+    void onReviewSimulation(currentTask, {
+      reviewResult: reviewForm.reviewResult,
+      reviewAt: reviewForm.reviewAt,
+      submissionFeedbackId: currentTask.latestSubmissionFeedbackId,
+      feedbackContent: reviewForm.feedbackContent.trim() || undefined,
+      feedbackAttachments: {
+        imageUrl: reviewForm.imageUrl.trim() || null,
+        pdfUrl: reviewForm.pdfUrl.trim() || null,
+        pptUrl: reviewForm.pptUrl.trim() || null,
+      },
+    });
+  }
+
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4">
       <SectionTitle icon={<UserRound size={18} />} title="款式详情" helper={task.status} compact />
@@ -1970,6 +2121,8 @@ function TaskDetailPanel({
         <DetailItem label="剩余工时" value={task.remainingWorkdays === null || task.remainingWorkdays === undefined ? "待填写" : `${task.remainingWorkdays} 天`} />
         <DetailItem label="累计工时" value={formatWorkTimeSummary(workSummary)} />
         <DetailItem label="反馈次数" value={`${task.feedbackCount} 次`} />
+        <DetailItem label="内部通过" value={task.internalApprovedDate ?? "待定"} />
+        <DetailItem label="版权过审" value={task.copyrightApprovedDate ?? "待定"} />
         <DetailItem label="计划开始" value={task.plannedStartDate ?? "待定"} />
         <DetailItem label="计划完成" value={task.plannedFinishDate ?? "待定"} />
       </div>
@@ -1992,6 +2145,8 @@ function TaskDetailPanel({
           <div className="mt-1 leading-5">{task.latestFeedback ?? "等待补充本轮检修问题和版权方反馈。"}</div>
         </div>
       ) : null}
+
+      <LatestSubmissionSummary task={task} />
 
       {task.isVirtual ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
@@ -2168,26 +2323,227 @@ function TaskDetailPanel({
           </div>
         </div>
 
-        <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <label className="text-xs font-semibold text-slate-700">产品检修 / 送审反馈</label>
-            <span className="text-xs text-slate-500">{task.feedbackCount} 次反馈</span>
-          </div>
-          {task.latestFeedback ? (
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700">
-              {task.latestFeedback}
-            </div>
-          ) : (
-            <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-400">
-              暂无检修或送审反馈。
-            </div>
-          )}
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-500">
-            检修和送审结果由产品组工作指引回传，建模排期页只读展示。
-          </div>
-        </div>
+        <ReviewSimulationPanel
+          canManageTask={canManageTask}
+          canSubmit={canSubmitReview}
+          form={reviewForm}
+          hasLatestSubmission={Boolean(currentTask.latestSubmissionFeedbackId)}
+          options={reviewOptions}
+          saving={saving}
+          setForm={setReviewForm}
+          status={currentTask.status}
+          onSubmit={handleReviewSimulation}
+        />
+
+        <FeedbackHistoryPanel task={task} />
       </div>
     </section>
+  );
+}
+
+function LatestSubmissionSummary({ task }: { task: ModelingTaskCard }) {
+  if (!task.latestSubmissionFeedbackId) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-fuchsia-100 bg-fuchsia-50/50 px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-semibold text-fuchsia-950">最新建模成果提交</div>
+        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-fuchsia-800">
+          {task.latestSubmissionStatus ?? "待处理"}
+        </span>
+      </div>
+      <div className="mt-2 grid gap-1.5 text-xs text-fuchsia-900">
+        <div className="break-all">submissionFeedbackId：{task.latestSubmissionFeedbackId}</div>
+        <div>
+          提交时间：{formatDateTimeForDisplay(task.latestSubmissionAt)}
+          {task.latestSubmissionBy ? ` · 提交人：${task.latestSubmissionBy}` : ""}
+        </div>
+      </div>
+      {task.latestSubmissionContent ? (
+        <div className="mt-2 rounded-md border border-fuchsia-100 bg-white px-2 py-1.5 leading-6 text-slate-700">
+          {task.latestSubmissionContent}
+        </div>
+      ) : null}
+      {task.latestSubmissionDeliverableUrls.length > 0 ? (
+        <div className="mt-2 grid gap-1">
+          {task.latestSubmissionDeliverableUrls.map((url) => (
+            <a
+              key={url}
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="break-all rounded-md border border-fuchsia-100 bg-white px-2 py-1 text-xs font-medium text-fuchsia-800 hover:bg-fuchsia-50"
+            >
+              成果链接：{url}
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewSimulationPanel({
+  canManageTask,
+  canSubmit,
+  form,
+  hasLatestSubmission,
+  options,
+  saving,
+  setForm,
+  status,
+  onSubmit,
+}: {
+  canManageTask: boolean;
+  canSubmit: boolean;
+  form: ReviewSimulationForm;
+  hasLatestSubmission: boolean;
+  options: ModelingReviewResult[];
+  saving: boolean;
+  setForm: (form: ReviewSimulationForm) => void;
+  status: ModelingTaskStatus;
+  onSubmit: () => void;
+}) {
+  if (options.length === 0) {
+    return null;
+  }
+
+  const reviewResult = options.includes(form.reviewResult) ? form.reviewResult : options[0];
+  const requiresTextFeedback = isRejectionReviewResult(reviewResult);
+
+  return (
+    <div className="grid gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-indigo-900">模拟产品审核 / 送审</label>
+        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-indigo-700">{status}</span>
+      </div>
+      <div className="text-xs leading-5 text-indigo-900">
+        这是建模排期内的模拟入口，用来验证产品组未来回传审核结果后的状态流转；不代表产品组页面已经接入。
+      </div>
+      {!hasLatestSubmission ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-sm text-amber-900">
+          当前款式没有最新建模成果提交记录，不能模拟审核或送审结果。
+        </div>
+      ) : null}
+      <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
+        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+          审核结果
+          <select
+            value={reviewResult}
+            onChange={(event) => setForm({ ...form, reviewResult: event.target.value as ModelingReviewResult })}
+            disabled={!canManageTask || !hasLatestSubmission || saving}
+            className="h-10 rounded-lg border border-indigo-100 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+          >
+            {options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs font-semibold text-slate-600">
+          审核日期
+          <input
+            type="date"
+            value={form.reviewAt}
+            onChange={(event) => setForm({ ...form, reviewAt: event.target.value })}
+            disabled={!canManageTask || !hasLatestSubmission || saving}
+            className="h-10 rounded-lg border border-indigo-100 bg-white px-3 text-sm outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+          />
+        </label>
+      </div>
+      <textarea
+        value={form.feedbackContent}
+        onChange={(event) => setForm({ ...form, feedbackContent: event.target.value })}
+        disabled={!canManageTask || !hasLatestSubmission || saving}
+        rows={3}
+        placeholder={requiresTextFeedback ? "驳回必须填写文字反馈" : "通过类和过程类可不填，也可记录备注"}
+        className="min-h-[84px] resize-none rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm leading-5 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+      />
+      <div className="grid gap-2">
+        <input
+          type="url"
+          value={form.imageUrl}
+          onChange={(event) => setForm({ ...form, imageUrl: event.target.value })}
+          disabled={!canManageTask || !hasLatestSubmission || saving}
+          placeholder="图片反馈 URL（可选）"
+          className="h-10 rounded-lg border border-indigo-100 bg-white px-3 text-sm outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+        />
+        <input
+          type="url"
+          value={form.pdfUrl}
+          onChange={(event) => setForm({ ...form, pdfUrl: event.target.value })}
+          disabled={!canManageTask || !hasLatestSubmission || saving}
+          placeholder="PDF 反馈 URL（可选）"
+          className="h-10 rounded-lg border border-indigo-100 bg-white px-3 text-sm outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+        />
+        <input
+          type="url"
+          value={form.pptUrl}
+          onChange={(event) => setForm({ ...form, pptUrl: event.target.value })}
+          disabled={!canManageTask || !hasLatestSubmission || saving}
+          placeholder="PPT 反馈 URL（可选）"
+          className="h-10 rounded-lg border border-indigo-100 bg-white px-3 text-sm outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={onSubmit}
+        disabled={!canSubmit}
+        className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-indigo-700 px-3 text-sm font-semibold text-white transition hover:bg-indigo-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+      >
+        {saving ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+        提交模拟审核结果
+      </button>
+    </div>
+  );
+}
+
+function FeedbackHistoryPanel({ task }: { task: ModelingTaskCard }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-slate-700">检修 / 送审记录</label>
+        <span className="text-xs text-slate-500">{task.feedbackCount} 次反馈</span>
+      </div>
+      {task.feedbackHistory.length > 0 ? (
+        <div className="grid gap-2">
+          {task.feedbackHistory.map((feedback) => (
+            <div key={feedback.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-semibold text-slate-800">
+                  {feedback.feedbackType} · 第 {feedback.roundNo} 轮
+                </div>
+                <span className="text-xs text-slate-400">{formatDateTimeForDisplay(feedback.feedbackAt)}</span>
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {[feedback.feedbackByName, feedback.status].filter(Boolean).join(" · ")}
+              </div>
+              <div className="mt-2 whitespace-pre-wrap break-words leading-6 text-slate-700">{feedback.content}</div>
+              {feedback.attachmentUrl ? (
+                <a
+                  href={feedback.attachmentUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 block break-all rounded-md bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  附件：{feedback.attachmentUrl}
+                </a>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-400">
+          暂无检修或送审反馈。
+        </div>
+      )}
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-500">
+        检修和送审结果由产品组或本页模拟入口写入；建模师只能阅读这些记录。
+      </div>
+    </div>
   );
 }
 
@@ -2293,6 +2649,39 @@ function ModelingTestFieldDetailItem({
   return <DetailItem label={isModelingTestFieldValue(value) ? "测试字段" : "款式编号"} value={value} />;
 }
 
+function reviewOptionsForStatus(status: ModelingTaskStatus): ModelingReviewResult[] {
+  if (status === "待验收") {
+    return ["内部通过可送审", "内部不通过"];
+  }
+
+  if (status === "待送审") {
+    return ["已送审", "等反馈", "送审通过", "送审不通过"];
+  }
+
+  if (status === "已送审" || status === "等反馈") {
+    return ["等反馈", "送审通过", "送审不通过"];
+  }
+
+  return [];
+}
+
+function defaultReviewSimulationForm(status?: ModelingTaskStatus): ReviewSimulationForm {
+  const options = status ? reviewOptionsForStatus(status) : [];
+
+  return {
+    reviewResult: options[0] ?? "内部通过可送审",
+    reviewAt: todayInputValue(),
+    feedbackContent: "",
+    imageUrl: "",
+    pdfUrl: "",
+    pptUrl: "",
+  };
+}
+
+function isRejectionReviewResult(value: ModelingReviewResult) {
+  return value === "内部不通过" || value === "送审不通过";
+}
+
 function buildWorkTimeSummary(task: ModelingTaskCard, now: number | null) {
   const persistedMinutes = Math.max(0, Math.floor(task.actualWorkMinutes || 0));
   const activeSeconds = activeWorkSeconds(task.activeWorkStartedAt, now);
@@ -2355,6 +2744,12 @@ function formatWorkMinutes(minutes: number) {
   }
 
   return `${safeMinutes} 分钟（${hours} 小时 ${restMinutes} 分）`;
+}
+
+function todayInputValue() {
+  const now = new Date();
+
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
 function formatDateTimeForDisplay(value?: string) {

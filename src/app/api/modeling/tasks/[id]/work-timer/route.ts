@@ -42,7 +42,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       task,
       updatedTasks,
       projectSummary,
-      writebackDraft: result.writebackDraft,
+      projectScheduleReadiness: result.writebackDraft,
     });
   } catch (error) {
     if (error instanceof ModelingTaskUpdateError) {

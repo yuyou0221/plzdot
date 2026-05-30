@@ -18,11 +18,13 @@ export async function POST(request: Request) {
 
   try {
     const result = await cancelModelingStyle(payload, auth.user);
+    const { writebackDraft, ...publicResult } = result;
 
     return NextResponse.json({
       ok: true,
       message: `款式已取消：${result.styleName}。`,
-      ...result,
+      ...publicResult,
+      projectScheduleReadiness: writebackDraft,
     });
   } catch (error) {
     if (error instanceof ModelingContractError) {
