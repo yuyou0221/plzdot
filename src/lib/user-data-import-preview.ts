@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import type { DataImport } from "@prisma/client";
+import type { DataImport, Prisma } from "@prisma/client";
 import type { AuthUser } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db/prisma";
 import type { UserDataImportPreviewResult } from "@/lib/user-data-import";
@@ -42,6 +42,7 @@ export async function createUserDataImportPreviewRecord({
         expiresAt,
         counts: preview.counts,
         checks: preview.checks,
+        risks: preview.risks,
         warnings: preview.warnings.slice(0, 80),
         errors: preview.errors.slice(0, 80),
       },
@@ -111,11 +112,12 @@ export async function validateUserDataImportPreview({
   return { ok: true, record };
 }
 
-export async function markUserDataImportPreviewUsed(previewId: string, importId: string) {
-  const record = await prisma.dataImport.findUnique({ where: { id: previewId }, select: { rawMetadata: true } });
+export async function markUserDataImportPreviewUsed(previewId: string, importId: string, client?: Prisma.TransactionClient) {
+  const dataImportClient = client?.dataImport ?? prisma.dataImport;
+  const record = await dataImportClient.findUnique({ where: { id: previewId }, select: { rawMetadata: true } });
   const metadata = jsonRecord(record?.rawMetadata);
 
-  await prisma.dataImport.update({
+  await dataImportClient.update({
     where: { id: previewId },
     data: {
       importStatus: "已使用",

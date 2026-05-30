@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { assertPasswordExportSecretConfigured } from "@/lib/auth/password-export";
-import { recordUserDataAuditLog } from "@/lib/user-data-audit";
+import { isUserDataAuditWriteError, recordUserDataAuditLog } from "@/lib/user-data-audit";
 import { buildUserDataExportWorkbookBuffer } from "@/lib/user-data-export";
 
 export const runtime = "nodejs";
@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       result: "成功",
       summary: "导出用户数据标准 Excel，包含可解密的密码列。",
       metadata: { fileName, byteLength: buffer.byteLength, includePlainPasswords: true },
+      required: true,
     });
 
     return new NextResponse(new Uint8Array(buffer), {
@@ -32,14 +33,26 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    await recordUserDataAuditLog({
-      actor: auth.user,
-      request,
-      action: "Excel导出",
-      targetType: "用户数据Excel",
-      result: "失败",
-      summary: error instanceof Error && error.message ? error.message : "用户数据导出失败。",
-    });
+    if (isUserDataAuditWriteError(error)) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: 500 });
+    }
+
+    try {
+      await recordUserDataAuditLog({
+        actor: auth.user,
+        request,
+        action: "Excel导出",
+        targetType: "用户数据Excel",
+        result: "失败",
+        summary: error instanceof Error && error.message ? error.message : "用户数据导出失败。",
+        required: true,
+      });
+    } catch (auditError) {
+      if (isUserDataAuditWriteError(auditError)) {
+        return NextResponse.json({ ok: false, message: auditError.message }, { status: 500 });
+      }
+      throw auditError;
+    }
 
     return NextResponse.json(
       {

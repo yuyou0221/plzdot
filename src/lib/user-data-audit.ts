@@ -7,6 +7,22 @@ import { prisma } from "@/lib/db/prisma";
 const sensitiveKeyPattern = /password|passwd|pwd|hash|cipher|secret|token|cookie|authorization|明文|密码/i;
 
 export type UserDataAuditResult = "成功" | "失败" | "拒绝";
+type UserDataAuditClient = {
+  userDataAuditLog: {
+    create: (args: Prisma.UserDataAuditLogCreateArgs) => Promise<unknown>;
+  };
+};
+
+export class UserDataAuditWriteError extends Error {
+  constructor() {
+    super("用户数据审计记录写入失败，操作已中止，请稍后重试。");
+    this.name = "UserDataAuditWriteError";
+  }
+}
+
+export function isUserDataAuditWriteError(error: unknown): error is UserDataAuditWriteError {
+  return error instanceof UserDataAuditWriteError;
+}
 
 export async function recordUserDataAuditLog({
   actor,
@@ -17,6 +33,8 @@ export async function recordUserDataAuditLog({
   result,
   summary,
   metadata,
+  client,
+  required = false,
 }: {
   actor?: Pick<AuthUser, "id" | "name" | "loginName"> | null;
   request?: Request;
@@ -26,9 +44,11 @@ export async function recordUserDataAuditLog({
   result: UserDataAuditResult;
   summary?: string | null;
   metadata?: unknown;
+  client?: UserDataAuditClient;
+  required?: boolean;
 }) {
   try {
-    await prisma.userDataAuditLog.create({
+    await (client ?? prisma).userDataAuditLog.create({
       data: {
         actorUserId: actor?.id ?? null,
         actorName: actor?.name ?? null,
@@ -45,6 +65,9 @@ export async function recordUserDataAuditLog({
     });
   } catch (error) {
     console.error("Failed to record user data audit log", error);
+    if (required) {
+      throw new UserDataAuditWriteError();
+    }
   }
 }
 

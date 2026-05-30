@@ -9,6 +9,7 @@ import {
   isHumanResourcesUser,
   type AuthUser,
 } from "@/lib/auth/permissions";
+import { getPasswordExportSecretStatus } from "@/lib/auth/password-export";
 import type {
   UserDataPerson,
   UserDataTeam,
@@ -223,6 +224,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       vendors,
       availabilityBlocks,
       auditLogs,
+      passwordExportSecretStatus: getPasswordExportSecretStatus(),
     };
   } catch (error) {
     console.error("Failed to build user data workbench", error);
@@ -250,6 +252,7 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
       vendors: [],
       availabilityBlocks: [],
       auditLogs: [],
+      passwordExportSecretStatus: getPasswordExportSecretStatus(),
     };
   }
 }

@@ -65,6 +65,15 @@ type ImportPreview = {
     loginConflicts: number;
     activeLoginUsersMissingPassword: number;
   };
+  risks?: {
+    unknownPersonIds: number;
+    unknownTeamIds: number;
+    unknownVendorIds: number;
+    unknownAvailabilityBlockIds: number;
+    availabilityRowsUsingFallbackMatch: number;
+    duplicatePersonNames: string[];
+    passwordNotExportableAccounts: number;
+  };
   canApply: boolean;
   warnings: string[];
   errors: string[];
@@ -178,6 +187,7 @@ export function UserDataPortal({
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [cleaningPreviews, setCleaningPreviews] = useState(false);
   const [deletingPersonId, setDeletingPersonId] = useState<string | null>(null);
   const [activeSnapshotModule, setActiveSnapshotModule] = useState(data.moduleReadSnapshots[0]?.moduleName ?? "");
 
@@ -382,6 +392,31 @@ export function UserDataPortal({
       notify("删除接口暂时不可用。", "warning");
     } finally {
       setDeletingPersonId(null);
+    }
+  }
+
+  async function cleanupExpiredImportPreviews() {
+    if (!data.viewer.isLevelZero) {
+      notify("当前账号没有权限清理预览记录。", "warning");
+      return;
+    }
+
+    setCleaningPreviews(true);
+    try {
+      const response = await fetch("/api/users/import-excel/previews/expired", { method: "DELETE" });
+      const result = await readMutationResponse(response);
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "清理过期预览记录失败。", "warning");
+        return;
+      }
+
+      notify(result.message ?? "已清理过期预览记录。");
+      router.refresh();
+    } catch {
+      notify("清理接口暂时不可用。", "warning");
+    } finally {
+      setCleaningPreviews(false);
     }
   }
 
@@ -627,6 +662,21 @@ export function UserDataPortal({
               <Download size={16} />
               {exporting ? "导出中" : "导出 Excel"}
             </button>
+          </div>
+
+          <div
+            className={clsx(
+              "mt-5 rounded-lg border p-3 text-sm",
+              data.passwordExportSecretStatus.blocksProtectedOperations
+                ? "border-rose-200 bg-rose-50 text-rose-900"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900",
+            )}
+          >
+            <div className="flex flex-wrap items-center gap-2 font-semibold">
+              <ShieldCheck size={16} />
+              密码导出密钥：{data.passwordExportSecretStatus.sourceLabel}
+            </div>
+            <p className="mt-1 leading-6">{data.passwordExportSecretStatus.message}</p>
           </div>
 
           <div className="mt-5 grid gap-4">
@@ -1265,6 +1315,17 @@ export function UserDataPortal({
           <PreviewMetric label="等级 0 可登录" value={preview.checks.activeLevelZeroAfterImport ? 1 : 0} />
           <PreviewMetric label="缺密码账号" value={preview.checks.activeLoginUsersMissingPassword} />
         </div>
+        {preview.risks ? (
+          <div className="grid grid-cols-4 gap-2 text-xs text-slate-600 max-lg:grid-cols-2 max-sm:grid-cols-1">
+            <PreviewMetric label="未知人员ID" value={preview.risks.unknownPersonIds} />
+            <PreviewMetric label="未知团队ID" value={preview.risks.unknownTeamIds} />
+            <PreviewMetric label="未知供应商ID" value={preview.risks.unknownVendorIds} />
+            <PreviewMetric label="未知不可排期ID" value={preview.risks.unknownAvailabilityBlockIds} />
+            <PreviewMetric label="辅助匹配不可排期" value={preview.risks.availabilityRowsUsingFallbackMatch} />
+            <PreviewMetric label="重名人员" value={preview.risks.duplicatePersonNames.length} />
+            <PreviewMetric label="密码不可导出账号" value={preview.risks.passwordNotExportableAccounts} />
+          </div>
+        ) : null}
         {preview.errors.length > 0 ? <PreviewMessages title="必须处理" tone="warning" items={preview.errors} /> : null}
         {preview.warnings.length > 0 ? <PreviewMessages title="预览提示" tone="info" items={preview.warnings.slice(0, 10)} /> : null}
       </div>
@@ -1287,7 +1348,18 @@ export function UserDataPortal({
             <div className="text-sm font-semibold text-slate-800">高风险操作记录</div>
             <div className="mt-1 text-xs text-slate-500">只记录用户数据模块内的导入、导出、删除和改密动作，不记录明文密码。</div>
           </div>
-          <span className="text-sm font-medium text-slate-500">最近 {data.auditLogs.length} 条</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={cleaningPreviews}
+              onClick={cleanupExpiredImportPreviews}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={14} />
+              {cleaningPreviews ? "清理中" : "清理过期预览"}
+            </button>
+            <span className="text-sm font-medium text-slate-500">最近 {data.auditLogs.length} 条</span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
