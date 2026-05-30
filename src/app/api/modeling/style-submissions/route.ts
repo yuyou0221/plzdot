@@ -5,7 +5,7 @@ import { ModelingContractError, submitModelingStyleSubmission } from "@/lib/mode
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiRole(["admin", "manager", "viewer"]);
   if ("response" in auth) return auth.response;
 
   let payload: Record<string, unknown>;

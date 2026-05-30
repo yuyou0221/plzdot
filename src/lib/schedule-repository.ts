@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
+import { findLatestBusinessScheduleRun } from "@/lib/schedule-run-selector";
 import {
   type CalendarProject,
   milestones,
@@ -54,6 +55,7 @@ type ProjectResultRow = {
 
 type TaskResultRow = {
   id: string;
+  projectTaskId: string;
   projectId: string;
   taskNo: number;
   taskName: string;
@@ -73,6 +75,12 @@ type TaskResultRow = {
   rawResult: unknown;
 };
 
+type ProjectTaskIdentityRow = {
+  id: string;
+  projectId: string;
+  taskNo: number;
+};
+
 type MonthPoint = {
   year: number;
   month: number;
@@ -90,10 +98,7 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
   try {
     const [projects, latestRun] = await Promise.all([
       prisma.project.findMany({ orderBy: { plannedLaunchDate: "asc" }, take: 300 }),
-      prisma.scheduleRun.findFirst({
-        where: { runStatus: "成功" },
-        orderBy: { calculatedAt: "desc" },
-      }),
+      findLatestBusinessScheduleRun(),
     ]);
 
     if (projects.length === 0 || !latestRun) {
@@ -101,7 +106,7 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     }
 
     const projectIds = projects.map((project) => project.id);
-    const [taskResults, projectResults, modelingProgress, alerts, workTasks] = await Promise.all([
+    const [taskResults, projectResults, modelingProgress, alerts, workTasks, projectTasks] = await Promise.all([
       prisma.scheduleTaskResult.findMany({
         where: { scheduleRunId: latestRun.id, projectId: { in: projectIds } },
         orderBy: [{ projectId: "asc" }, { taskNo: "asc" }],
@@ -116,13 +121,22 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
         take: 200,
       }),
       prisma.workTask.findMany({ where: { projectId: { in: projectIds } }, take: 300 }),
+      prisma.projectTask.findMany({
+        where: { projectId: { in: projectIds } },
+        select: { id: true, projectId: true, taskNo: true },
+      }),
     ]);
 
     if (taskResults.length === 0) {
       return sampleScheduleData;
     }
 
-    const projectById = new Map(projects.map((project) => [project.id, project]));
+    const scheduledProjectIds = new Set([
+      ...taskResults.map((row) => row.projectId),
+      ...projectResults.map((result) => result.projectId),
+    ]);
+    const scheduledProjects = projects.filter((project) => scheduledProjectIds.has(project.id));
+    const projectById = new Map(scheduledProjects.map((project) => [project.id, project]));
     const resultByProjectId = new Map(projectResults.map((result) => [result.projectId, result]));
     const modelingByProjectId = new Map(modelingProgress.map((progress) => [progress.projectId, progress]));
     const activeAlerts = alerts.filter((alert) => {
@@ -136,12 +150,15 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     const projectCards = buildMilestoneCards(taskResults, projectById);
     const { months, initialMonth } = buildMonthTimeline(projectCards);
     const calendarMonths = buildPlanningCalendarMonths();
-    const calendarProjects = buildCalendarProjects(projects, resultByProjectId);
-    const scheduleTasks = includeTaskRows ? buildScheduleTaskRows(taskResults, projectById, resultByProjectId) : [];
+    const calendarProjects = buildCalendarProjects(scheduledProjects, resultByProjectId);
+    const actualProjectTaskIdByKey = buildProjectTaskIdentityMap(projectTasks);
+    const scheduleTasks = includeTaskRows
+      ? buildScheduleTaskRows(taskResults, projectById, resultByProjectId, actualProjectTaskIdByKey)
+      : [];
     const projectDetails: Record<string, ProjectDetail> = {};
 
     if (includeProjectDetails) {
-      for (const project of projects) {
+      for (const project of scheduledProjects) {
       const result = resultByProjectId.get(project.id);
       const progress = modelingByProjectId.get(project.id);
       const riskLevel = projectDisplayRiskLevel(project, result);
@@ -177,12 +194,12 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     }
 
     return {
-      sourceLabel: "数据库",
+      sourceLabel: latestRun.runName ? `${latestRun.runType ?? "排期测算"}：${latestRun.runName}` : "数据库",
       months: months.length > 0 ? months : sampleScheduleData.months,
       initialMonth: initialMonth ?? sampleScheduleData.initialMonth,
       milestones,
       metrics: [
-        { label: "看板项目数", value: projects.length, helper: "包含已完结项目" },
+        { label: "看板项目数", value: scheduledProjects.length, helper: "包含已完结项目" },
         {
           label: "有延期风险",
           value: projectResults.filter((result) => {
@@ -352,6 +369,7 @@ function buildScheduleTaskRows(
   taskResults: TaskResultRow[],
   projectById: Map<string, ProjectRow>,
   resultByProjectId: Map<string, ProjectResultRow>,
+  actualProjectTaskIdByKey: Map<string, string>,
 ): ScheduleTaskRow[] {
   return taskResults
     .map((row): ScheduleTaskRow => {
@@ -362,6 +380,7 @@ function buildScheduleTaskRows(
 
       return {
         id: row.id,
+        projectTaskId: actualProjectTaskIdByKey.get(projectTaskKey(row.projectId, row.taskNo)),
         projectId: row.projectId,
         projectCode: rawText(raw.projectId) || project?.projectCode || row.projectId,
         projectName: project?.projectName ?? rawText(raw.projectName) ?? row.projectId,
@@ -411,6 +430,14 @@ function buildScheduleTaskRows(
 
       return a.taskNo - b.taskNo;
     });
+}
+
+function buildProjectTaskIdentityMap(projectTasks: ProjectTaskIdentityRow[]) {
+  return new Map(projectTasks.map((task) => [projectTaskKey(task.projectId, task.taskNo), task.id]));
+}
+
+function projectTaskKey(projectId: string, taskNo: number) {
+  return `${projectId}:${taskNo}`;
 }
 
 function buildPlanningCalendarMonths(today = new Date()) {

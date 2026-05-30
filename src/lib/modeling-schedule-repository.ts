@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import { buildModelingTodosFromTasks } from "@/lib/modeling-todos";
+import { findLatestBusinessScheduleRun } from "@/lib/schedule-run-selector";
 import type {
   ModelerCapacity,
   ModelingMilestoneCard,
@@ -221,10 +222,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
         },
       }),
       prisma.projectModelingProgress.findMany(),
-      prisma.scheduleRun.findFirst({
-        where: { runStatus: "成功" },
-        orderBy: { calculatedAt: "desc" },
-      }),
+      findLatestBusinessScheduleRun(),
     ]);
 
     const userIds = users.map((user) => user.id);

@@ -1,57 +1,86 @@
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
-import { appendMockIntegrationEntry, getMockIntegrationSnapshot } from "@/lib/product-guide-integration-mock";
+import { requireApiUser } from "@/lib/auth/api";
+import {
+  ingestProjectTaskFactEvent,
+  parseProjectTaskFactEvent,
+  TaskFactEventValidationError,
+  type ProjectTaskFactEvent,
+} from "@/lib/schedule-task-fact-events";
 
 export const runtime = "nodejs";
 
-export async function GET() {
-  const auth = await requireApiRole(["admin", "manager"]);
-  if ("response" in auth) return auth.response;
-
-  const snapshot = await getMockIntegrationSnapshot();
-  return NextResponse.json({ ok: true, events: snapshot.taskFactEvents });
-}
-
 export async function POST(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
 
-  let payload: Record<string, unknown>;
+  let payload: unknown;
 
   try {
-    payload = (await request.json()) as Record<string, unknown>;
+    payload = await request.json();
   } catch {
-    return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON。" }, { status: 400 });
+    return NextResponse.json({ ok: false, message: "请求内容不是有效 JSON" }, { status: 400 });
   }
 
-  const validationMessage = validateProjectTaskFactEvent(payload);
-  if (validationMessage) {
-    return NextResponse.json({ ok: false, message: validationMessage }, { status: 400 });
+  try {
+    const event = parseProjectTaskFactEvent(eventInputFromPayload(payload));
+
+    if (isOverrideEvent(event) && !canUseTaskOverride(auth.user.authRole)) {
+      return NextResponse.json({ ok: false, message: "当前账号没有管理层强制处理权限。" }, { status: 403 });
+    }
+
+    const result = await ingestProjectTaskFactEvent(event);
+
+    if (!result.ok) {
+      return NextResponse.json(result, { status: result.status ?? 422 });
+    }
+
+    return NextResponse.json(result);
+  } catch (error) {
+    if (error instanceof TaskFactEventValidationError) {
+      return NextResponse.json({ ok: false, message: error.message }, { status: error.status });
+    }
+
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          error instanceof Error && error.message
+            ? `项目排期接收任务事实事件失败：${error.message}`
+            : "项目排期接收任务事实事件失败",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+function eventInputFromPayload(payload: unknown) {
+  if (!isPlainObject(payload)) {
+    return payload;
   }
 
-  await appendMockIntegrationEntry("taskFactEvents", payload);
+  if (Array.isArray(payload.events)) {
+    if (payload.events.length !== 1) {
+      throw new TaskFactEventValidationError("当前接口一次只接收一条任务事实事件。");
+    }
 
-  return NextResponse.json({
-    ok: true,
-    message: "模拟项目排期已接收任务事实事件。",
-  });
+    return payload.events[0];
+  }
+
+  if ("event" in payload) {
+    return payload.event;
+  }
+
+  return payload;
 }
 
-function validateProjectTaskFactEvent(payload: Record<string, unknown>) {
-  if (!text(payload.eventId)) return "缺少 eventId。";
-  if (!text(payload.eventType)) return "缺少 eventType。";
-  if (payload.sourceModule !== "product-guide") return "sourceModule 必须为 product-guide。";
-  if (!text(payload.projectId)) return "缺少 projectId。";
-  if (typeof payload.taskNo !== "number") return "taskNo 必须为数字。";
-  if (!text(payload.taskKey)) return "缺少 taskKey。";
-  if (!text(payload.taskName)) return "缺少 taskName。";
-  if (!text(payload.occurredAt) || !text(payload.occurredAt).includes("+08:00")) return "occurredAt 必须是带 +08:00 时区的 ISO 字符串。";
-  if (!text(payload.operatorId)) return "缺少 operatorId。";
-  if (!text(payload.operatorName)) return "缺少 operatorName。";
-  if (typeof payload.payload !== "object" || payload.payload === null || Array.isArray(payload.payload)) return "payload 必须是对象。";
-  return "";
+function isOverrideEvent(event: ProjectTaskFactEvent) {
+  return isPlainObject(event.payload) && event.payload.override === true;
 }
 
-function text(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
+function canUseTaskOverride(authRole: string) {
+  return authRole === "admin" || authRole === "manager";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

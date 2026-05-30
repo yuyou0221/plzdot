@@ -15,6 +15,7 @@ import type {
   ProductGuideStyleSummary,
 } from "@/lib/product-guide-types";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
+import { findLatestBusinessScheduleRun } from "@/lib/schedule-run-selector";
 import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
 import type { ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
@@ -250,10 +251,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
           status: true,
         },
       }),
-      prisma.scheduleRun.findFirst({
-        where: { runStatus: "成功" },
-        orderBy: { calculatedAt: "desc" },
-      }),
+      findLatestBusinessScheduleRun(),
       getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true }),
     ]);
 

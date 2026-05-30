@@ -210,6 +210,33 @@ model ProgressUpdate {
   @@index([createdAt])
 }
 
+model ProjectTaskFactEventLog {
+  id               String   @id @default(uuid())
+  eventId          String   @unique
+  eventType        String
+  sourceModule     String
+  projectId        String
+  projectTaskId    String?
+  taskNo           Int
+  taskKey          String?
+  taskName         String
+  occurredAt       DateTime
+  operatorId       String?
+  operatorName     String?
+  payload          Json
+  processingStatus String
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([projectTaskId])
+  @@index([taskNo])
+  @@index([eventType])
+  @@index([processingStatus])
+  @@index([createdAt])
+}
+
 model DataImport {
   id             String   @id @default(uuid())
   importType     String

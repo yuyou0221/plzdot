@@ -5,7 +5,7 @@ import { getModelingProductGuideEvents } from "@/lib/modeling-product-guide-even
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiRole(["admin", "manager", "viewer"]);
   if ("response" in auth) return auth.response;
 
   const searchParams = new URL(request.url).searchParams;

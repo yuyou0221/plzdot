@@ -582,6 +582,7 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
   const feedbackContent = optionalText(payload.feedbackContent);
   const feedbackAttachments = parseReviewFeedbackAttachments(payload);
   const submissionFeedbackId = optionalText(payload.submissionFeedbackId) ?? optionalText(payload.feedbackId) ?? optionalText(payload.modelingFeedbackId);
+  const sourceEventId = optionalText(payload.sourceEventId) ?? optionalText(payload.productGuideEventId);
 
   if ((reviewResult === "内部不通过" || reviewResult === "送审不通过") && !feedbackContent) {
     throw new ModelingContractError("内部不通过或送审不通过必须填写文字反馈。");
@@ -619,6 +620,39 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
 
     if (payloadProjectTaskId && payloadProjectTaskId !== task.projectTaskId) {
       throw new ModelingContractError("审核结果的项目任务与建模款式不一致。");
+    }
+
+    if (sourceEventId) {
+      const sourceEvent = await tx.modelingProductGuideEvent.findUnique({
+        where: { id: sourceEventId },
+        select: {
+          id: true,
+          eventType: true,
+          projectId: true,
+          projectTaskId: true,
+          modelingTaskId: true,
+        },
+      });
+
+      if (!sourceEvent) {
+        throw new ModelingContractError("找不到对应的产品组回传消息。", 404);
+      }
+
+      if (sourceEvent.eventType !== "modeling_work_submitted") {
+        throw new ModelingContractError("只有建模成果已提交消息可以通过审批结果标记处理。");
+      }
+
+      if (sourceEvent.projectId !== task.projectId) {
+        throw new ModelingContractError("回传消息的项目与建模款式不一致。");
+      }
+
+      if (sourceEvent.projectTaskId && sourceEvent.projectTaskId !== task.projectTaskId) {
+        throw new ModelingContractError("回传消息的项目任务与建模款式不一致。");
+      }
+
+      if (sourceEvent.modelingTaskId && sourceEvent.modelingTaskId !== task.id) {
+        throw new ModelingContractError("回传消息的建模款式与审核目标不一致。");
+      }
     }
 
     assertReviewResultTransitionAllowed(reviewResult, normalizeStatus(task.status, task.isOutsourced));
@@ -753,6 +787,16 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
       select: { id: true, projectId: true, projectTaskId: true, styleCode: true, styleName: true, status: true },
     });
 
+    if (sourceEventId) {
+      await tx.modelingProductGuideEvent.update({
+        where: { id: sourceEventId },
+        data: {
+          status: "consumed",
+          consumedAt: now,
+        },
+      });
+    }
+
     const writebackDraft = await refreshProjectModelingProgress(tx, updated.projectId, updated.projectTaskId);
 
     return {
@@ -768,6 +812,7 @@ export async function recordModelingReviewResult(payload: Record<string, unknown
       feedbackContent: feedbackText,
       feedbackAttachments: feedbackAttachments.structured,
       attachmentUrls: feedbackAttachments.urls,
+      consumedProductGuideEventId: sourceEventId ?? undefined,
       restoredFromSubmissionSnapshot: reviewResult === "内部不通过" || reviewResult === "送审不通过",
       restoreStatusOnRejection: reviewResult === "内部不通过" || reviewResult === "送审不通过" ? submissionRestoreStatus : undefined,
       writebackDraft,

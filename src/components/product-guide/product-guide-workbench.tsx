@@ -83,6 +83,22 @@ type MutationResponse = {
   files?: Array<Omit<StyleListImage, "id">>;
 };
 
+type ProductGuideIntegrationExchange = {
+  label: string;
+  method: "POST" | "PATCH";
+  path: string;
+  payload?: unknown;
+  ok: boolean;
+  status: number;
+  response: unknown;
+};
+
+type ProductGuideIntegrationLog = {
+  title: string;
+  summary: string;
+  exchanges: ProductGuideIntegrationExchange[];
+};
+
 const teamStorageKey = "product-guide:team-key";
 const milestoneLaneOrder = ["原画里程碑", "建模里程碑", "红蜡里程碑", "平面里程碑", "产前里程碑", "大货里程碑"];
 
@@ -157,6 +173,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   const [styleListRefsLoading, setStyleListRefsLoading] = useState(false);
   const [styleListHandoffMessage, setStyleListHandoffMessage] = useState("");
   const [uploadingImageRowId, setUploadingImageRowId] = useState("");
+  const [integrationLog, setIntegrationLog] = useState<ProductGuideIntegrationLog | null>(null);
+  const [integrationRunningLabel, setIntegrationRunningLabel] = useState("");
 
   const visibleSearch = search.trim();
   const activeMineKey = minePersonFilter === "all" ? data.filters.people[0]?.value : minePersonFilter;
@@ -237,6 +255,19 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setMessageTone(tone);
   }
 
+  function recordIntegrationExchange(title: string, exchange: ProductGuideIntegrationExchange, append = false) {
+    setIntegrationLog((current) => {
+      const exchanges = append && current ? [...current.exchanges, exchange] : [exchange];
+      const failedCount = exchanges.filter((item) => !item.ok).length;
+
+      return {
+        title,
+        summary: failedCount > 0 ? `${failedCount} 个接口未通过，已展示返回原因。` : "所有接口已返回成功。",
+        exchanges,
+      };
+    });
+  }
+
   function selectItem(itemId: string) {
     const nextItem = filteredItems.find((item) => item.id === itemId);
     setSelectedItemId(itemId);
@@ -247,6 +278,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setStyleListProjectTaskId("");
     setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function selectMilestoneCard(card: ProductGuideMilestoneCard) {
@@ -259,6 +291,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setStyleListProjectTaskId("");
     setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function chooseTeam(teamKey: string) {
@@ -269,6 +302,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setStyleListProjectTaskId("");
     setStyleListTaskRefs(null);
     setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function switchTeam(offset: number) {
@@ -547,17 +581,32 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   }
 
   async function submitModelingStartEvent(event: ModelingStartEvent) {
+    const payload = {
+      ...event,
+      startedByUserId: currentUser.id,
+      startedByName: currentUser.name || event.startedByName,
+    };
+
     try {
       const response = await fetch("/api/modeling/style-start-events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...event,
-          startedByUserId: currentUser.id,
-          startedByName: currentUser.name || event.startedByName,
-        }),
+        body: JSON.stringify(payload),
       });
       const result = (await response.json().catch(() => ({}))) as MutationResponse;
+      recordIntegrationExchange(
+        "任务操作联调",
+        {
+          label: `任务 ${event.taskNo} 启动 -> 建模排期`,
+          method: "POST",
+          path: "/api/modeling/style-start-events",
+          payload,
+          ok: response.ok && result.ok !== false,
+          status: response.status,
+          response: result,
+        },
+        true,
+      );
 
       if (!response.ok || !result.ok) {
         return {
@@ -574,7 +623,20 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           result.message ??
           `已通知建模排期启动${event.startScope === "first-style" ? "第一款建模款式" : "其余建模款式"}。`,
       };
-    } catch {
+    } catch (error) {
+      recordIntegrationExchange(
+        "任务操作联调",
+        {
+          label: `任务 ${event.taskNo} 启动 -> 建模排期`,
+          method: "POST",
+          path: "/api/modeling/style-start-events",
+          payload,
+          ok: false,
+          status: 0,
+          response: { ok: false, message: error instanceof Error ? error.message : "建模排期启动接口暂时不可用。" },
+        },
+        true,
+      );
       return {
         ok: false,
         message:
@@ -595,6 +657,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     onSuccess: (result: MutationResponse) => void | Promise<void>;
   }) {
     setSaving(true);
+    setIntegrationRunningLabel(path);
     try {
       const response = await fetch(path, {
         method,
@@ -602,6 +665,15 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         body: JSON.stringify(payload),
       });
       const result = (await response.json().catch(() => ({}))) as MutationResponse;
+      recordIntegrationExchange("任务操作联调", {
+        label: integrationLabelForPath(path, method),
+        method,
+        path,
+        payload,
+        ok: response.ok && result.ok !== false,
+        status: response.status,
+        response: result,
+      });
 
       if (!response.ok || !result.ok) {
         notify(result.message ?? "保存失败。", "warning");
@@ -609,10 +681,20 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       }
 
       await onSuccess(result);
-    } catch {
+    } catch (error) {
+      recordIntegrationExchange("任务操作联调", {
+        label: integrationLabelForPath(path, method),
+        method,
+        path,
+        payload,
+        ok: false,
+        status: 0,
+        response: { ok: false, message: error instanceof Error ? error.message : "保存接口暂时不可用。" },
+      });
       notify("保存接口暂时不可用。", "warning");
     } finally {
       setSaving(false);
+      setIntegrationRunningLabel("");
     }
   }
 
@@ -649,6 +731,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
               </div>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
+              <CompactNavButton icon={<Gauge size={14} />} label="五页原型" onClick={() => router.push("/product-guide/prototype")} />
               <CompactNavButton icon={<Database size={14} />} label="联调模拟" onClick={() => router.push("/product-guide/mock-lab")} />
               <CompactNavButton icon={<ExternalLink size={14} />} label="项目排期" onClick={() => router.push("/")} />
               <CompactNavButton icon={<Palette size={14} />} label="建模排期" onClick={() => router.push("/modeling")} />
@@ -835,6 +918,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                 setTaskForm={setTaskForm}
                 onOpenStyleList={() => openStyleListModal()}
                 saving={saving}
+                integrationLog={integrationLog}
+                integrationRunningLabel={integrationRunningLabel}
                 onSaveTaskAction={saveTaskAction}
                 onOpenSchedule={() => router.push("/")}
                 onOpenModeling={() => router.push("/modeling")}
@@ -1200,6 +1285,8 @@ function DetailPanel({
   setTaskForm,
   onOpenStyleList,
   saving,
+  integrationLog,
+  integrationRunningLabel,
   onSaveTaskAction,
   onOpenSchedule,
   onOpenModeling,
@@ -1214,6 +1301,8 @@ function DetailPanel({
   setTaskForm: (form: TaskActionForm) => void;
   onOpenStyleList: () => void;
   saving: boolean;
+  integrationLog: ProductGuideIntegrationLog | null;
+  integrationRunningLabel: string;
   onSaveTaskAction: (action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
   onOpenSchedule: () => void;
   onOpenModeling: () => void;
@@ -1418,6 +1507,8 @@ function DetailPanel({
         </div>
       ) : null}
 
+      <ProductGuideIntegrationPanel log={integrationLog} runningLabel={integrationRunningLabel} />
+
       <div className="mt-4 grid gap-3">
         <DetailBlock title="任务说明" body={`${item.milestone} / ${item.taskName} / ${item.statusLabel}`} />
         <DetailBlock title="为什么提醒" body={item.reminderReason} />
@@ -1436,6 +1527,82 @@ function DetailPanel({
         <ActionButton icon={<Palette size={16} />} label="建模排期" onClick={onOpenModeling} />
       </div>
     </aside>
+  );
+}
+
+function ProductGuideIntegrationPanel({
+  log,
+  runningLabel,
+}: {
+  log: ProductGuideIntegrationLog | null;
+  runningLabel: string;
+}) {
+  return (
+    <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/70 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-blue-950">真实接口联调结果</div>
+          <div className="mt-0.5 text-xs text-blue-800">完整页操作会在这里展示请求、返回和失败原因。</div>
+        </div>
+        <span
+          className={clsx(
+            "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold",
+            runningLabel
+              ? "bg-blue-100 text-blue-800"
+              : log
+                ? log.exchanges.every((exchange) => exchange.ok)
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-rose-100 text-rose-700"
+                : "bg-white text-slate-500",
+          )}
+        >
+          {runningLabel ? "调用中" : log ? log.summary : "等待操作"}
+        </span>
+      </div>
+
+      {log ? (
+        <div className="mt-3 grid gap-2">
+          {log.exchanges.map((exchange, index) => (
+            <div
+              key={`${exchange.path}-${index}`}
+              className={clsx(
+                "rounded-md border bg-white p-2",
+                exchange.ok ? "border-emerald-200" : "border-rose-200",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-xs font-semibold text-slate-800">{exchange.label}</div>
+                <span
+                  className={clsx(
+                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    exchange.ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700",
+                  )}
+                >
+                  {exchange.method} {exchange.status || "ERR"}
+                </span>
+              </div>
+              <div className="mt-1 break-all text-[11px] text-slate-500">{exchange.path}</div>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">查看请求内容</summary>
+                <pre className="mt-1 max-h-44 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                  {JSON.stringify(exchange.payload ?? {}, null, 2)}
+                </pre>
+              </details>
+              <details className="mt-1" open={!exchange.ok}>
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">查看返回结果</summary>
+                <pre className="mt-1 max-h-44 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                  {JSON.stringify(exchange.response ?? {}, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-md border border-dashed border-blue-200 bg-white/70 px-3 py-3 text-center text-xs text-slate-500">
+          选择一个任务并执行操作后显示。
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2312,6 +2479,13 @@ function modelingReviewOptions(statusLabel: string): TaskActionForm["modelingRev
   }
 
   return ["内部通过可送审", "内部不通过", "已送审", "等反馈", "送审通过", "送审不通过"];
+}
+
+function integrationLabelForPath(path: string, method: "POST" | "PATCH") {
+  if (path.includes("/api/product-guide/tasks/")) return "任务事实 -> 产品组任务接口";
+  if (path.includes("/api/modeling/style-submissions")) return "款式清单 -> 建模排期";
+  if (path.includes("/api/modeling/review-results")) return "审核 / 送审结果 -> 建模排期";
+  return `${method} ${path}`;
 }
 
 function normalizeTaskStatus(value?: string) {
