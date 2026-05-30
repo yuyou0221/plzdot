@@ -643,10 +643,11 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
     });
     setSelectedProjectId(projectId);
     setOperationTone(project.plannedLaunchDate === plannedLaunchDate ? "info" : "warning");
+    const direction = compareDateStrings(plannedLaunchDate, project.plannedLaunchDate) > 0 ? "延期" : "提前";
     setOperationMessage(
       project.plannedLaunchDate === plannedLaunchDate
         ? `${project.name} 已恢复原计划上线日期 ${plannedLaunchDate}。`
-        : `${project.name} 计划上线已调整为 ${plannedLaunchDate}。当前是规划草稿，保存后会回写项目信息表并触发重新测算。`,
+        : `${project.name} 计划上线已${direction}为 ${plannedLaunchDate}。当前是规划草稿，保存后会记录规划调整并触发重新测算。`,
     );
   }
 
@@ -661,16 +662,14 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
       return;
     }
 
-    const delayedDraft = calendarDrafts.find((draft) => compareDateStrings(draft.toDate, draft.fromDate) > 0);
-    if (delayedDraft) {
-      setOperationTone("warning");
-      setOperationMessage(`${delayedDraft.projectName} 的计划上线只能提前，不能向后延期。`);
-      return;
-    }
-
     setIsSavingCalendarDrafts(true);
     setOperationTone("info");
-    setOperationMessage("正在保存上线日历调整...");
+    const delayedCount = calendarDrafts.filter((draft) => compareDateStrings(draft.toDate, draft.fromDate) > 0).length;
+    setOperationMessage(
+      delayedCount > 0
+        ? `正在保存上线日历调整，其中 ${delayedCount} 项为计划上线延期。`
+        : "正在保存上线日历调整...",
+    );
 
     try {
       const response = await fetch("/api/schedule/adjustments", {
@@ -1938,11 +1937,6 @@ function PlanningTableView({
 
     if (!isValidDateString(draft.plannedLaunchDate)) {
       onNotify("请填写有效的计划上线日期。", "warning");
-      return;
-    }
-
-    if (compareDateStrings(draft.plannedLaunchDate, project.plannedLaunchDate) > 0) {
-      onNotify("计划上线只能提前，不能向后延期。", "warning");
       return;
     }
 

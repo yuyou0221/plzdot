@@ -1,16 +1,18 @@
-import { persistScheduleAnalysis, runScheduleAnalysisFromDatabase } from "@/lib/schedule-engine/adapters";
+import { persistScheduleAnalysis } from "@/lib/schedule-engine/adapters";
 import type {
   ScheduleAnalyzeOptions,
   ScheduleEnginePayload,
   ScheduleEnginePort,
   ScheduleEngineResultStore,
 } from "@/lib/schedule-engine/port";
+import { loadProjectAnalysisV5InputFromDatabase } from "@/lib/schedule-engine/project-analysis-v5-input";
+import { createProjectAnalysisV5ScheduleEnginePort } from "@/lib/schedule-engine/project-analysis-v5-port";
 
-export const legacyScheduleEnginePort: ScheduleEnginePort = {
-  engineName: "legacy-project-schedule-core",
-  engineVersion: "v5-excel-adapter",
-  runAnalysis: runScheduleAnalysisFromDatabase,
-};
+export const projectAnalysisV5ScheduleEnginePort: ScheduleEnginePort = createProjectAnalysisV5ScheduleEnginePort({
+  loadInput: loadProjectAnalysisV5InputFromDatabase,
+});
+
+export const defaultScheduleEnginePort = projectAnalysisV5ScheduleEnginePort;
 
 export const prismaScheduleEngineResultStore: ScheduleEngineResultStore = {
   persistAnalysis: persistScheduleAnalysis,
@@ -26,7 +28,7 @@ export async function runAndPersistScheduleAnalysis(
   options: ScheduleAnalyzeOptions = {},
   deps: ScheduleEngineServiceDeps = {},
 ) {
-  const engine = deps.engine ?? legacyScheduleEnginePort;
+  const engine = deps.engine ?? defaultScheduleEnginePort;
   const resultStore = deps.resultStore ?? prismaScheduleEngineResultStore;
   const payload = await engine.runAnalysis(options);
 

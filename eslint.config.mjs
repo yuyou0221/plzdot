@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "legacy/**",
+    "src/lib/schedule-engine/core/**",
     ".local/**",
     "next-env.d.ts",
   ]),

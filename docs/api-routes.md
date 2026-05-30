@@ -90,8 +90,9 @@ projectTeamId
 规则：
 
 ```text
-1. plannedLaunchDate 只能调早，不能晚于原计划上线日期。
-2. 需要推迟整体计划时，不通过普通规划编辑静默写入，应走后续确认过的管理层重新规划流程。
+1. plannedLaunchDate 可以提前，也可以延期。
+2. 如果新日期晚于原计划上线日期，系统会明确提示“计划上线延期”，并记录 ScheduleAdjustment / TaskDragLog。
+3. 产品组任务事实事件不能修改 plannedLaunchDate。
 ```
 
 ## DELETE /api/projects/:id
@@ -127,12 +128,7 @@ projectTeamId
 }
 ```
 
-下一步：
-
-```text
-把 project-analysis-v5-excel.js 接入这个接口。
-成功后写入 schedule_project_results、schedule_task_results 和 alerts。
-```
+当前测算入口已接入 `project-analysis-v5` 端口，成功后写入 `schedule_project_results`、`schedule_task_results`、`task_cards` 和 `alerts`。
 
 ## POST /api/schedule/adjustments
 
@@ -143,7 +139,7 @@ projectTeamId
 ```text
 1. 接收项目 ID 和目标上线日期，也兼容只传目标月份。
 2. 如果传 `toDate`，精确写入该日期；如果只传 `toMonth`，保留原计划上线日期的“日”，只替换年月；如目标月份天数不足则自动落到月底。
-3. 目标计划上线日期只能早于或等于原计划上线日期，不能向后推迟。
+3. 目标计划上线日期可以提前，也可以延期；延期会在返回消息和调整记录中明确标记。
 4. 更新 Project.plannedLaunchDate。
 5. 生成 ScheduleAdjustment 和 TaskDragLog。
 6. 接口本身只负责保存；页面上的“保存调整”会在保存成功后继续调用 /api/schedule/analyze 刷新预测、风险和财务影响。
@@ -322,7 +318,7 @@ project-main：项目主数据 Excel，合并补充模式。
 7. 写入 DataImport 批次记录。
 8. 实际进度事件 ID 按 projectId + taskNo + 事件类型 + 日期生成，重复导入同一事实不会重复写入。
 9. 导入时不写入 `任务规则v4` 到系统 TaskRule，只保留规则差异警告。
-10. 已匹配项目的计划上线日期只能调早，不能通过 Excel 向后推迟。
+10. 已匹配项目的计划上线日期可以通过 Excel 提前或延期；延期会生成规划调整记录，不再作为导入失败处理。
 11. 导入完成后只提示需要重新测算，不会静默触发排期内核。
 12. 当前不支持全量替换，也不删除 Excel 中缺失的旧项目。
 ```
@@ -349,7 +345,7 @@ project-main：项目主数据 Excel，合并补充模式。
 src/lib/schedule-engine/service.ts
 ```
 
-服务层通过 `ScheduleEnginePort` 调用默认 legacy adapter，并通过 `ScheduleEngineResultStore` 保存结果。后续替换核心排期内核时，应新增端口实现，不改页面组件和业务 API。
+服务层通过 `ScheduleEnginePort` 调用默认 `project-analysis-v5` 端口，并通过 `ScheduleEngineResultStore` 保存结果。数据库输入集中在 `src/lib/schedule-engine/project-analysis-v5-input.ts` 的 `loadProjectAnalysisV5InputFromDatabase()`，页面组件和业务 API 不直接调用 core JS 或旧适配器。
 
 ## 用户数据 API
 

@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
+import {
+  plannedLaunchAdjustmentSummary,
+  recordPlannedLaunchDateAdjustment,
+  type PlannedLaunchAdjustmentRecord,
+} from "@/lib/schedule-planning-adjustments";
 
 export const runtime = "nodejs";
 
@@ -20,15 +25,7 @@ type MonthPoint = {
   month: number;
 };
 
-type SavedAdjustment = {
-  adjustmentId: string;
-  projectId: string;
-  projectName: string;
-  fromMonth: string;
-  toMonth: string;
-  fromValue: string;
-  toValue: string;
-};
+type SavedAdjustment = PlannedLaunchAdjustmentRecord;
 
 export async function POST(request: Request) {
   const auth = await requireApiRole(["admin", "manager"]);
@@ -78,25 +75,6 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, message: `找不到项目：${missingProject.projectId}。` },
         { status: 404 },
-      );
-    }
-
-    const delayedAdjustment = normalizedAdjustments.find((adjustment) => {
-      const project = projectById.get(adjustment.projectId);
-      const targetDate = project ? resolveTargetDate(project.plannedLaunchDate, adjustment) : null;
-      return Boolean(project && targetDate && dateOnlyTime(targetDate) > dateOnlyTime(project.plannedLaunchDate));
-    });
-
-    if (delayedAdjustment) {
-      const project = projectById.get(delayedAdjustment.projectId);
-      const targetDate = project ? resolveTargetDate(project.plannedLaunchDate, delayedAdjustment) : null;
-
-      return NextResponse.json(
-        {
-          ok: false,
-          message: `${project?.projectName ?? delayedAdjustment.projectId} 的计划上线只能提前，不能从 ${project ? formatDate(project.plannedLaunchDate) : "-"} 调整到 ${targetDate ? formatDate(targetDate) : "-"}。`,
-        },
-        { status: 400 },
       );
     }
 
@@ -161,56 +139,22 @@ export async function POST(request: Request) {
           continue;
         }
 
-        const taskCardId = `calendar:${changedProject.projectId}`;
-        const fromMonth = formatMonthLabel(dateToMonthPoint(changedProject.fromDate));
-        const toMonth = formatMonthLabel(dateToMonthPoint(updatedProject.plannedLaunchDate));
-        const createdAdjustment = await tx.scheduleAdjustment.create({
-          data: {
-            taskCardId,
-            entityType: "Project",
-            entityId: changedProject.projectId,
-            adjustmentType: "上线日历调整",
-            changedField: "plannedLaunchDate",
-            fromValue,
-            toValue,
-            reason: changedProject.reason ?? `${changedProject.projectName} 计划上线从 ${fromValue} 调整到 ${toValue}`,
-            requiresSimulation: true,
-            affectsFinance: true,
-            affectsReview: false,
-            status: "已保存",
-            createdByName: "项目排期页面",
-          },
-        });
-
-        await tx.taskDragLog.create({
-          data: {
-            taskCardId,
-            cardType: "上线日历项目卡",
-            entityType: "Project",
-            entityId: changedProject.projectId,
-            fromLaneType: "launchMonth",
-            fromLaneKey: fromMonth,
-            toLaneType: "launchMonth",
-            toLaneKey: toMonth,
-            changedField: "plannedLaunchDate",
-            fromValue,
-            toValue,
-            adjustmentId: createdAdjustment.id,
-            confirmed: true,
-            dragReason: changedProject.reason ?? "上线日历拖拽调整",
-            draggedByName: "项目排期页面",
-          },
-        });
-
-        saved.push({
-          adjustmentId: createdAdjustment.id,
+        const adjustmentRecord = await recordPlannedLaunchDateAdjustment(tx, {
           projectId: changedProject.projectId,
           projectName: changedProject.projectName,
-          fromMonth,
-          toMonth,
-          fromValue,
-          toValue,
+          fromDate: changedProject.fromDate,
+          toDate: updatedProject.plannedLaunchDate,
+          source: "calendar",
+          adjustmentType: "上线日历调整",
+          cardType: "上线日历项目卡",
+          reason: changedProject.reason,
+          createdBy: auth.user.id,
+          createdByName: auth.user.name ?? auth.user.loginName ?? "项目排期页面",
         });
+
+        if (adjustmentRecord) {
+          saved.push(adjustmentRecord);
+        }
       }
 
       return saved;
@@ -222,7 +166,7 @@ export async function POST(request: Request) {
       adjustments: savedAdjustments,
       message:
         savedAdjustments.length > 0
-          ? `已保存 ${savedAdjustments.length} 项上线日历调整。`
+          ? `已保存 ${savedAdjustments.length} 项上线日历调整。${plannedLaunchAdjustmentSummary(savedAdjustments)}`
           : "没有日期发生变化，未生成新的调整记录。",
     });
   } catch (error) {
@@ -326,20 +270,8 @@ function daysInMonth(month: MonthPoint) {
   return new Date(Date.UTC(month.year, month.month, 0, 12)).getUTCDate();
 }
 
-function dateToMonthPoint(date: Date): MonthPoint {
-  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
-}
-
-function formatMonthLabel(month: MonthPoint) {
-  return `${String(month.year).slice(-2)}年${month.month}月`;
-}
-
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
-}
-
-function dateOnlyTime(date: Date) {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 function dateOnly(value: string) {

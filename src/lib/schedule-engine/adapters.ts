@@ -1,106 +1,32 @@
-import { createRequire } from "node:module";
-import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { displayTaskStatus, milestoneByTaskNo } from "@/lib/schedule-domain";
 import type {
-  ScheduleAnalyzeOptions,
   ScheduleEnginePayload,
   ScheduleEngineProjectResult,
   ScheduleEngineTaskResult,
 } from "@/lib/schedule-engine/port";
 
-const legacyRequire = createRequire(
-  path.join(process.cwd(), "legacy", "schedule-engine", "entry.cjs"),
-);
-
-type LegacyScheduleEngine = {
-  addScheduleDays: (date: string, days: number) => string;
-  subScheduleDays: (date: string, days: number) => string;
-  scheduleDaysBetween: (a: string, b: string) => number;
-};
-
-type LegacyAnalysisModule = {
-  analyzeExtracted: (
-    extracted: LegacyExtractedInput,
-    args: LegacyAnalysisArgs,
-    engine: LegacyScheduleEngine,
-    helpers: unknown,
-    today: string,
-  ) => LegacyAnalysisPayload;
-  makeDateHelpers: (engine: LegacyScheduleEngine) => unknown;
-};
-
-type LegacyAnalysisArgs = {
-  scenario: string;
-  hasThreeView: boolean;
-  project: string;
-  projectName: string;
-  plannedBufferDays: number;
-};
-
-type LegacyExtractedInput = {
-  workbook: string;
-  projects: LegacyProjectInput[];
-  actuals: LegacyActualInput[];
-  taskRules: LegacyTaskRuleInput[];
-};
-
-type LegacyProjectInput = {
-  projectId: string;
-  projectName: string;
-  projectStartDate: string;
-  plannedLaunchDate: string;
-  scenario: string;
-  hasThreeView: boolean;
-  status?: string;
-};
-
-type LegacyActualInput = {
-  projectName: string;
-  taskName: string;
-  recordKey: string;
-  actualStartDate?: string;
-  actualFinishDate?: string;
-  expectedFinishDate?: string;
-  taskStatus?: string;
-};
-
-type LegacyTaskRuleInput = {
-  taskId: number;
-  taskName: string;
-};
-
-type LegacyAnalysisPayload = ScheduleEnginePayload;
-type LegacyProjectResult = ScheduleEngineProjectResult;
-type LegacyTaskResult = ScheduleEngineTaskResult;
-
-export async function runScheduleAnalysisFromDatabase(options: ScheduleAnalyzeOptions = {}) {
-  const extracted = await buildExtractedInputFromDatabase(options.projectIds);
-  const engine = legacyRequire("./project-schedule-core.cjs") as LegacyScheduleEngine;
-  const analysis = legacyRequire("./project-analysis-v5-excel.cjs") as LegacyAnalysisModule;
-  const helpers = analysis.makeDateHelpers(engine);
-
-  return analysis.analyzeExtracted(
-    extracted,
-    {
-      scenario: "A",
-      hasThreeView: false,
-      project: "",
-      projectName: "",
-      plannedBufferDays: 0,
-    },
-    engine,
-    helpers,
-    options.today ?? shanghaiToday(),
-  );
-}
-
-export async function persistScheduleAnalysis(scheduleRunId: string, payload: LegacyAnalysisPayload) {
+export async function persistScheduleAnalysis(scheduleRunId: string, payload: ScheduleEnginePayload) {
   await prisma.$transaction(async (tx) => {
+    const projectIds = payload.projects.map((project) => project.projectId);
+
     await tx.scheduleProjectResult.deleteMany({ where: { scheduleRunId } });
     await tx.scheduleTaskResult.deleteMany({ where: { scheduleRunId } });
-    await tx.taskCard.deleteMany({ where: { lastRenderedFromRunId: scheduleRunId } });
+    await tx.taskCard.deleteMany({
+      where: {
+        OR: [
+          { lastRenderedFromRunId: scheduleRunId },
+          projectIds.length > 0
+            ? {
+                cardType: "项目任务卡",
+                entityType: "project_task",
+                projectId: { in: projectIds },
+              }
+            : undefined,
+        ].filter(isDefined),
+      },
+    });
     await tx.alert.deleteMany({ where: { createdFromRunId: scheduleRunId } });
 
     if (payload.projects.length > 0) {
@@ -204,58 +130,7 @@ export async function persistScheduleAnalysis(scheduleRunId: string, payload: Le
   });
 }
 
-async function buildExtractedInputFromDatabase(projectIds?: string[]): Promise<LegacyExtractedInput> {
-  const projects = await prisma.project.findMany({
-    where: projectIds?.length ? { id: { in: projectIds } } : undefined,
-    orderBy: { plannedLaunchDate: "asc" },
-  });
-
-  const projectIdList = projects.map((project) => project.id);
-  const [projectTasks, taskRules] = await Promise.all([
-    prisma.projectTask.findMany({
-      where: projectIdList.length ? { projectId: { in: projectIdList } } : undefined,
-      orderBy: [{ projectId: "asc" }, { taskNo: "asc" }],
-    }),
-    prisma.taskRule.findMany({
-      where: { isActive: true },
-      orderBy: { taskNo: "asc" },
-    }),
-  ]);
-
-  return {
-    workbook: "database",
-    projects: projects.map((project) => ({
-      projectId: project.id,
-      projectName: project.projectName,
-      projectStartDate: formatDate(project.projectStartDate ?? fallbackProjectStart(project.plannedLaunchDate)),
-      plannedLaunchDate: formatDate(project.plannedLaunchDate),
-      scenario: project.routeType || "A",
-      hasThreeView: project.needThreeView ?? false,
-      status: project.currentStage || project.status,
-    })),
-    actuals: projectTasks
-      .filter((task) => task.actualStartDate || task.actualFinishDate || task.expectedFinishDate || task.status !== "未开始")
-      .map((task) => {
-        const project = projects.find((item) => item.id === task.projectId);
-
-        return {
-          projectName: project?.projectName ?? task.projectId,
-          taskName: task.taskName,
-          recordKey: `${task.projectId}-${task.taskNo}`,
-          actualStartDate: task.actualStartDate ? formatDate(task.actualStartDate) : undefined,
-          actualFinishDate: task.actualFinishDate ? formatDate(task.actualFinishDate) : undefined,
-          expectedFinishDate: task.expectedFinishDate ? formatDate(task.expectedFinishDate) : undefined,
-          taskStatus: task.status,
-        };
-      }),
-    taskRules: taskRules.map((rule) => ({
-      taskId: rule.taskNo,
-      taskName: rule.taskName,
-    })),
-  };
-}
-
-function pickCurrentTask(rows: LegacyTaskResult[], projectId: string) {
+function pickCurrentTask(rows: ScheduleEngineTaskResult[], projectId: string) {
   return (
     rows.find((row) => row.projectId === projectId && row.isBlockingLaunch) ??
     rows.find((row) => row.projectId === projectId) ??
@@ -263,14 +138,14 @@ function pickCurrentTask(rows: LegacyTaskResult[], projectId: string) {
   );
 }
 
-function projectProgressPercent(rows: LegacyTaskResult[], projectId: string) {
+function projectProgressPercent(rows: ScheduleEngineTaskResult[], projectId: string) {
   const projectRows = rows.filter((row) => row.projectId === projectId);
   if (projectRows.length === 0) return 0;
   const finished = projectRows.filter((row) => displayTaskStatus(row.taskStatus) === "已完成").length;
   return Math.round((finished / projectRows.length) * 100);
 }
 
-function toProjectRiskLevel(project: LegacyProjectResult) {
+function toProjectRiskLevel(project: ScheduleEngineProjectResult) {
   const delayDays = Number(project.launchDeltaDays || 0);
   if (isCompletedProjectResult(project)) {
     return delayDays > 0 ? "延期完成" : "已完成";
@@ -280,20 +155,20 @@ function toProjectRiskLevel(project: LegacyProjectResult) {
   return delayDays >= 7 ? "必然延期" : "延期风险";
 }
 
-function isCompletedProjectResult(project: LegacyProjectResult) {
+function isCompletedProjectResult(project: ScheduleEngineProjectResult) {
   const status = project.status ?? "";
 
   return status.includes("已完") || status.includes("完结") || project.summary?.unfinishedTasks === 0;
 }
 
-function toTaskRiskLevel(row: LegacyTaskResult) {
+function toTaskRiskLevel(row: ScheduleEngineTaskResult) {
   if (displayTaskStatus(row.taskStatus) === "已完成") return "正常";
   if (Number(row.planDeltaDays || 0) >= 7 || Number(row.deadlineRiskDays || 0) >= 7) return "必然延期";
   if (Number(row.planDeltaDays || 0) > 0 || Number(row.deadlineRiskDays || 0) > 0 || row.isBlockingLaunch) return "延期风险";
   return "正常";
 }
 
-function toVisualStatus(row: LegacyTaskResult) {
+function toVisualStatus(row: ScheduleEngineTaskResult) {
   if (displayTaskStatus(row.taskStatus) === "已完成") return "done";
   const risk = toTaskRiskLevel(row);
   if (risk === "必然延期") return "delay";
@@ -301,7 +176,7 @@ function toVisualStatus(row: LegacyTaskResult) {
   return "normal";
 }
 
-function projectRiskMessage(project: LegacyProjectResult, riskLevel: string) {
+function projectRiskMessage(project: ScheduleEngineProjectResult, riskLevel: string) {
   const days = Number(project.launchDeltaDays || 0);
 
   if (riskLevel === "延期完成") {
@@ -314,7 +189,7 @@ function projectRiskMessage(project: LegacyProjectResult, riskLevel: string) {
   return `预计出货日期可能延期 ${days} 天，需要项目负责人确认当前卡点。`;
 }
 
-function taskRiskMessage(row: LegacyTaskResult) {
+function taskRiskMessage(row: ScheduleEngineTaskResult) {
   const risk = toTaskRiskLevel(row);
   if (risk === "正常") return "";
   if (risk === "必然延期") return "该任务已造成明显延期风险，需要管理层关注。";
@@ -330,14 +205,12 @@ function monthLabel(value?: string) {
   return `${String(year).slice(-2)}年${month}月`;
 }
 
-function fallbackProjectStart(plannedLaunchDate: Date) {
-  const date = new Date(plannedLaunchDate);
-  date.setDate(date.getDate() - 180);
-  return date;
-}
-
 function toDate(value: string) {
   return dateOnly(value);
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function toNullableDate(value?: string) {
@@ -348,10 +221,6 @@ function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
-function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
 function dateOnly(value: string) {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
@@ -359,15 +228,4 @@ function dateOnly(value: string) {
   }
 
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
-}
-
-function shanghaiToday() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((part) => part.type === type)?.value;
-  return `${get("year")}-${get("month")}-${get("day")}`;
 }

@@ -48,7 +48,11 @@ export async function POST(request: Request) {
     const result = await applyProjectMainImport(workbookPath, file.name, auth.user.name);
     const taskRuleWarningText =
       result.taskRuleWarnings.length > 0 ? ` 任务规则有 ${result.taskRuleWarnings.length} 条只读校验提醒。` : "";
-    const message = `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。需要重新测算排期。${taskRuleWarningText}`;
+    const plannedLaunchAdjustmentText =
+      result.plannedLaunchAdjustmentSummary.total > 0
+        ? ` 计划上线调整 ${result.plannedLaunchAdjustmentSummary.total} 项，${result.plannedLaunchAdjustmentSummary.text}`
+        : "";
+    const message = `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。需要重新测算排期。${plannedLaunchAdjustmentText}${taskRuleWarningText}`;
 
     return NextResponse.json({
       ok: true,
