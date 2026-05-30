@@ -9,9 +9,24 @@ import type {
 
 export async function persistScheduleAnalysis(scheduleRunId: string, payload: ScheduleEnginePayload) {
   await prisma.$transaction(async (tx) => {
+    const projectIds = payload.projects.map((project) => project.projectId);
+
     await tx.scheduleProjectResult.deleteMany({ where: { scheduleRunId } });
     await tx.scheduleTaskResult.deleteMany({ where: { scheduleRunId } });
-    await tx.taskCard.deleteMany({ where: { lastRenderedFromRunId: scheduleRunId } });
+    await tx.taskCard.deleteMany({
+      where: {
+        OR: [
+          { lastRenderedFromRunId: scheduleRunId },
+          projectIds.length > 0
+            ? {
+                cardType: "项目任务卡",
+                entityType: "project_task",
+                projectId: { in: projectIds },
+              }
+            : undefined,
+        ].filter(isDefined),
+      },
+    });
     await tx.alert.deleteMany({ where: { createdFromRunId: scheduleRunId } });
 
     if (payload.projects.length > 0) {
@@ -192,6 +207,10 @@ function monthLabel(value?: string) {
 
 function toDate(value: string) {
   return dateOnly(value);
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function toNullableDate(value?: string) {
