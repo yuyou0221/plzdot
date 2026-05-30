@@ -153,6 +153,119 @@ projectTeamId
 }
 ```
 
+## POST /api/schedule/task-fact-events
+
+用途：接收产品组工作指引输出的标准任务事实事件。
+
+当前行为：
+
+```text
+1. 仅 admin / manager 可用。
+2. 接收单条 ProjectTaskFactEvent；也兼容 { event } 或单条 { events: [...] } 包装。
+3. 使用 eventId 做幂等，重复事件不重复写入。
+4. 使用 projectId + taskNo 定位 ProjectTask；任务不存在时按 TaskRule 初始化。
+5. taskNo 必须是 1-31 的标准任务编号。
+6. 写入 ProjectTask 任务事实字段。
+7. 写入 ProgressUpdate。
+8. 写入 ProjectTaskFactEventLog。
+9. 返回 needsRecalculation=true，提示后续应由统一排期内核重新测算。
+10. 不写入 ScheduleProjectResult / ScheduleTaskResult，不计算风险、延期、预测上线和里程碑状态。
+```
+
+请求示例：
+
+```json
+{
+  "eventId": "uuid",
+  "eventType": "task_completed",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 7,
+  "taskKey": "#7",
+  "taskName": "精细建模确认风格",
+  "occurredAt": "2026-05-29T10:30:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualFinishDate": "2026-05-29",
+    "status": "已完成",
+    "note": "版权方已确认通过"
+  }
+}
+```
+
+支持的事件：
+
+```text
+task_started
+task_expected_finish_updated
+task_submitted_for_review
+task_completed
+task_blocked
+task_unblocked
+task_paused
+task_resumed
+task_note_updated
+```
+
+第一版联调契约：
+
+```text
+1. 产品组工作指引第一版只发送 task_started 和 task_completed。
+2. 产品组只提交任务事实，不提交风险、预测、延期、里程碑状态或产能结论。
+3. projectId 必须是系统项目 ID，不用项目编号或项目名匹配。
+4. taskNo 必须是 1-31。
+5. 日期字段统一 YYYY-MM-DD。
+6. occurredAt 必须是带时区 ISO，例如 2026-05-31T10:30:00+08:00。
+7. task_completed 如果 payload 带 actualStartDate，且原任务没有 actualStartDate，则补写；如果原任务已有 actualStartDate，不覆盖。
+8. 接收成功返回 ok=true、message=项目排期已接收任务事实事件、needsRecalculation=true。
+9. 接收失败返回 ok=false 和可读 message，例如 缺少 projectId。
+```
+
+task_started 示例：
+
+```json
+{
+  "eventId": "product-guide:task-event:uuid",
+  "eventType": "task_started",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 1,
+  "taskKey": "#1",
+  "taskName": "市场调研",
+  "occurredAt": "2026-05-31T10:30:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualStartDate": "2026-05-31",
+    "status": "进行中",
+    "note": "产品组从工作台启动 #1 市场调研。"
+  }
+}
+```
+
+task_completed 示例：
+
+```json
+{
+  "eventId": "product-guide:task-event:uuid",
+  "eventType": "task_completed",
+  "sourceModule": "product-guide",
+  "projectId": "system-project-id",
+  "taskNo": 1,
+  "taskKey": "#1",
+  "taskName": "市场调研",
+  "occurredAt": "2026-05-31T10:35:00+08:00",
+  "operatorId": "user-id",
+  "operatorName": "张三",
+  "payload": {
+    "actualFinishDate": "2026-05-31",
+    "status": "已完成",
+    "note": "产品组从工作台标记 #1 市场调研 完成。"
+  }
+}
+```
+
 ## POST /api/imports/preview
 
 用途：生成 Excel 导入预览，不写入数据库。
@@ -192,10 +305,35 @@ project-main：项目主数据 Excel，合并补充模式。
 3. 如果存在不可导入、匹配冲突、数据库不可校验，则拒绝写入。
 4. 新项目会创建 Project。
 5. 已匹配项目会更新 Project 的基础字段。
-6. 写入 DataImport 批次记录。
-7. 导入完成后只提示需要重新测算，不会静默触发排期内核。
-8. 当前不支持全量替换，也不删除 Excel 中缺失的旧项目。
+6. 会把“实际进度录入表”的开始 / 完成记录转成 ProjectTaskFactEvent 写入任务事实，sourceModule=manual-excel。
+7. 写入 DataImport 批次记录。
+8. 导入完成后只提示需要重新测算，不会静默触发排期内核。
+9. 当前不支持全量替换，也不删除 Excel 中缺失的旧项目。
 ```
+
+## GET /api/schedule/export-excel
+
+用途：导出与当前项目排期导入文件同结构的 Excel。
+
+当前行为：
+
+```text
+1. 仅 admin / manager 可用。
+2. 导出一个 .xlsx 工作簿。
+3. 工作表包含：项目信息表2026、实际进度录入表、任务规则v4。
+4. 项目ID、项目任务ID、taskNo 用隐藏列保存，便于回传稳定匹配。
+5. 任务规则v4 为只读规则快照，导入时只用于任务名称匹配，不允许通过 Excel 改核心排期逻辑。
+```
+
+## 排期内核调用边界
+
+项目排期 API 不直接调用 legacy 排期脚本。当前统一入口：
+
+```text
+src/lib/schedule-engine/service.ts
+```
+
+服务层通过 `ScheduleEnginePort` 调用默认 legacy adapter，并通过 `ScheduleEngineResultStore` 保存结果。后续替换核心排期内核时，应新增端口实现，不改页面组件和业务 API。
 
 ## 用户数据 API
 

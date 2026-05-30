@@ -3,6 +3,12 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { displayTaskStatus, milestoneByTaskNo } from "@/lib/schedule-domain";
+import type {
+  ScheduleAnalyzeOptions,
+  ScheduleEnginePayload,
+  ScheduleEngineProjectResult,
+  ScheduleEngineTaskResult,
+} from "@/lib/schedule-engine/port";
 
 const legacyRequire = createRequire(
   path.join(process.cwd(), "legacy", "schedule-engine", "entry.cjs"),
@@ -65,56 +71,9 @@ type LegacyTaskRuleInput = {
   taskName: string;
 };
 
-type LegacyAnalysisPayload = {
-  generatedAt: string;
-  projectCount: number;
-  futureTaskCount: number;
-  projects: LegacyProjectResult[];
-  rows: LegacyTaskResult[];
-  futureRows: LegacyTaskResult[];
-  warnings?: unknown;
-};
-
-type LegacyProjectResult = {
-  projectId: string;
-  projectName: string;
-  plannedLaunchDate: string;
-  projectedLaunchDate?: string;
-  launchDeltaDays?: number;
-  status?: string;
-  summary?: {
-    unfinishedTasks?: number;
-    blockingLaunchTasks?: number;
-  };
-};
-
-type LegacyTaskResult = {
-  recordKey: string;
-  projectId: string;
-  projectName: string;
-  taskId: number;
-  taskName: string;
-  plannedStartDate?: string;
-  plannedFinishDate?: string;
-  forecastStartDate?: string;
-  forecastFinishDate?: string;
-  expectedFinishDate?: string;
-  taskStatus?: string;
-  delayDays?: number;
-  planDeltaDays?: number;
-  remainingSafeDays?: number;
-  warningWindowDays?: number;
-  deadlineRiskDays?: number;
-  riskLevel?: string;
-  impactStatus?: string;
-  isBlockingLaunch?: boolean;
-  missingActualPredecessorIds?: string;
-};
-
-export type ScheduleAnalyzeOptions = {
-  projectIds?: string[];
-  today?: string;
-};
+type LegacyAnalysisPayload = ScheduleEnginePayload;
+type LegacyProjectResult = ScheduleEngineProjectResult;
+type LegacyTaskResult = ScheduleEngineTaskResult;
 
 export async function runScheduleAnalysisFromDatabase(options: ScheduleAnalyzeOptions = {}) {
   const extracted = await buildExtractedInputFromDatabase(options.projectIds);

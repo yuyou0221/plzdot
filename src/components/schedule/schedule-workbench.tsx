@@ -123,6 +123,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   const [operationMessage, setOperationMessage] = useState<string | null>(null);
   const [operationTone, setOperationTone] = useState<"info" | "warning">("info");
   const [isSavingCalendarDrafts, setIsSavingCalendarDrafts] = useState(false);
+  const [isExportingWorkbook, setIsExportingWorkbook] = useState(false);
 
   const visibleCards = useMemo(() => {
     return data.projectCards.filter((card) => {
@@ -364,8 +365,9 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               <ActionButton icon={<Database size={16} />} label="重新测算" onClick={handleAnalyze} />
               <ActionButton
                 icon={<Download size={16} />}
-                label="导出视图"
-                onClick={() => notifyPlaceholder("导出视图会在真实数据版看板稳定后开放。")}
+                label={isExportingWorkbook ? "导出中" : "导出 Excel"}
+                onClick={handleExportWorkbook}
+                disabled={isExportingWorkbook}
               />
             </div>
           </header>
@@ -709,6 +711,40 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
     setOperationTone(result.ok ? "info" : "warning");
     setOperationMessage(result.message);
     router.refresh();
+  }
+
+  async function handleExportWorkbook() {
+    setIsExportingWorkbook(true);
+    setOperationTone("info");
+    setOperationMessage("正在导出项目排期 Excel...");
+
+    try {
+      const response = await fetch("/api/schedule/export-excel");
+
+      if (!response.ok) {
+        const result = (await response.json().catch(() => null)) as { message?: string } | null;
+        setOperationTone("warning");
+        setOperationMessage(result?.message ?? "项目排期 Excel 导出失败。");
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exportFileNameFromResponse(response) ?? `番茄项目规划信息收集-项目排期导出-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setOperationTone("info");
+      setOperationMessage("已导出与导入模板同结构的项目排期 Excel。");
+    } catch {
+      setOperationTone("warning");
+      setOperationMessage("项目排期 Excel 导出接口暂时不可用。");
+    } finally {
+      setIsExportingWorkbook(false);
+    }
   }
 
   async function requestScheduleAnalyze() {
@@ -2050,6 +2086,12 @@ async function readProjectMutationResponse(response: Response): Promise<ProjectM
   } catch {
     return {};
   }
+}
+
+function exportFileNameFromResponse(response: Response) {
+  const contentDisposition = response.headers.get("Content-Disposition");
+  const match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 function downloadPlanningTableCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {

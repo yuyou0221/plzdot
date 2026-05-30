@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "@/lib/db/prisma";
-import { persistScheduleAnalysis } from "@/lib/schedule-engine/adapters";
+import { persistScheduleEngineResult } from "@/lib/schedule-engine/service";
+import type { ScheduleEnginePayload } from "@/lib/schedule-engine/port";
 import { milestoneByTaskNo } from "@/lib/schedule-domain";
 
 type ActualSchedulePayload = {
@@ -14,7 +15,7 @@ type ActualSchedulePayload = {
   futureRows: ActualTaskRow[];
 };
 
-type PersistableSchedulePayload = Parameters<typeof persistScheduleAnalysis>[1];
+type PersistableSchedulePayload = ScheduleEnginePayload;
 
 type ActualProject = {
   projectId: string;
@@ -148,7 +149,7 @@ export async function importActualSchedulePayload(payloadPath: string): Promise<
     });
   });
 
-  await persistScheduleAnalysis(runId, payload);
+  await persistScheduleEngineResult(runId, payload);
 
   return {
     ok: true,

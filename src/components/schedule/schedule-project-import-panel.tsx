@@ -23,6 +23,7 @@ type ProjectPreviewRow = {
   projectTeam: string;
   productOwner: string;
   productArtist: string;
+  modelingOwner: string;
   annualPlan: string;
   urgency: string;
   matchStatus: "matched" | "new" | "conflict" | "invalid" | "unverified";
@@ -80,6 +81,7 @@ type ApplyResponse = {
     importId: string;
     createdProjects?: number;
     updatedProjects?: number;
+    importedTaskFacts?: number;
     rowCount: number;
     requiresRecalculation: boolean;
   };
@@ -412,7 +414,8 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
           {applyResult ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <span>
-                已写入数据库：新增 {applyResult.createdProjects ?? 0} 个项目，更新 {applyResult.updatedProjects ?? 0} 个项目。
+                已写入数据库：新增 {applyResult.createdProjects ?? 0} 个项目，更新 {applyResult.updatedProjects ?? 0} 个项目，写入{" "}
+                {applyResult.importedTaskFacts ?? 0} 条任务事实。
                 {applyResult.requiresRecalculation
                   ? analyzeResult
                     ? ` 已完成排期重算：${analyzeResult.projectCount ?? "-"} 个项目，${analyzeResult.futureTaskCount ?? "-"} 条未来任务。`
@@ -550,6 +553,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
                       <td className="px-3 py-3 text-slate-600">
                         <div>{row.productOwner || "-"}</div>
                         <div className="mt-1 text-xs text-slate-400">{row.productArtist || "-"}</div>
+                        <div className="mt-1 text-xs text-slate-400">建模：{row.modelingOwner || "-"}</div>
                       </td>
                       <td className="px-3 py-3">
                         <IssueList issues={row.issues} />

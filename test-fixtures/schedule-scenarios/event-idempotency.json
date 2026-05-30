@@ -1,0 +1,70 @@
+{
+  "id": "event-idempotency",
+  "name": "任务事实事件幂等",
+  "description": "同一个 eventId 重复提交时只写入一次事实事件。",
+  "today": "2026-05-29",
+  "taskRules": [
+    { "taskNo": 10, "taskName": "启动其余款式建模", "standardWorkdays": 5 }
+  ],
+  "projects": [
+    {
+      "ref": "idem26",
+      "projectCode": "SIM2610",
+      "projectName": "幂等事件项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-D",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2026-11-25",
+      "projectStartDate": "2026-05-01",
+      "projectTeamId": "模拟项目组D",
+      "projectOwnerId": "模拟产品研发D",
+      "artOwnerId": "模拟产品研发美术D",
+      "routeType": "A",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 10, "taskName": "启动其余款式建模" }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "ref": "idem26-task10-start",
+      "projectRef": "idem26",
+      "replayCount": 2,
+      "eventType": "task_started",
+      "taskNo": 10,
+      "taskKey": "task-10",
+      "taskName": "启动其余款式建模",
+      "occurredAt": "2026-06-01T09:30:00+08:00",
+      "operatorId": "sim-product-d",
+      "operatorName": "模拟产品经理D",
+      "payload": {
+        "actualStartDate": "2026-06-01",
+        "status": "进行中",
+        "note": "重复提交应该只记录一次"
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 1,
+    "duplicateResponses": 1,
+    "projects": [
+      {
+        "ref": "idem26",
+        "tasks": [
+          {
+            "taskNo": 10,
+            "status": "进行中",
+            "actualStartDate": "2026-06-01",
+            "isBlocked": false
+          }
+        ],
+        "scheduleResult": { "exists": true }
+      }
+    ],
+    "workbench": {
+      "calendarYears": [2026],
+      "minimumProjectCards": 1
+    }
+  }
+}

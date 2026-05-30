@@ -1,0 +1,210 @@
+{
+  "id": "core-smoke",
+  "name": "项目排期核心冒烟",
+  "description": "覆盖跨年上线日历、任务完成、阻塞解除和暂停边界。",
+  "today": "2026-05-29",
+  "taskRules": [
+    { "taskNo": 1, "taskName": "项目启动", "standardWorkdays": 3 },
+    { "taskNo": 7, "taskName": "启动第一款建模", "standardWorkdays": 5 },
+    { "taskNo": 8, "taskName": "建模送审资料整理", "standardWorkdays": 4 }
+  ],
+  "projects": [
+    {
+      "ref": "normal26",
+      "projectCode": "SIM2601",
+      "projectName": "正常推进项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-A",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2026-09-20",
+      "projectStartDate": "2026-03-01",
+      "projectTeamId": "模拟项目组A",
+      "projectOwnerId": "模拟产品研发A",
+      "artOwnerId": "模拟产品研发美术A",
+      "routeType": "A",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 1, "taskName": "项目启动" }
+      ]
+    },
+    {
+      "ref": "boundary27",
+      "projectCode": "SIM2701",
+      "projectName": "阻塞暂停边界项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-B",
+      "productType": "手办",
+      "plannedLaunchDate": "2027-05-18",
+      "projectStartDate": "2026-10-15",
+      "projectTeamId": "模拟项目组B",
+      "projectOwnerId": "模拟产品研发B",
+      "artOwnerId": "模拟产品研发美术B",
+      "routeType": "A",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 7, "taskName": "启动第一款建模" },
+        { "taskNo": 8, "taskName": "建模送审资料整理" }
+      ]
+    },
+    {
+      "ref": "future28",
+      "projectCode": "SIM2801",
+      "projectName": "跨年未来项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-C",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2028-03-12",
+      "projectStartDate": "2027-09-01",
+      "projectTeamId": "模拟项目组C",
+      "projectOwnerId": "模拟产品研发C",
+      "artOwnerId": "模拟产品研发美术C",
+      "routeType": "A",
+      "status": "进行中",
+      "tasks": []
+    }
+  ],
+  "events": [
+    {
+      "ref": "normal26-task1-start",
+      "projectRef": "normal26",
+      "eventType": "task_started",
+      "taskNo": 1,
+      "taskKey": "task-1",
+      "taskName": "项目启动",
+      "occurredAt": "2026-05-01T09:00:00+08:00",
+      "operatorId": "sim-product-a",
+      "operatorName": "模拟产品经理A",
+      "payload": {
+        "actualStartDate": "2026-05-01",
+        "status": "进行中",
+        "note": "模拟开始推进"
+      }
+    },
+    {
+      "ref": "normal26-task1-complete",
+      "projectRef": "normal26",
+      "eventType": "task_completed",
+      "taskNo": 1,
+      "taskKey": "task-1",
+      "taskName": "项目启动",
+      "occurredAt": "2026-05-03T18:00:00+08:00",
+      "operatorId": "sim-product-a",
+      "operatorName": "模拟产品经理A",
+      "payload": {
+        "actualFinishDate": "2026-05-03",
+        "actualStartDate": "2026-05-02",
+        "status": "已完成",
+        "note": "模拟任务完成，完成事件不应覆盖已有实际开始日期"
+      }
+    },
+    {
+      "ref": "boundary27-task7-start",
+      "projectRef": "boundary27",
+      "eventType": "task_started",
+      "taskNo": 7,
+      "taskKey": "task-7",
+      "taskName": "启动第一款建模",
+      "occurredAt": "2026-11-02T10:00:00+08:00",
+      "operatorId": "sim-product-b",
+      "operatorName": "模拟产品经理B",
+      "payload": {
+        "actualStartDate": "2026-11-02",
+        "status": "进行中",
+        "note": "第一款建模启动"
+      }
+    },
+    {
+      "ref": "boundary27-task7-block",
+      "projectRef": "boundary27",
+      "eventType": "task_blocked",
+      "taskNo": 7,
+      "taskKey": "task-7",
+      "taskName": "启动第一款建模",
+      "occurredAt": "2026-11-04T11:00:00+08:00",
+      "operatorId": "sim-product-b",
+      "operatorName": "模拟产品经理B",
+      "payload": {
+        "status": "阻塞",
+        "blockReason": "等待版权方补充资料",
+        "expectedFinishDate": "2026-11-12",
+        "note": "模拟阻塞"
+      }
+    },
+    {
+      "ref": "boundary27-task7-unblock",
+      "projectRef": "boundary27",
+      "eventType": "task_unblocked",
+      "taskNo": 7,
+      "taskKey": "task-7",
+      "taskName": "启动第一款建模",
+      "occurredAt": "2026-11-07T14:00:00+08:00",
+      "operatorId": "sim-product-b",
+      "operatorName": "模拟产品经理B",
+      "payload": {
+        "status": "进行中",
+        "expectedFinishDate": "2026-11-10",
+        "note": "资料已补齐"
+      }
+    },
+    {
+      "ref": "boundary27-task8-pause",
+      "projectRef": "boundary27",
+      "eventType": "task_paused",
+      "taskNo": 8,
+      "taskKey": "task-8",
+      "taskName": "建模送审资料整理",
+      "occurredAt": "2026-11-08T14:00:00+08:00",
+      "operatorId": "sim-product-b",
+      "operatorName": "模拟产品经理B",
+      "payload": {
+        "status": "暂停",
+        "note": "项目主动暂停，不等同阻塞"
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 6,
+    "projects": [
+      {
+        "ref": "normal26",
+        "tasks": [
+          {
+            "taskNo": 1,
+            "status": "已完成",
+            "actualStartDate": "2026-05-01",
+            "actualFinishDate": "2026-05-03",
+            "isBlocked": false
+          }
+        ],
+        "scheduleResult": { "exists": true }
+      },
+      {
+        "ref": "boundary27",
+        "tasks": [
+          {
+            "taskNo": 7,
+            "status": "进行中",
+            "actualStartDate": "2026-11-02",
+            "expectedFinishDate": "2026-11-10",
+            "isBlocked": false,
+            "blockReason": null
+          },
+          {
+            "taskNo": 8,
+            "status": "暂停",
+            "isBlocked": false
+          }
+        ],
+        "scheduleResult": { "exists": true }
+      },
+      {
+        "ref": "future28",
+        "scheduleResult": { "exists": true }
+      }
+    ],
+    "workbench": {
+      "calendarYears": [2026, 2027, 2028],
+      "minimumProjectCards": 1
+    }
+  }
+}
