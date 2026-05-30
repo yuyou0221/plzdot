@@ -29,11 +29,22 @@ export type ProductGuideRecentUpdate = {
 
 export type ProductGuideStyleSummary = {
   id: string;
+  modelingTaskId?: string;
+  sourceStyleId?: string;
+  styleSubmissionBatchId?: string;
+  styleSubmissionVersion?: number;
   projectId: string;
   projectTaskId: string;
   styleCode: string;
   styleName: string;
+  styleSequence?: string;
+  isFirstModelingStyle?: boolean;
   isRequired: boolean;
+  referenceImageUrls?: Array<{
+    name?: string;
+    url: string;
+    type?: string;
+  }>;
   originalArtStatus: string;
   originalArtApprovedDate?: string;
   difficulty: string;
@@ -60,6 +71,11 @@ export type ProductGuideItem = {
   source: ProductGuideItemSource;
   projectId: string;
   projectName: string;
+  modelingTaskId?: string;
+  submissionFeedbackId?: string;
+  feedbackId?: string;
+  modelingEventType?: "style_list_returned" | "modeling_work_submitted";
+  deliverableUrls?: string[];
   projectTeamKey: string;
   projectTeamName: string;
   taskId?: string;

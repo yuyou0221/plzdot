@@ -9,6 +9,7 @@ import {
   type ProjectTaskFactEvent,
 } from "@/lib/schedule-task-fact-events";
 import { ingestTaskFactEventAndRecalculate } from "@/lib/schedule-task-fact-events-service";
+import { isModelingMilestoneTaskNo, milestoneByTaskNo } from "@/lib/schedule-domain";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,7 @@ type ProductGuideTaskRow = {
   projectId: string;
   taskNo: number;
   taskName: string;
+  milestoneType: string;
   status: string;
   actualStartDate: Date | null;
   actualFinishDate: Date | null;
@@ -56,6 +58,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         projectId: true,
         taskNo: true,
         taskName: true,
+        milestoneType: true,
         status: true,
         actualStartDate: true,
         actualFinishDate: true,
@@ -68,19 +71,29 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ ok: false, message: "找不到对应任务。" }, { status: 404 });
     }
 
+    const operatorName = optionalText(payload.operatorName) ?? auth.user.name ?? auth.user.loginName;
     const event = buildProjectTaskFactEvent({
       payload,
       action,
       task,
       operatorId: auth.user.id,
-      operatorName: optionalText(payload.operatorName) ?? auth.user.name ?? auth.user.loginName,
+      operatorName,
     });
     const parsedEvent = parseProjectTaskFactEvent(event);
     const result = await ingestTaskFactEventAndRecalculate(parsedEvent);
 
     if (!result.ok) {
-      return NextResponse.json(result, { status: result.status ?? 422 });
+        return NextResponse.json(result, { status: result.status ?? 422 });
     }
+
+    const styleListHandoff =
+      !result.duplicate && parsedEvent.eventType === "task_completed"
+        ? await buildOriginalArtStyleListHandoff(task.projectId, task.id)
+        : null;
+    const modelingStartEvent =
+      !result.duplicate && parsedEvent.eventType === "task_started"
+        ? buildModelingStartEvent(task, operatorName, parsedEvent.occurredAt)
+        : null;
 
     return NextResponse.json({
       ok: true,
@@ -92,6 +105,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       scheduleRunId: result.scheduleRunId,
       recalculation: result.recalculation,
       message: result.message,
+      ...styleListHandoff,
+      ...modelingStartEvent,
     });
   } catch (error) {
     if (error instanceof TaskFactEventValidationError) {
@@ -159,6 +174,18 @@ function eventTypeForAction(
   if (action === "submit-review") return "task_submitted_for_review";
 
   const status = normalizeStatus(optionalText(payload.status));
+  const currentStatus = normalizeStatus(task.status);
+
+  if (status === "进行中") {
+    if (task.isBlocked) return "task_unblocked";
+    if (currentStatus === "暂停") return "task_resumed";
+    if (currentStatus !== "进行中" && !task.actualStartDate) return "task_started";
+  }
+
+  if (status === "暂停") {
+    return "task_paused";
+  }
+
   if (status === "进行中" && !task.actualStartDate) {
     return "task_started";
   }
@@ -289,6 +316,106 @@ function toIsoWithLocalOffset(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
 
   return `${local.toISOString().slice(0, 19)}${sign}${hours}:${minutes}`;
+}
+
+async function buildOriginalArtStyleListHandoff(projectId: string, completedTaskId: string) {
+  const projectTasks = await prisma.projectTask.findMany({
+    where: { projectId },
+    orderBy: [{ taskNo: "asc" }],
+    select: {
+      id: true,
+      taskNo: true,
+      taskName: true,
+      milestoneType: true,
+      status: true,
+      actualFinishDate: true,
+    },
+  });
+  const originalArtTasks = projectTasks.filter(isOriginalArtTask);
+  const completedOriginalArtTask = originalArtTasks.some((task) => task.id === completedTaskId);
+
+  if (!completedOriginalArtTask) {
+    return null;
+  }
+
+  const allOriginalArtTasksCompleted = originalArtTasks.every(isTaskCompleted);
+  if (!allOriginalArtTasksCompleted) {
+    return null;
+  }
+
+  const existingStyleCount = await prisma.modelingTask.count({ where: { projectId } });
+  if (existingStyleCount > 0) {
+    return null;
+  }
+
+  const taskRefs = buildStyleListTaskRefs(projectTasks);
+  const modelingProjectTask = taskRefs.firstStyleTask ?? projectTasks.find(isModelingTask);
+
+  return {
+    requiresStyleList: true,
+    styleListProjectTaskId: modelingProjectTask?.id,
+    styleListTaskRefs: taskRefs,
+    styleListMessage: modelingProjectTask
+      ? "原画里程碑已完成，请录入建模款式清单。提交后先等待建模侧确认，任务 7 / 10 启动时再通知建模排期。"
+      : "原画里程碑已完成，请录入建模款式清单；但当前项目缺少建模任务 7 / 10，请先确认任务模板。",
+  };
+}
+
+function buildStyleListTaskRefs(tasks: Array<{ id: string; taskNo: number; taskName: string }>) {
+  const firstStyleTask = tasks.find((task) => task.taskNo === 7);
+  const remainingStylesTask = tasks.find((task) => task.taskNo === 10);
+
+  return {
+    firstStyleTask: firstStyleTask
+      ? {
+          id: firstStyleTask.id,
+          taskNo: 7,
+          taskName: firstStyleTask.taskName,
+        }
+      : undefined,
+    remainingStylesTask: remainingStylesTask
+      ? {
+          id: remainingStylesTask.id,
+          taskNo: 10,
+          taskName: remainingStylesTask.taskName,
+        }
+      : undefined,
+  };
+}
+
+function buildModelingStartEvent(
+  task: { id: string; projectId: string; taskNo: number; taskName: string },
+  operatorName: string,
+  occurredAt: string,
+) {
+  if (task.taskNo !== 7 && task.taskNo !== 10) {
+    return null;
+  }
+
+  return {
+    modelingStartEvent: {
+      sourceRequestId: `product-guide:start:${task.id}:${Date.now()}`,
+      projectId: task.projectId,
+      projectTaskId: task.id,
+      taskNo: task.taskNo,
+      taskName: task.taskName,
+      startScope: task.taskNo === 7 ? "first-style" : "remaining-styles",
+      startedAt: occurredAt,
+      startedByName: operatorName,
+    },
+  };
+}
+
+function isOriginalArtTask(task: { taskNo: number; taskName: string; milestoneType: string }) {
+  return milestoneByTaskNo(task.taskNo) === "原画里程碑" || `${task.milestoneType} ${task.taskName}`.includes("原画");
+}
+
+function isModelingTask(task: { taskNo: number; taskName: string; milestoneType: string }) {
+  return isModelingMilestoneTaskNo(task.taskNo) || `${task.milestoneType} ${task.taskName}`.includes("建模");
+}
+
+function isTaskCompleted(task: { status: string; actualFinishDate: Date | null }) {
+  return Boolean(task.actualFinishDate) || task.status.includes("已完成") || task.status.includes("已通过");
 }
 
 class MutationError extends Error {

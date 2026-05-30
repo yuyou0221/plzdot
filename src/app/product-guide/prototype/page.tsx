@@ -4,9 +4,9 @@ import { getProductGuidePrototypeData } from "@/lib/product-guide-prototype-data
 
 export const dynamic = "force-dynamic";
 
-export default async function ProductGuidePage() {
+export default async function ProductGuidePrototypePage() {
   const [currentUser, scheduleData] = await Promise.all([
-    requireCurrentUser("/product-guide"),
+    requireCurrentUser("/product-guide/prototype"),
     getProductGuidePrototypeData(),
   ]);
 

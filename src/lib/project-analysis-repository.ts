@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
+import { findLatestBusinessScheduleRunSelect } from "@/lib/schedule-run-selector";
 import type {
   ProjectAnalysisData,
   ProjectAnalysisMetric,
@@ -25,15 +26,11 @@ const riskLabel: Record<ProjectAnalysisRiskLevel, string> = {
 export async function getProjectAnalysisData(projectId: string): Promise<ProjectAnalysisData | null> {
   const [project, latestRun] = await Promise.all([
     getProjectRow(projectId),
-    prisma.scheduleRun.findFirst({
-      where: { runStatus: "成功" },
-      orderBy: { calculatedAt: "desc" },
-      select: {
-        id: true,
-        runName: true,
-        scriptVersion: true,
-        calculatedAt: true,
-      },
+    findLatestBusinessScheduleRunSelect({
+      id: true,
+      runName: true,
+      scriptVersion: true,
+      calculatedAt: true,
     }),
   ]);
 

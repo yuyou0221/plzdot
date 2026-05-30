@@ -7,17 +7,23 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  Database,
   ExternalLink,
   Gauge,
   ListChecks,
   Palette,
-  Plus,
   Search,
-  Trash2,
   UserRound,
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
+import {
+  createDefaultStyleListForm,
+  StyleListModal,
+  type StyleListForm,
+  type StyleListImage,
+  type StyleListTaskRefs,
+} from "@/components/product-guide/style-list-modal";
 import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
 import type {
   ProductGuideData,
@@ -44,36 +50,53 @@ type GuideActionKind = "complete" | "progress" | "expected-finish" | "block" | "
 
 type TaskActionForm = {
   taskStatus: string;
+  actualStartDate: string;
   actualFinishDate: string;
   expectedFinishDate: string;
   submittedAt: string;
   reviewTarget: string;
+  modelingReviewResult: "内部通过可送审" | "内部不通过" | "已送审" | "等反馈" | "送审通过" | "送审不通过";
   blockReason: string;
   note: string;
 };
 
-type StyleListRowForm = {
-  clientId: string;
-  styleSequence: string;
-  styleName: string;
-  isFirstModelingStyle: boolean;
-  isRequired: boolean;
-  difficulty: string;
-  estimatedWorkdays: string;
-  originalArtApprovedDate: string;
-  referenceImageUrl: string;
-  notes: string;
-};
-
-type StyleListForm = {
-  styles: StyleListRowForm[];
-  note: string;
+type ModelingStartEvent = {
+  sourceRequestId: string;
+  projectId: string;
+  projectTaskId: string;
+  taskNo: 7 | 10;
+  taskName?: string;
+  startScope: "first-style" | "remaining-styles";
+  startedAt: string;
+  startedByName: string;
 };
 
 type MutationResponse = {
   ok?: boolean;
   message?: string;
   needsRecalculation?: boolean;
+  requiresStyleList?: boolean;
+  styleListProjectTaskId?: string;
+  styleListTaskRefs?: StyleListTaskRefs;
+  styleListMessage?: string;
+  modelingStartEvent?: ModelingStartEvent;
+  files?: Array<Omit<StyleListImage, "id">>;
+};
+
+type ProductGuideIntegrationExchange = {
+  label: string;
+  method: "POST" | "PATCH";
+  path: string;
+  payload?: unknown;
+  ok: boolean;
+  status: number;
+  response: unknown;
+};
+
+type ProductGuideIntegrationLog = {
+  title: string;
+  summary: string;
+  exchanges: ProductGuideIntegrationExchange[];
 };
 
 const teamStorageKey = "product-guide:team-key";
@@ -124,8 +147,7 @@ const milestoneCardClass: Record<ProductGuideMilestoneRiskLevel, string> = {
 
 const weeklyTaskGridClass =
   "grid-cols-[minmax(120px,0.95fr)_minmax(180px,1.45fr)_96px_minmax(170px,1.2fr)] max-xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]";
-const taskStatusOptions = ["未开始", "进行中", "送审中", "阻塞", "暂停", "取消"];
-const styleDifficultyOptions = ["常规款", "简单款", "换色款", "困难正比例款"];
+const taskStatusOptions = ["未开始", "进行中", "暂停", "取消"];
 
 export function ProductGuideWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ProductGuideData }) {
   const router = useRouter();
@@ -145,7 +167,14 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
   const [saving, setSaving] = useState(false);
   const [activeAction, setActiveAction] = useState<GuideActionKind | null>(null);
   const [taskForm, setTaskForm] = useState<TaskActionForm>(() => defaultTaskActionForm());
-  const [styleForm, setStyleForm] = useState<StyleListForm>(() => defaultStyleListForm());
+  const [styleForm, setStyleForm] = useState<StyleListForm>(() => createDefaultStyleListForm());
+  const [styleListProjectTaskId, setStyleListProjectTaskId] = useState("");
+  const [styleListTaskRefs, setStyleListTaskRefs] = useState<StyleListTaskRefs | null>(null);
+  const [styleListRefsLoading, setStyleListRefsLoading] = useState(false);
+  const [styleListHandoffMessage, setStyleListHandoffMessage] = useState("");
+  const [uploadingImageRowId, setUploadingImageRowId] = useState("");
+  const [integrationLog, setIntegrationLog] = useState<ProductGuideIntegrationLog | null>(null);
+  const [integrationRunningLabel, setIntegrationRunningLabel] = useState("");
 
   const visibleSearch = search.trim();
   const activeMineKey = minePersonFilter === "all" ? data.filters.people[0]?.value : minePersonFilter;
@@ -226,13 +255,30 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setMessageTone(tone);
   }
 
+  function recordIntegrationExchange(title: string, exchange: ProductGuideIntegrationExchange, append = false) {
+    setIntegrationLog((current) => {
+      const exchanges = append && current ? [...current.exchanges, exchange] : [exchange];
+      const failedCount = exchanges.filter((item) => !item.ok).length;
+
+      return {
+        title,
+        summary: failedCount > 0 ? `${failedCount} 个接口未通过，已展示返回原因。` : "所有接口已返回成功。",
+        exchanges,
+      };
+    });
+  }
+
   function selectItem(itemId: string) {
     const nextItem = filteredItems.find((item) => item.id === itemId);
     setSelectedItemId(itemId);
     setSelectedMilestoneCardId("");
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
-    setStyleForm(defaultStyleListForm());
+    setStyleForm(createDefaultStyleListForm());
+    setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
+    setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function selectMilestoneCard(card: ProductGuideMilestoneCard) {
@@ -241,7 +287,11 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedItemId(nextItem?.id ?? "");
     setActiveAction(null);
     setTaskForm(defaultTaskActionForm(nextItem));
-    setStyleForm(defaultStyleListForm());
+    setStyleForm(createDefaultStyleListForm());
+    setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
+    setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function chooseTeam(teamKey: string) {
@@ -249,6 +299,10 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     setSelectedItemId("");
     setSelectedMilestoneCardId("");
     setActiveAction(null);
+    setStyleListProjectTaskId("");
+    setStyleListTaskRefs(null);
+    setStyleListHandoffMessage("");
+    setIntegrationLog(null);
   }
 
   function switchTeam(offset: number) {
@@ -262,7 +316,12 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
 
   async function saveTaskAction(action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") {
     if (!selectedItem?.taskId) {
-      notify("当前指引没有关联项目任务，不能直接写入任务进度。", "warning");
+      notify("当前指引没有关联项目任务，不能提交任务事实事件。", "warning");
+      return;
+    }
+
+    if (action === "submit-review" && selectedItem.source === "modeling") {
+      await saveModelingReviewResult(selectedItem);
       return;
     }
 
@@ -270,6 +329,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       action === "complete"
         ? {
             action,
+            actualStartDate: taskForm.actualStartDate,
             actualFinishDate: taskForm.actualFinishDate,
             note: taskForm.note,
           }
@@ -277,6 +337,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           ? {
               action,
               status: taskForm.taskStatus,
+              actualStartDate: taskForm.actualStartDate,
               note: taskForm.note,
             }
         : action === "expected-finish"
@@ -289,17 +350,21 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           ? {
               action,
               blockReason: taskForm.blockReason,
+              expectedFinishDate: taskForm.expectedFinishDate,
               note: taskForm.note,
             }
             : action === "submit-review"
               ? {
                   action,
+                  actualStartDate: taskForm.actualStartDate,
                   submittedAt: taskForm.submittedAt,
+                  expectedFinishDate: taskForm.expectedFinishDate,
                   reviewTarget: taskForm.reviewTarget,
                   note: taskForm.note,
                 }
               : {
                   action,
+                  expectedFinishDate: taskForm.expectedFinishDate,
                   note: taskForm.note,
                 };
 
@@ -307,10 +372,36 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       path: `/api/product-guide/tasks/${selectedItem.taskId}`,
       method: "PATCH",
       payload,
-      onSuccess: (result) => {
-        setActiveAction(null);
+      onSuccess: async (result) => {
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已保存。");
+        if (action === "complete" && result.requiresStyleList) {
+          openStyleListModal({
+            message: result.styleListMessage,
+            taskRefs: result.styleListTaskRefs,
+            originalArtApprovedDate: taskForm.actualFinishDate,
+            note: "原画里程碑已完成，登记完整款式清单。",
+          });
+          notify(result.styleListMessage ?? "原画里程碑已完成，请录入建模款式清单。", "warning");
+          return;
+        }
+
+        let nextMessage = result.message ?? "已保存。";
+        let nextTone: "info" | "warning" = "info";
+        if (result.modelingStartEvent) {
+          const startResult = await submitModelingStartEvent(result.modelingStartEvent);
+          if (!startResult.ok) {
+            nextMessage = `${nextMessage} 建模启动通知未完成：${startResult.message}`;
+            nextTone = "warning";
+          } else {
+            nextMessage = `${nextMessage} ${startResult.message}`;
+          }
+        }
+
+        setActiveAction(null);
+        setStyleListProjectTaskId("");
+        setStyleListTaskRefs(null);
+        setStyleListHandoffMessage("");
+        notify(nextMessage, nextTone);
         router.refresh();
       },
     });
@@ -321,48 +412,237 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
       return;
     }
 
-    const styles = styleForm.styles
-      .filter((style) => style.styleName.trim().length > 0)
-      .map((style, index) => ({
-        styleSequence: style.styleSequence.trim() || String(index + 1),
-        styleName: style.styleName.trim(),
-        isFirstModelingStyle: style.isFirstModelingStyle,
-        isRequired: style.isRequired,
-        difficulty: style.difficulty.trim() || "常规款",
-        estimatedWorkdays: style.estimatedWorkdays,
-        originalArtApprovedDate: style.originalArtApprovedDate,
-        referenceImageUrl: style.referenceImageUrl.trim(),
-        notes: [style.notes.trim(), styleForm.note.trim()].filter(Boolean).join("\n"),
-      }));
-    const firstStyleCount = styles.filter((style) => style.isFirstModelingStyle).length;
-
-    if (styles.length === 0) {
-      notify("请至少填写 1 款建模款式。", "warning");
-      return;
-    }
-
-    if (firstStyleCount !== 1) {
-      notify("必须且只能选择 1 款作为第一款建模款式。", "warning");
+    const validation = validateStyleListForm(styleForm, styleListTaskRefs);
+    if (validation) {
+      notify(validation, "warning");
       return;
     }
 
     await saveMutation({
-      path: "/api/product-guide/modeling-tasks",
+      path: "/api/modeling/style-submissions",
       method: "POST",
-      payload: {
-        projectId: selectedItem.projectId,
-        projectTaskId: selectedItem.taskId,
-        styles,
-        note: styleForm.note,
-      },
+      payload: buildStyleSubmissionPayload({
+        currentUser,
+        selectedItem,
+        form: styleForm,
+        taskRefs: styleListTaskRefs,
+        fallbackProjectTaskId: styleListProjectTaskId || selectedItem.taskId,
+      }),
       onSuccess: (result) => {
         setActiveAction(null);
-        setStyleForm(defaultStyleListForm());
+        setStyleForm(createDefaultStyleListForm());
+        setStyleListProjectTaskId("");
+        setStyleListTaskRefs(null);
+        setStyleListHandoffMessage("");
         setPendingUpdateCount((count) => count + 1);
-        notify(result.message ?? "已提交建模款式清单，等待建模侧确认。");
+        notify(result.message ?? "已提交款式清单给建模排期，等待建模侧确认。");
         router.refresh();
       },
     });
+  }
+
+  async function saveModelingReviewResult(item: ProductGuideItem) {
+    const modelingTaskId = modelingTaskIdFromItem(item);
+    const needsFeedback = taskForm.modelingReviewResult === "内部不通过" || taskForm.modelingReviewResult === "送审不通过";
+
+    if (!modelingTaskId || !item.taskId) {
+      notify("当前建模款式缺少建模任务编号，不能提交审核结果。", "warning");
+      return;
+    }
+
+    if (needsFeedback && !taskForm.note.trim()) {
+      notify("内部不通过或送审不通过时，请填写具体修改意见。", "warning");
+      return;
+    }
+
+    await saveMutation({
+      path: "/api/modeling/review-results",
+      method: "POST",
+      payload: {
+        sourceRequestId: `product-guide:review:${modelingTaskId}:${Date.now()}`,
+        projectId: item.projectId,
+        projectTaskId: item.taskId,
+        modelingTaskId,
+        reviewResult: taskForm.modelingReviewResult,
+        reviewAt: taskForm.submittedAt,
+        reviewerId: currentUser.id,
+        reviewerName: currentUser.name,
+        submissionFeedbackId: item.submissionFeedbackId,
+        feedbackId: item.feedbackId,
+        feedbackContent: taskForm.note || undefined,
+      },
+      onSuccess: (result) => {
+        setActiveAction(null);
+        setPendingUpdateCount((count) => count + 1);
+        notify(result.message ?? "已提交建模审核 / 送审结果。");
+        router.refresh();
+      },
+    });
+  }
+
+  function openStyleListModal(options?: {
+    message?: string;
+    taskRefs?: StyleListTaskRefs;
+    originalArtApprovedDate?: string;
+    note?: string;
+  }) {
+    if (!selectedItem) {
+      notify("请先选择一个项目或任务。", "warning");
+      return;
+    }
+
+    setStyleForm(
+      createDefaultStyleListForm({
+        originalArtApprovedDate: options?.originalArtApprovedDate,
+        note: options?.note,
+      }),
+    );
+    setStyleListProjectTaskId(options?.taskRefs?.firstStyleTask?.id ?? "");
+    setStyleListTaskRefs(options?.taskRefs ?? null);
+    setStyleListHandoffMessage(
+      options?.message ?? "请填写完整款式清单，并标记哪一款是第一款建模款式。提交后先等待建模侧确认，确认前不会启动建模。",
+    );
+    setActiveAction("style-list");
+
+    if (!options?.taskRefs) {
+      void loadStyleListTaskRefs(selectedItem.projectId);
+    }
+  }
+
+  async function loadStyleListTaskRefs(projectId: string) {
+    setStyleListRefsLoading(true);
+    try {
+      const response = await fetch(`/api/product-guide/projects/${projectId}/modeling-task-refs`);
+      const result = (await response.json().catch(() => ({}))) as MutationResponse & StyleListTaskRefs;
+
+      if (!response.ok || !result.ok) {
+        notify(result.message ?? "读取建模任务 7 / 10 失败。", "warning");
+        return;
+      }
+
+      const refs: StyleListTaskRefs = {
+        firstStyleTask: result.firstStyleTask,
+        remainingStylesTask: result.remainingStylesTask,
+      };
+      setStyleListTaskRefs(refs);
+      setStyleListProjectTaskId(refs.firstStyleTask?.id ?? refs.remainingStylesTask?.id ?? "");
+    } catch {
+      notify("读取建模任务 7 / 10 失败。", "warning");
+    } finally {
+      setStyleListRefsLoading(false);
+    }
+  }
+
+  async function uploadStyleImages(rowId: string, files: File[]) {
+    if (files.length === 0) {
+      return;
+    }
+
+    setUploadingImageRowId(rowId);
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append("files", file));
+
+      const response = await fetch("/api/product-guide/uploads", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json().catch(() => ({}))) as MutationResponse;
+
+      if (!response.ok || !result.ok || !result.files) {
+        notify(result.message ?? "图片上传失败。", "warning");
+        return;
+      }
+
+      setStyleForm((currentForm) => ({
+        ...currentForm,
+        rows: currentForm.rows.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                referenceImages: [
+                  ...row.referenceImages,
+                  ...result.files!.map((file) => ({
+                    id: `${Date.now()}-${file.url}`,
+                    name: file.name,
+                    url: file.url,
+                    type: file.type,
+                  })),
+                ],
+              }
+            : row,
+        ),
+      }));
+    } catch {
+      notify("图片上传接口暂时不可用。", "warning");
+    } finally {
+      setUploadingImageRowId("");
+    }
+  }
+
+  async function submitModelingStartEvent(event: ModelingStartEvent) {
+    const payload = {
+      ...event,
+      startedByUserId: currentUser.id,
+      startedByName: currentUser.name || event.startedByName,
+    };
+
+    try {
+      const response = await fetch("/api/modeling/style-start-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = (await response.json().catch(() => ({}))) as MutationResponse;
+      recordIntegrationExchange(
+        "任务操作联调",
+        {
+          label: `任务 ${event.taskNo} 启动 -> 建模排期`,
+          method: "POST",
+          path: "/api/modeling/style-start-events",
+          payload,
+          ok: response.ok && result.ok !== false,
+          status: response.status,
+          response: result,
+        },
+        true,
+      );
+
+      if (!response.ok || !result.ok) {
+        return {
+          ok: false,
+          message:
+            result.message ??
+            `任务 ${event.taskNo} 已更新为进行中，但通知建模排期启动${event.startScope === "first-style" ? "第一款" : "其余款式"}失败。`,
+        };
+      }
+
+      return {
+        ok: true,
+        message:
+          result.message ??
+          `已通知建模排期启动${event.startScope === "first-style" ? "第一款建模款式" : "其余建模款式"}。`,
+      };
+    } catch (error) {
+      recordIntegrationExchange(
+        "任务操作联调",
+        {
+          label: `任务 ${event.taskNo} 启动 -> 建模排期`,
+          method: "POST",
+          path: "/api/modeling/style-start-events",
+          payload,
+          ok: false,
+          status: 0,
+          response: { ok: false, message: error instanceof Error ? error.message : "建模排期启动接口暂时不可用。" },
+        },
+        true,
+      );
+      return {
+        ok: false,
+        message:
+          `任务 ${event.taskNo} 已更新为进行中，但建模排期启动接口暂时不可用，请稍后补发启动事件。`,
+      };
+    }
   }
 
   async function saveMutation({
@@ -374,9 +654,10 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
     path: string;
     method: "POST" | "PATCH";
     payload: unknown;
-    onSuccess: (result: MutationResponse) => void;
+    onSuccess: (result: MutationResponse) => void | Promise<void>;
   }) {
     setSaving(true);
+    setIntegrationRunningLabel(path);
     try {
       const response = await fetch(path, {
         method,
@@ -384,17 +665,36 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
         body: JSON.stringify(payload),
       });
       const result = (await response.json().catch(() => ({}))) as MutationResponse;
+      recordIntegrationExchange("任务操作联调", {
+        label: integrationLabelForPath(path, method),
+        method,
+        path,
+        payload,
+        ok: response.ok && result.ok !== false,
+        status: response.status,
+        response: result,
+      });
 
       if (!response.ok || !result.ok) {
         notify(result.message ?? "保存失败。", "warning");
         return;
       }
 
-      onSuccess(result);
-    } catch {
+      await onSuccess(result);
+    } catch (error) {
+      recordIntegrationExchange("任务操作联调", {
+        label: integrationLabelForPath(path, method),
+        method,
+        path,
+        payload,
+        ok: false,
+        status: 0,
+        response: { ok: false, message: error instanceof Error ? error.message : "保存接口暂时不可用。" },
+      });
       notify("保存接口暂时不可用。", "warning");
     } finally {
       setSaving(false);
+      setIntegrationRunningLabel("");
     }
   }
 
@@ -413,6 +713,7 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
             <SideNavButton label="产品组工作指引" badge="P0" active />
             <SideNavButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
             {canOpenUserData ? <SideNavButton label="用户数据" badge="基础" onClick={() => router.push("/users")} /> : null}
+            <SideNavButton label="数据导入" badge="预览" onClick={() => router.push("/imports")} />
           </nav>
           <AccountPanel currentUser={currentUser} />
         </aside>
@@ -430,6 +731,8 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
               </div>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
+              <CompactNavButton icon={<Gauge size={14} />} label="五页原型" onClick={() => router.push("/product-guide/prototype")} />
+              <CompactNavButton icon={<Database size={14} />} label="联调模拟" onClick={() => router.push("/product-guide/mock-lab")} />
               <CompactNavButton icon={<ExternalLink size={14} />} label="项目排期" onClick={() => router.push("/")} />
               <CompactNavButton icon={<Palette size={14} />} label="建模排期" onClick={() => router.push("/modeling")} />
             </div>
@@ -613,11 +916,11 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
                 setActiveAction={setActiveAction}
                 taskForm={taskForm}
                 setTaskForm={setTaskForm}
-                styleForm={styleForm}
-                setStyleForm={setStyleForm}
+                onOpenStyleList={() => openStyleListModal()}
                 saving={saving}
+                integrationLog={integrationLog}
+                integrationRunningLabel={integrationRunningLabel}
                 onSaveTaskAction={saveTaskAction}
-                onSaveStyleList={saveStyleList}
                 onOpenSchedule={() => router.push("/")}
                 onOpenModeling={() => router.push("/modeling")}
                 onOpenProjectAnalysis={(projectId) => router.push(`/product-guide/project-analysis/${projectId}`)}
@@ -626,6 +929,27 @@ export function ProductGuideWorkbench({ currentUser, data }: { currentUser: Auth
           </section>
         </main>
       </div>
+
+      {activeAction === "style-list" && selectedItem ? (
+        <StyleListModal
+          projectName={selectedItem.projectName}
+          message={styleListHandoffMessage}
+          form={styleForm}
+          setForm={setStyleForm}
+          taskRefs={styleListTaskRefs}
+          refsLoading={styleListRefsLoading}
+          saving={saving}
+          uploadingRowId={uploadingImageRowId}
+          onUploadImages={uploadStyleImages}
+          onCancel={() => {
+            setActiveAction(null);
+            setStyleListProjectTaskId("");
+            setStyleListTaskRefs(null);
+            setStyleListHandoffMessage("");
+          }}
+          onSubmit={saveStyleList}
+        />
+      ) : null}
     </div>
   );
 }
@@ -959,11 +1283,11 @@ function DetailPanel({
   setActiveAction,
   taskForm,
   setTaskForm,
-  styleForm,
-  setStyleForm,
+  onOpenStyleList,
   saving,
+  integrationLog,
+  integrationRunningLabel,
   onSaveTaskAction,
-  onSaveStyleList,
   onOpenSchedule,
   onOpenModeling,
   onOpenProjectAnalysis,
@@ -975,11 +1299,11 @@ function DetailPanel({
   setActiveAction: (action: GuideActionKind | null) => void;
   taskForm: TaskActionForm;
   setTaskForm: (form: TaskActionForm) => void;
-  styleForm: StyleListForm;
-  setStyleForm: (form: StyleListForm) => void;
+  onOpenStyleList: () => void;
   saving: boolean;
+  integrationLog: ProductGuideIntegrationLog | null;
+  integrationRunningLabel: string;
   onSaveTaskAction: (action: "complete" | "progress" | "expected-finish" | "block" | "unblock" | "submit-review") => void;
-  onSaveStyleList: () => void;
   onOpenSchedule: () => void;
   onOpenModeling: () => void;
   onOpenProjectAnalysis: (projectId: string) => void;
@@ -1113,11 +1437,8 @@ function DetailPanel({
           {canShowStyleListAction(item) ? (
             <>
               <SmallActionButton
-                label="提交款式清单"
-                onClick={() => {
-                  setStyleForm(defaultStyleListForm());
-                  setActiveAction("style-list");
-                }}
+                label="录入款式"
+                onClick={onOpenStyleList}
               />
               <SmallActionButton label="管理款式" onClick={onOpenModeling} />
             </>
@@ -1125,7 +1446,7 @@ function DetailPanel({
         </div>
       </div>
 
-      {activeAction ? (
+      {activeAction && activeAction !== "style-list" ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
           {activeAction === "complete" ? (
             <TaskCompleteForm
@@ -1176,22 +1497,17 @@ function DetailPanel({
             <SubmitReviewForm
               form={taskForm}
               setForm={setTaskForm}
+              isModelingReview={item.source === "modeling"}
+              statusLabel={item.statusLabel}
               saving={saving}
               onCancel={() => setActiveAction(null)}
               onSubmit={() => onSaveTaskAction("submit-review")}
             />
           ) : null}
-          {activeAction === "style-list" ? (
-            <StyleListFormView
-              form={styleForm}
-              setForm={setStyleForm}
-              saving={saving}
-              onCancel={() => setActiveAction(null)}
-              onSubmit={onSaveStyleList}
-            />
-          ) : null}
         </div>
       ) : null}
+
+      <ProductGuideIntegrationPanel log={integrationLog} runningLabel={integrationRunningLabel} />
 
       <div className="mt-4 grid gap-3">
         <DetailBlock title="任务说明" body={`${item.milestone} / ${item.taskName} / ${item.statusLabel}`} />
@@ -1211,6 +1527,82 @@ function DetailPanel({
         <ActionButton icon={<Palette size={16} />} label="建模排期" onClick={onOpenModeling} />
       </div>
     </aside>
+  );
+}
+
+function ProductGuideIntegrationPanel({
+  log,
+  runningLabel,
+}: {
+  log: ProductGuideIntegrationLog | null;
+  runningLabel: string;
+}) {
+  return (
+    <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/70 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-blue-950">真实接口联调结果</div>
+          <div className="mt-0.5 text-xs text-blue-800">完整页操作会在这里展示请求、返回和失败原因。</div>
+        </div>
+        <span
+          className={clsx(
+            "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold",
+            runningLabel
+              ? "bg-blue-100 text-blue-800"
+              : log
+                ? log.exchanges.every((exchange) => exchange.ok)
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-rose-100 text-rose-700"
+                : "bg-white text-slate-500",
+          )}
+        >
+          {runningLabel ? "调用中" : log ? log.summary : "等待操作"}
+        </span>
+      </div>
+
+      {log ? (
+        <div className="mt-3 grid gap-2">
+          {log.exchanges.map((exchange, index) => (
+            <div
+              key={`${exchange.path}-${index}`}
+              className={clsx(
+                "rounded-md border bg-white p-2",
+                exchange.ok ? "border-emerald-200" : "border-rose-200",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-xs font-semibold text-slate-800">{exchange.label}</div>
+                <span
+                  className={clsx(
+                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    exchange.ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700",
+                  )}
+                >
+                  {exchange.method} {exchange.status || "ERR"}
+                </span>
+              </div>
+              <div className="mt-1 break-all text-[11px] text-slate-500">{exchange.path}</div>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">查看请求内容</summary>
+                <pre className="mt-1 max-h-44 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                  {JSON.stringify(exchange.payload ?? {}, null, 2)}
+                </pre>
+              </details>
+              <details className="mt-1" open={!exchange.ok}>
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">查看返回结果</summary>
+                <pre className="mt-1 max-h-44 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                  {JSON.stringify(exchange.response ?? {}, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-md border border-dashed border-blue-200 bg-white/70 px-3 py-3 text-center text-xs text-slate-500">
+          选择一个任务并执行操作后显示。
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1355,6 +1747,12 @@ function TaskCompleteForm({
     <div className="grid gap-3">
       <div className="text-sm font-semibold text-slate-900">标记任务已完成</div>
       <LabeledInput
+        label="实际开始日期"
+        type="date"
+        value={form.actualStartDate}
+        onChange={(value) => setForm({ ...form, actualStartDate: value })}
+      />
+      <LabeledInput
         label="实际完成日期"
         type="date"
         value={form.actualFinishDate}
@@ -1401,6 +1799,14 @@ function ProgressUpdateForm({
           ))}
         </select>
       </label>
+      {form.taskStatus === "进行中" ? (
+        <LabeledInput
+          label="实际开始日期"
+          type="date"
+          value={form.actualStartDate}
+          onChange={(value) => setForm({ ...form, actualStartDate: value })}
+        />
+      ) : null}
       <LabeledTextarea
         label="当前进度"
         value={form.note}
@@ -1473,6 +1879,12 @@ function BlockForm({
         placeholder="可补充下一步处理方式"
         onChange={(value) => setForm({ ...form, note: value })}
       />
+      <LabeledInput
+        label="预计恢复 / 完成日期"
+        type="date"
+        value={form.expectedFinishDate}
+        onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
+      />
       <FormActions saving={saving} submitLabel="保存阻塞原因" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
@@ -1500,6 +1912,12 @@ function UnblockForm({
         placeholder="建议说明卡点如何解除，以及下一步由谁推进"
         onChange={(value) => setForm({ ...form, note: value })}
       />
+      <LabeledInput
+        label="预计完成日期"
+        type="date"
+        value={form.expectedFinishDate}
+        onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
+      />
       <FormActions saving={saving} submitLabel="保存解除记录" onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
@@ -1508,212 +1926,75 @@ function UnblockForm({
 function SubmitReviewForm({
   form,
   setForm,
+  isModelingReview,
+  statusLabel,
   saving,
   onCancel,
   onSubmit,
 }: {
   form: TaskActionForm;
   setForm: (form: TaskActionForm) => void;
+  isModelingReview: boolean;
+  statusLabel: string;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const reviewOptions = modelingReviewOptions(statusLabel);
+
   return (
     <div className="grid gap-3">
-      <div className="text-sm font-semibold text-slate-900">记录任务已送审</div>
+      <div className="text-sm font-semibold text-slate-900">{isModelingReview ? "提交建模审核 / 送审结果" : "记录任务已送审"}</div>
+      {isModelingReview ? (
+        <label className="grid gap-1 text-xs font-medium text-slate-500">
+          审核结果
+          <select
+            value={form.modelingReviewResult}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                modelingReviewResult: event.target.value as TaskActionForm["modelingReviewResult"],
+              })
+            }
+            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+          >
+            {reviewOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <LabeledInput
-        label="送审日期"
+        label={isModelingReview ? "审核日期" : "送审日期"}
         type="date"
         value={form.submittedAt}
         onChange={(value) => setForm({ ...form, submittedAt: value })}
       />
-      <LabeledInput
-        label="送审对象"
-        value={form.reviewTarget}
-        placeholder="例如：版权方 / 内部评审 / 工厂"
-        onChange={(value) => setForm({ ...form, reviewTarget: value })}
-      />
+      {!isModelingReview ? (
+        <LabeledInput
+          label="预计反馈 / 完成日期"
+          type="date"
+          value={form.expectedFinishDate}
+          onChange={(value) => setForm({ ...form, expectedFinishDate: value })}
+        />
+      ) : null}
+      {!isModelingReview ? (
+        <LabeledInput
+          label="送审对象"
+          value={form.reviewTarget}
+          placeholder="例如：版权方 / 内部评审 / 工厂"
+          onChange={(value) => setForm({ ...form, reviewTarget: value })}
+        />
+      ) : null}
       <LabeledTextarea
-        label="送审备注"
+        label={isModelingReview ? "反馈内容" : "送审备注"}
         value={form.note}
-        placeholder="建议写明送审版本、等待谁反馈、下一次跟进时间"
+        placeholder={isModelingReview ? "内部不通过或送审不通过时，请写明修改意见" : "建议写明送审版本、等待谁反馈、下一次跟进时间"}
         onChange={(value) => setForm({ ...form, note: value })}
       />
-      <FormActions saving={saving} submitLabel="保存送审记录" onCancel={onCancel} onSubmit={onSubmit} />
-    </div>
-  );
-}
-
-function StyleListFormView({
-  form,
-  setForm,
-  saving,
-  onCancel,
-  onSubmit,
-}: {
-  form: StyleListForm;
-  setForm: (form: StyleListForm) => void;
-  saving: boolean;
-  onCancel: () => void;
-  onSubmit: () => void;
-}) {
-  const updateRow = (clientId: string, patch: Partial<StyleListRowForm>) => {
-    setForm({
-      ...form,
-      styles: form.styles.map((style) => (style.clientId === clientId ? { ...style, ...patch } : style)),
-    });
-  };
-  const addRow = () => {
-    setForm({
-      ...form,
-      styles: [...form.styles, createStyleListRow(nextStyleSequence(form.styles))],
-    });
-  };
-  const removeRow = (clientId: string) => {
-    if (form.styles.length <= 1) {
-      return;
-    }
-
-    setForm({
-      ...form,
-      styles: form.styles
-        .filter((style) => style.clientId !== clientId)
-        .map((style, index) => ({
-          ...style,
-          styleSequence: style.styleSequence || String(index + 1),
-        })),
-    });
-  };
-  const selectFirstStyle = (clientId: string) => {
-    setForm({
-      ...form,
-      styles: form.styles.map((style) => ({
-        ...style,
-        isFirstModelingStyle: style.clientId === clientId,
-      })),
-    });
-  };
-
-  return (
-    <div className="grid gap-3">
-      <div>
-        <div className="text-sm font-semibold text-slate-900">提交建模款式清单</div>
-        <div className="mt-1 text-xs text-slate-500">
-          按完整系列提交。必须且只能指定 1 款第一款；第一款会挂任务 7，其余款式会挂任务 10。
-        </div>
-      </div>
-      <div className="grid gap-2">
-        {form.styles.map((style, index) => (
-          <div key={style.clientId} className="rounded-lg border border-slate-200 bg-white p-2">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs font-semibold text-slate-500">款式 {index + 1}</div>
-              <button
-                type="button"
-                onClick={() => removeRow(style.clientId)}
-                disabled={form.styles.length <= 1 || saving}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
-                title="删除该款式"
-              >
-                <Trash2 size={13} />
-                删除
-              </button>
-            </div>
-            <div className="grid gap-2">
-              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-                <LabeledInput
-                  label="款式序号"
-                  value={style.styleSequence}
-                  onChange={(value) => updateRow(style.clientId, { styleSequence: value })}
-                />
-                <LabeledInput
-                  label="款式名称"
-                  value={style.styleName}
-                  placeholder="例如：雨衣"
-                  onChange={(value) => updateRow(style.clientId, { styleName: value })}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-600">
-                  <input
-                    type="radio"
-                    name="first-modeling-style"
-                    checked={style.isFirstModelingStyle}
-                    onChange={() => selectFirstStyle(style.clientId)}
-                    className="size-4 accent-rose-600"
-                  />
-                  第一款
-                </label>
-                <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={style.isRequired}
-                    onChange={(event) => updateRow(style.clientId, { isRequired: event.target.checked })}
-                    className="size-4 accent-rose-600"
-                  />
-                  必做
-                </label>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1 text-xs font-medium text-slate-500">
-                  难度
-                  <select
-                    value={style.difficulty}
-                    onChange={(event) => updateRow(style.clientId, { difficulty: event.target.value })}
-                    className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                  >
-                    {styleDifficultyOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <LabeledInput
-                  label="预计建模天数"
-                  type="number"
-                  value={style.estimatedWorkdays}
-                  onChange={(value) => updateRow(style.clientId, { estimatedWorkdays: value })}
-                />
-              </div>
-              <LabeledInput
-                label="原画过审日期"
-                type="date"
-                value={style.originalArtApprovedDate}
-                onChange={(value) => updateRow(style.clientId, { originalArtApprovedDate: value })}
-              />
-              <LabeledInput
-                label="参考图链接"
-                value={style.referenceImageUrl}
-                placeholder="https://..."
-                onChange={(value) => updateRow(style.clientId, { referenceImageUrl: value })}
-              />
-              <LabeledTextarea
-                label="备注"
-                value={style.notes}
-                placeholder="可填写款式拆分说明、参考重点或特殊要求"
-                rows={2}
-                onChange={(value) => updateRow(style.clientId, { notes: value })}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={addRow}
-        disabled={saving}
-        className="inline-flex h-9 w-fit items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-      >
-        <Plus size={15} />
-        添加款式
-      </button>
-      <LabeledTextarea
-        label="系列备注"
-        value={form.note}
-        placeholder="可填写本次提交的整体说明"
-        onChange={(value) => setForm({ ...form, note: value })}
-      />
-      <FormActions saving={saving} submitLabel="提交清单" onCancel={onCancel} onSubmit={onSubmit} />
+      <FormActions saving={saving} submitLabel={isModelingReview ? "提交给建模排期" : "保存送审记录"} onCancel={onCancel} onSubmit={onSubmit} />
     </div>
   );
 }
@@ -1749,13 +2030,11 @@ function LabeledTextarea({
   label,
   value,
   placeholder,
-  rows = 3,
   onChange,
 }: {
   label: string;
   value: string;
   placeholder?: string;
-  rows?: number;
   onChange: (value: string) => void;
 }) {
   return (
@@ -1765,7 +2044,7 @@ function LabeledTextarea({
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        rows={rows}
+        rows={3}
         className="resize-none rounded-md border border-slate-200 bg-white px-2 py-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
       />
     </label>
@@ -1847,38 +2126,17 @@ function StyleSummaryBlock({ styles }: { styles: ProductGuideStyleSummary[] }) {
       {visibleStyles.length > 0 ? (
         <div className="mt-2 grid gap-1.5">
           {visibleStyles.map((style) => (
-            <div key={style.id} className="rounded-md bg-white px-2 py-1.5 text-xs">
-              <div className="grid grid-cols-[minmax(0,1fr)_80px_72px] items-center gap-2">
-                <div className="min-w-0">
-                  <div className="truncate font-semibold text-slate-800">{style.styleName}</div>
-                  <div className="mt-0.5 truncate text-slate-400">
-                    {style.styleCode} · {style.difficulty} · {style.estimatedWorkdays} 天
-                  </div>
-                  <div className="mt-0.5 truncate text-slate-400" title={style.id}>
-                    建模任务ID {style.id}
-                  </div>
+            <div key={style.id} className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs">
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-slate-800">{style.styleName}</div>
+                <div className="mt-0.5 truncate text-slate-400">
+                  {style.styleCode} · {style.difficulty} · {style.estimatedWorkdays} 天
                 </div>
-                <span
-                  className={clsx(
-                    "truncate rounded-full px-2 py-0.5 text-center font-semibold",
-                    style.status === "退回补充"
-                      ? "bg-amber-100 text-amber-800"
-                      : style.status === "待确认"
-                        ? "bg-sky-100 text-sky-800"
-                        : "bg-slate-100 text-slate-600",
-                  )}
-                >
-                  {style.status}
-                </span>
-                <span className="truncate text-slate-500">
-                  {style.originalArtApprovedDate ?? style.originalArtStatus}
-                </span>
               </div>
-              {style.status === "退回补充" && style.latestFeedbackSummary ? (
-                <div className="mt-1 break-words rounded bg-amber-50 px-2 py-1 text-amber-800">
-                  退回原因：{style.latestFeedbackSummary}
-                </div>
-              ) : null}
+              <span className="truncate text-slate-600">{style.status}</span>
+              <span className="truncate text-slate-500">
+                {style.originalArtApprovedDate ?? style.originalArtStatus}
+              </span>
             </div>
           ))}
           {styles.length > visibleStyles.length ? (
@@ -1887,7 +2145,7 @@ function StyleSummaryBlock({ styles }: { styles: ProductGuideStyleSummary[] }) {
         </div>
       ) : (
         <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-xs text-slate-500">
-          该项目尚未提交真实款式。提交后会先进入建模侧确认。
+          该项目尚未录入真实款式。录入后会进入建模排期。
         </div>
       )}
     </div>
@@ -2074,46 +2332,160 @@ function canShowStyleListAction(item: ProductGuideItem) {
   return Boolean(item.projectId);
 }
 
+function validateStyleListForm(form: StyleListForm, taskRefs: StyleListTaskRefs | null) {
+  if (form.rows.length === 0) {
+    return "请至少填写一个款式。";
+  }
+
+  const namedRows = form.rows.filter((row) => row.styleName.trim().length > 0);
+  if (namedRows.length !== form.rows.length) {
+    return "请填写每个款式的名称。";
+  }
+
+  const firstRows = form.rows.filter((row) => row.isFirstModelingStyle);
+  if (firstRows.length !== 1) {
+    return "必须且只能选择一个第一款建模款式。";
+  }
+
+  if (!taskRefs?.firstStyleTask) {
+    return "缺少任务 7，无法提交第一款建模款式。";
+  }
+
+  if (form.rows.some((row) => !row.isFirstModelingStyle) && !taskRefs.remainingStylesTask) {
+    return "缺少任务 10，无法提交其余建模款式。";
+  }
+
+  return null;
+}
+
+function buildStyleSubmissionPayload({
+  currentUser,
+  selectedItem,
+  form,
+  taskRefs,
+  fallbackProjectTaskId,
+}: {
+  currentUser: AuthUser;
+  selectedItem: ProductGuideItem;
+  form: StyleListForm;
+  taskRefs: StyleListTaskRefs | null;
+  fallbackProjectTaskId?: string;
+}) {
+  const firstTask = taskRefs?.firstStyleTask;
+  const remainingTask = taskRefs?.remainingStylesTask;
+  const submittedAt = new Date().toISOString();
+
+  return {
+    sourceRequestId: `product-guide:styles:${selectedItem.projectId}:${Date.now()}`,
+    submittedAt,
+    submittedByUserId: currentUser.id,
+    submittedByName: currentUser.name,
+    projectId: selectedItem.projectId,
+    projectName: selectedItem.projectName,
+    projectTaskId: firstTask?.id ?? fallbackProjectTaskId,
+    taskNo: 7,
+    firstStyleProjectTaskId: firstTask?.id,
+    remainingStylesProjectTaskId: remainingTask?.id,
+    note: form.note.trim() || undefined,
+    styles: form.rows.map((row) => {
+      const taskRef = row.isFirstModelingStyle ? firstTask : remainingTask;
+
+      return {
+        sourceStyleId: row.sourceStyleId,
+        styleCode: row.styleCode.trim() || `S${String(row.styleSequence || "1").padStart(2, "0")}`,
+        styleName: row.styleName.trim(),
+        styleSequence: row.styleSequence.trim() || "1",
+        isRequired: row.isRequired,
+        isFirstModelingStyle: row.isFirstModelingStyle,
+        projectTaskId: taskRef?.id ?? fallbackProjectTaskId,
+        taskNo: taskRef?.taskNo ?? (row.isFirstModelingStyle ? 7 : 10),
+        productType: row.productType.trim() || undefined,
+        difficulty: row.difficulty.trim() || undefined,
+        estimatedWorkdays: parseNonNegativeInteger(row.estimatedWorkdays),
+        originalArtStatus: row.originalArtStatus,
+        originalArtApprovedDate: row.originalArtApprovedDate || undefined,
+        referenceImageUrls: row.referenceImages.map((image) => ({
+          name: image.name,
+          url: image.url,
+          type: image.type,
+        })),
+        notes: row.notes.trim() || undefined,
+      };
+    }),
+  };
+}
+
+function parseNonNegativeInteger(value: string) {
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function modelingTaskIdFromItem(item: ProductGuideItem) {
+  if (item.modelingTaskId) {
+    return item.modelingTaskId;
+  }
+
+  return item.source === "modeling" && item.id.startsWith("modeling:") ? item.id.slice("modeling:".length) : null;
+}
+
 function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
   return {
     taskStatus: normalizeTaskStatus(item?.statusLabel),
+    actualStartDate: todayString(),
     actualFinishDate: todayString(),
     expectedFinishDate: item?.forecastFinishDate ?? item?.plannedFinishDate ?? todayString(),
     submittedAt: todayString(),
     reviewTarget: item?.waitingLicensor ? "版权方" : "版权方 / 审核方",
+    modelingReviewResult: defaultModelingReviewResult(item),
     blockReason: "",
     note: "",
   };
 }
 
-function defaultStyleListForm(): StyleListForm {
-  return {
-    styles: [createStyleListRow(1)],
-    note: "",
-  };
+function defaultModelingReviewResult(item?: ProductGuideItem): TaskActionForm["modelingReviewResult"] {
+  const text = `${item?.statusLabel ?? ""} ${item?.taskName ?? ""} ${item?.riskCopy ?? ""}`;
+
+  if (text.includes("待验收")) {
+    return "内部通过可送审";
+  }
+
+  if (text.includes("待送审")) {
+    return "已送审";
+  }
+
+  if (text.includes("不通过") || text.includes("驳回") || text.includes("修改")) {
+    return "送审不通过";
+  }
+
+  if (text.includes("送审") || text.includes("反馈")) {
+    return "送审通过";
+  }
+
+  return "内部通过可送审";
 }
 
-function createStyleListRow(sequence: number): StyleListRowForm {
-  return {
-    clientId: `style-row-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    styleSequence: String(sequence),
-    styleName: "",
-    isFirstModelingStyle: false,
-    isRequired: true,
-    difficulty: "常规款",
-    estimatedWorkdays: "7",
-    originalArtApprovedDate: "",
-    referenceImageUrl: "",
-    notes: "",
-  };
+function modelingReviewOptions(statusLabel: string): TaskActionForm["modelingReviewResult"][] {
+  if (statusLabel.includes("待验收")) {
+    return ["内部通过可送审", "内部不通过"];
+  }
+
+  if (statusLabel.includes("待送审")) {
+    return ["已送审", "等反馈", "送审通过", "送审不通过"];
+  }
+
+  if (statusLabel.includes("已送审") || statusLabel.includes("等反馈")) {
+    return ["等反馈", "送审通过", "送审不通过"];
+  }
+
+  return ["内部通过可送审", "内部不通过", "已送审", "等反馈", "送审通过", "送审不通过"];
 }
 
-function nextStyleSequence(styles: StyleListRowForm[]) {
-  const numericSequences = styles
-    .map((style) => Number(style.styleSequence))
-    .filter((value) => Number.isFinite(value) && value > 0);
-
-  return numericSequences.length > 0 ? Math.max(...numericSequences) + 1 : styles.length + 1;
+function integrationLabelForPath(path: string, method: "POST" | "PATCH") {
+  if (path.includes("/api/product-guide/tasks/")) return "任务事实 -> 产品组任务接口";
+  if (path.includes("/api/modeling/style-submissions")) return "款式清单 -> 建模排期";
+  if (path.includes("/api/modeling/review-results")) return "审核 / 送审结果 -> 建模排期";
+  return `${method} ${path}`;
 }
 
 function normalizeTaskStatus(value?: string) {

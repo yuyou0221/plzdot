@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import type { ProjectTaskFactEvent } from "../src/lib/schedule-task-fact-events-core";
 
+process.env.SCHEDULE_SIMULATION_RUNTIME = "1";
+
 const simulationPrefix = "schedule-simulation:";
 const defaultScenarioDir = path.resolve("test-fixtures", "schedule-scenarios");
 

@@ -34,6 +34,7 @@ export type CalendarProject = {
 
 export type ScheduleTaskRow = {
   id: string;
+  projectTaskId?: string;
   projectId: string;
   projectCode: string;
   projectName: string;
