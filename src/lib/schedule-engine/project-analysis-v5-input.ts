@@ -1,12 +1,14 @@
 import { prisma } from "@/lib/db/prisma";
 import type { ScheduleAnalyzeOptions } from "@/lib/schedule-engine/port";
 import type { ProjectAnalysisV5ExtractedInput } from "@/lib/schedule-engine/project-analysis-v5-port";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
+import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 
 export async function loadProjectAnalysisV5InputFromDatabase(
   options: ScheduleAnalyzeOptions = {},
 ): Promise<ProjectAnalysisV5ExtractedInput> {
   const projects = await prisma.project.findMany({
-    where: options.projectIds?.length ? { id: { in: options.projectIds } } : undefined,
+    where: options.projectIds?.length ? { id: { in: options.projectIds } } : excludeScheduleSimulationProjectsWhere(),
     orderBy: { plannedLaunchDate: "asc" },
   });
 
@@ -17,7 +19,7 @@ export async function loadProjectAnalysisV5InputFromDatabase(
       orderBy: [{ projectId: "asc" }, { taskNo: "asc" }],
     }),
     prisma.taskRule.findMany({
-      where: { isActive: true },
+      where: canonicalTaskRuleWhere(),
       orderBy: { taskNo: "asc" },
     }),
   ]);

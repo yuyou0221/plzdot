@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
+import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 import {
   type CalendarProject,
   milestones,
@@ -83,11 +85,12 @@ type MonthPoint = {
 export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData> {
   try {
     const [projects, latestRun] = await Promise.all([
-      prisma.project.findMany({ orderBy: { plannedLaunchDate: "asc" }, take: 300 }),
-      prisma.scheduleRun.findFirst({
-        where: { runStatus: "成功" },
-        orderBy: { calculatedAt: "desc" },
+      prisma.project.findMany({
+        where: excludeScheduleSimulationProjectsWhere(),
+        orderBy: { plannedLaunchDate: "asc" },
+        take: 300,
       }),
+      getLatestOfficialScheduleRun(),
     ]);
 
     if (projects.length === 0 || !latestRun) {
@@ -122,7 +125,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
     const activeAlerts = alerts.filter((alert) => {
       const project = alert.projectId ? projectById.get(alert.projectId) : null;
       const result = alert.projectId ? resultByProjectId.get(alert.projectId) : undefined;
-      const displayLevel = project ? projectDisplayRiskLevel(project, result) : toRiskLevel(alert.alertType);
+      const displayLevel = project ? projectDisplayRiskLevel(result) : toRiskLevel(alert.alertType);
 
       return displayLevel === "risk" || displayLevel === "delay";
     });
@@ -137,7 +140,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
     for (const project of projects) {
       const result = resultByProjectId.get(project.id);
       const progress = modelingByProjectId.get(project.id);
-      const riskLevel = projectDisplayRiskLevel(project, result);
+      const riskLevel = projectDisplayRiskLevel(result);
       const projectAlerts = activeAlerts.filter((alert) => alert.projectId === project.id);
       const projectWorkTasks = workTasks.filter((task) => task.projectId === project.id);
 
@@ -179,7 +182,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
           label: "有延期风险",
           value: projectResults.filter((result) => {
             const project = projectById.get(result.projectId);
-            return project ? projectDisplayRiskLevel(project, result) === "risk" : false;
+            return project ? projectDisplayRiskLevel(result) === "risk" : false;
           }).length,
           helper: "仅统计未完成项目",
         },
@@ -187,7 +190,7 @@ export async function getScheduleWorkbenchData(): Promise<ScheduleWorkbenchData>
           label: "必然延期",
           value: projectResults.filter((result) => {
             const project = projectById.get(result.projectId);
-            return project ? projectDisplayRiskLevel(project, result) === "delay" : false;
+            return project ? projectDisplayRiskLevel(result) === "delay" : false;
           }).length,
           helper: "仅统计未完成项目",
         },
@@ -230,11 +233,7 @@ export async function checkDatabaseConnection() {
   }
 }
 
-function projectDisplayRiskLevel(project: ProjectRow, result: ProjectResultRow | undefined): RiskLevel {
-  if (isCompletedProject(project, result)) {
-    return projectCompletionDelayDays(project, result) > 0 ? "doneLate" : "done";
-  }
-
+function projectDisplayRiskLevel(result: ProjectResultRow | undefined): RiskLevel {
   return toRiskLevel(result?.riskLevel ?? "正常");
 }
 
@@ -246,10 +245,9 @@ function projectDisplayRiskMessage(
 ) {
   const plannedDate = formatDate(result?.plannedLaunchDate ?? project.plannedLaunchDate);
   const finishDate = formatDate(result?.forecastLaunchDate);
-  const delayDays = projectCompletionDelayDays(project, result);
 
   if (riskLevel === "doneLate") {
-    return `${project.projectName} 已于 ${finishDate} 完成，较计划上线 ${plannedDate} 晚 ${delayDays} 天。`;
+    return result?.riskMessage ?? `${project.projectName} 已完成，较计划上线 ${plannedDate} 存在延期。`;
   }
 
   if (riskLevel === "done") {
@@ -261,44 +259,6 @@ function projectDisplayRiskMessage(
   return result?.riskMessage ?? alertMessage ?? (riskLevel === "normal" ? "当前正常推进。" : "当前项目存在风险，请查看提醒。");
 }
 
-function isCompletedProject(project: ProjectRow, result: ProjectResultRow | undefined) {
-  const raw = rawTaskResult(result?.rawResult);
-  const summary = raw.summary;
-  const unfinishedTasks =
-    summary && typeof summary === "object" && !Array.isArray(summary)
-      ? Number((summary as Record<string, unknown>).unfinishedTasks)
-      : Number.NaN;
-  const statusText = [project.status, project.currentStage, raw.status].filter(Boolean).join(" ");
-
-  return (
-    statusText.includes("已完") ||
-    statusText.includes("完结") ||
-    (result?.projectProgressPercent ?? 0) >= 100 ||
-    unfinishedTasks === 0
-  );
-}
-
-function projectCompletionDelayDays(project: ProjectRow, result: ProjectResultRow | undefined) {
-  if (typeof result?.delayDays === "number" && result.delayDays > 0) {
-    return result.delayDays;
-  }
-
-  if (!result?.forecastLaunchDate) {
-    return 0;
-  }
-
-  return Math.max(daysBetween(result.forecastLaunchDate, result.plannedLaunchDate ?? project.plannedLaunchDate), 0);
-}
-
-function daysBetween(later: Date, earlier: Date) {
-  const dayMs = 24 * 60 * 60 * 1000;
-  return Math.round((dateOnlyTime(later) - dateOnlyTime(earlier)) / dayMs);
-}
-
-function dateOnlyTime(date: Date) {
-  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
 function buildCalendarProjects(
   projects: ProjectRow[],
   resultByProjectId: Map<string, ProjectResultRow>,
@@ -307,7 +267,7 @@ function buildCalendarProjects(
     .map((project): CalendarProject => {
       const result = resultByProjectId.get(project.id);
       const month = formatMonthLabel(dateToMonthPoint(project.plannedLaunchDate));
-      const delayDays = projectCompletionDelayDays(project, result);
+      const delayDays = result?.delayDays ?? 0;
 
       return {
         id: `calendar:${project.id}`,
@@ -323,7 +283,7 @@ function buildCalendarProjects(
         projectTeam: project.projectTeamId ?? "待补充项目组",
         owner: project.projectOwnerId ?? "待补充",
         artOwner: project.artOwnerId ?? "待补充",
-        riskLevel: projectDisplayRiskLevel(project, result),
+        riskLevel: projectDisplayRiskLevel(result),
       };
     })
     .sort((a, b) => {
@@ -454,16 +414,6 @@ function addMonths(monthPoint: MonthPoint, offset: number): MonthPoint {
 
 function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<string, ProjectRow>) {
   const grouped = new Map<string, { projectId: string; name: string; milestone: Milestone; rows: TaskResultRow[] }>();
-  const rowsByProjectId = new Map<string, TaskResultRow[]>();
-
-  for (const row of taskResults) {
-    const projectRows = rowsByProjectId.get(row.projectId);
-    if (projectRows) {
-      projectRows.push(row);
-    } else {
-      rowsByProjectId.set(row.projectId, [row]);
-    }
-  }
 
   for (const row of taskResults) {
     const project = projectById.get(row.projectId);
@@ -494,16 +444,9 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
         group.rows.map((row) => row.plannedFinishDate ?? row.expectedFinishDate ?? row.forecastFinishDate),
       );
       const plannedMonth = plannedDate ? formatMonthLabel(dateToMonthPoint(plannedDate)) : null;
-      const baseRiskLevel = groupRiskLevel(group.rows);
-      const completedDate =
-        baseRiskLevel === "done"
-          ? completedMilestoneDate(group.rows, rowsByProjectId.get(group.projectId) ?? [], group.milestone)
-          : null;
+      const riskLevel = groupRiskLevel(group.rows);
+      const completedDate = riskLevel === "done" ? completedMilestoneDate(group.rows) : null;
       const completedMonth = completedDate ? formatMonthLabel(dateToMonthPoint(completedDate)) : null;
-      const riskLevel =
-        baseRiskLevel === "done" && completedDate && plannedDate && completedDate.getTime() > plannedDate.getTime()
-          ? "doneLate"
-          : baseRiskLevel;
       const forecastMonth = completedMonth ?? maxDateMonth(group.rows.map(displayDateForForecastView));
       const month = plannedMonth ?? forecastMonth;
 
@@ -567,42 +510,8 @@ function displayDateForForecastView(row: TaskResultRow) {
   return row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate;
 }
 
-function completedMilestoneDate(rows: TaskResultRow[], projectRows: TaskResultRow[], milestone: Milestone) {
-  const ownCompletionDate = maxDate(rows.map(completionDateForRow));
-
-  if (!ownCompletionDate) {
-    return null;
-  }
-
-  const downstreamCompletionDate = immediateDependencyCompletionDate(projectRows, milestone);
-  const completionDate =
-    downstreamCompletionDate && downstreamCompletionDate.getTime() < ownCompletionDate.getTime()
-      ? downstreamCompletionDate
-      : ownCompletionDate;
-
-  return completionDate;
-}
-
-const directDependencyTaskNos: Partial<Record<Milestone, number[]>> = {
-  原画里程碑: [7, 10],
-  建模里程碑: [11, 14, 15, 17, 18],
-  红蜡里程碑: [21],
-  产前里程碑: [30],
-};
-
-function immediateDependencyCompletionDate(projectRows: TaskResultRow[], milestone: Milestone) {
-  const dependencyTaskNos = directDependencyTaskNos[milestone] ?? [];
-
-  if (dependencyTaskNos.length === 0) {
-    return null;
-  }
-
-  const completionDates = projectRows
-    .filter((row) => dependencyTaskNos.includes(row.taskNo) && isCompletedTask(row))
-    .map(completionDateForRow)
-    .filter(isDate);
-
-  return minDate(completionDates);
+function completedMilestoneDate(rows: TaskResultRow[]) {
+  return maxDate(rows.map(completionDateForRow));
 }
 
 function completionDateForRow(row: TaskResultRow) {
@@ -746,15 +655,6 @@ function maxDate(values: Array<Date | null | undefined>) {
   }
 
   return dates.reduce((max, date) => (date.getTime() > max.getTime() ? date : max));
-}
-
-function minDate(values: Array<Date | null | undefined>) {
-  const dates = values.filter(isDate);
-  if (dates.length === 0) {
-    return null;
-  }
-
-  return dates.reduce((min, date) => (date.getTime() < min.getTime() ? date : min));
 }
 
 function buildMonthTimeline(cards: ProjectCard[], today = new Date()) {

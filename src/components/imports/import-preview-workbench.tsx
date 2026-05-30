@@ -413,6 +413,7 @@ export function ImportPreviewWorkbench({
             <SideButton label="产品组工作指引" badge="P0" onClick={() => router.push("/product-guide")} />
             <SideButton label="建模排期" badge="P0" onClick={() => router.push("/modeling")} />
             <SideButton label="用户数据" badge="基础" onClick={() => router.push("/users")} />
+            {currentUser.authRole === "admin" ? <SideButton label="测试工具" badge="Admin" onClick={() => router.push("/imports/test-tools")} /> : null}
             <button className="flex h-10 items-center justify-between rounded-lg bg-rose-50 px-3 text-sm font-semibold text-rose-700">
               数据导入
               <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">预览</span>

@@ -13,6 +13,8 @@ import type {
   OutsourceVendorOption,
   ProjectModelingSummary,
 } from "@/lib/modeling-schedule-types";
+import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 
 const statusColumns: ModelingTaskStatus[] = [
   "未分配",
@@ -132,6 +134,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
   try {
     const [projects, realTasks, users, vendors, progressRows, latestRun] = await Promise.all([
       prisma.project.findMany({
+        where: excludeScheduleSimulationProjectsWhere(),
         orderBy: [{ plannedLaunchDate: "asc" }, { id: "asc" }],
         take: 300,
         select: {
@@ -196,10 +199,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
         },
       }),
       prisma.projectModelingProgress.findMany(),
-      prisma.scheduleRun.findFirst({
-        where: { runStatus: "成功" },
-        orderBy: { calculatedAt: "desc" },
-      }),
+      getLatestOfficialScheduleRun(),
     ]);
 
     const userIds = users.map((user) => user.id);

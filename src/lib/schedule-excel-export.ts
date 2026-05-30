@@ -2,6 +2,8 @@ import "server-only";
 
 import { write, utils } from "xlsx";
 import { prisma } from "@/lib/db/prisma";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
+import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 
 const PROJECT_SHEET = "项目信息表2026";
 const ACTUAL_SHEET = "实际进度录入表";
@@ -62,6 +64,7 @@ const taskRuleHeaders = [
 
 export async function buildSchedulePlanningSourceExportBuffer() {
   const projects = await prisma.project.findMany({
+    where: excludeScheduleSimulationProjectsWhere(),
     orderBy: [{ plannedLaunchDate: "asc" }, { projectCode: "asc" }, { projectName: "asc" }],
   });
   const projectIds = projects.map((project) => project.id);
@@ -82,8 +85,8 @@ export async function buildSchedulePlanningSourceExportBuffer() {
         })
       : Promise.resolve([]),
     prisma.taskRule.findMany({
-      where: { isActive: true, taskNo: { gte: 1, lte: 31 } },
-      orderBy: [{ taskNo: "asc" }, { updatedAt: "desc" }],
+      where: canonicalTaskRuleWhere(),
+      orderBy: [{ taskNo: "asc" }],
     }),
   ]);
 

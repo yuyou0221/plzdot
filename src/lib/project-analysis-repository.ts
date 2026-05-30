@@ -8,6 +8,8 @@ import type {
   ProjectAnalysisTask,
 } from "@/lib/project-analysis-types";
 import { milestoneByTaskNo } from "@/lib/schedule-domain";
+import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 
 type ProjectRow = NonNullable<Awaited<ReturnType<typeof getProjectRow>>>;
 type ProjectTaskRow = Awaited<ReturnType<typeof getProjectTaskRows>>[number];
@@ -25,16 +27,7 @@ const riskLabel: Record<ProjectAnalysisRiskLevel, string> = {
 export async function getProjectAnalysisData(projectId: string): Promise<ProjectAnalysisData | null> {
   const [project, latestRun] = await Promise.all([
     getProjectRow(projectId),
-    prisma.scheduleRun.findFirst({
-      where: { runStatus: "成功" },
-      orderBy: { calculatedAt: "desc" },
-      select: {
-        id: true,
-        runName: true,
-        scriptVersion: true,
-        calculatedAt: true,
-      },
-    }),
+    getLatestOfficialScheduleRun(),
   ]);
 
   if (!project) {
@@ -88,22 +81,18 @@ export async function getProjectAnalysisData(projectId: string): Promise<Project
   const teamById = new Map(teams.map((team) => [team.id, team.name]));
 
   const tasks = buildAnalysisTasks(projectTasks, taskResults, userById);
-  const resultRiskLevel = projectRiskLevel(project, projectResult, tasks);
+  const resultRiskLevel = projectRiskLevel(projectResult);
   const completedTasks = tasks.filter((task) => task.riskLevel === "done" || task.riskLevel === "doneLate").length;
   const riskTasks = tasks.filter((task) => task.riskLevel === "risk" || task.riskLevel === "delay").length;
-  const blockedTasks = tasks.filter((task) => task.isBlocked).length;
-  const staleTasks = tasks.filter((task) => task.staleDays > 3 && task.riskLevel !== "done" && task.riskLevel !== "doneLate").length;
-  const missingExpectedFinishCount =
-    projectResult?.missingExpectedFinishCount ??
-    tasks.filter((task) => !task.expectedFinishDate && !task.actualFinishDate && task.riskLevel !== "done").length;
-  const progressPercent =
-    projectResult?.projectProgressPercent ??
-    (tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0);
-  const delayDays = projectResult?.delayDays ?? Math.max(0, ...tasks.map((task) => task.delayDays ?? 0));
+  const blockedTasks = projectResult?.blockedTaskCount ?? 0;
+  const staleTasks = projectResult?.staleTaskCount ?? 0;
+  const missingExpectedFinishCount = projectResult?.missingExpectedFinishCount ?? 0;
+  const progressPercent = projectResult?.projectProgressPercent ?? 0;
+  const delayDays = projectResult?.delayDays ?? 0;
   const currentTaskDisplay =
     resultRiskLevel === "done" || resultRiskLevel === "doneLate"
       ? "项目已完成"
-      : projectResult?.currentTaskName ?? currentTaskName(tasks);
+      : projectResult?.currentTaskName ?? "待同步";
 
   return {
     sourceLabel: latestRun ? "最新成功测算" : "项目录入数据",
@@ -178,8 +167,8 @@ export async function getProjectAnalysisData(projectId: string): Promise<Project
 }
 
 function getProjectRow(projectId: string) {
-  return prisma.project.findUnique({
-    where: { id: projectId },
+  return prisma.project.findFirst({
+    where: { id: projectId, ...excludeScheduleSimulationProjectsWhere() },
     select: {
       id: true,
       projectCode: true,
@@ -326,7 +315,7 @@ function buildTaskRow(
   const actualFinishDate = task?.actualFinishDate;
   const completed = Boolean(actualFinishDate) || [task?.status, result?.displayStatus, result?.taskActionType].some(isDoneText);
   const staleDays = completed ? 0 : daysSince(task?.lastUpdatedAt ?? task?.updatedAt);
-  const riskLevel = taskRiskLevel({ task, result, completed, actualFinishDate, plannedFinishDate, staleDays });
+  const riskLevel = taskRiskLevel(result);
 
   return {
     id: task?.id ?? result?.id ?? `${taskNo}:${taskName}`,
@@ -354,7 +343,7 @@ function buildTaskRow(
     riskMessage: result?.riskMessage ?? task?.blockReason ?? undefined,
     blockingPredecessorNames: parseStringList(result?.blockingPredecessorNames),
     staleDays,
-    basis: taskBasis({ task, result, riskLevel, staleDays, completed, actualFinishDate, plannedFinishDate }),
+    basis: taskBasis({ task, result, riskLevel, completed }),
   };
 }
 
@@ -398,27 +387,8 @@ function buildMetrics(values: {
   ];
 }
 
-function projectRiskLevel(
-  project: ProjectRow,
-  result: ScheduleProjectResultRow | null,
-  tasks: ProjectAnalysisTask[],
-): ProjectAnalysisRiskLevel {
-  const completed = isDoneText(project.status) || (result?.projectProgressPercent ?? 0) >= 100;
-  const delayDays = result?.delayDays ?? 0;
-
-  if (completed) {
-    return delayDays > 0 ? "doneLate" : "done";
-  }
-
-  const resultRisk = toRiskLevel(result?.riskLevel, delayDays);
-  if (resultRisk !== "normal") {
-    return resultRisk;
-  }
-
-  if (tasks.some((task) => task.riskLevel === "delay")) return "delay";
-  if (tasks.some((task) => task.riskLevel === "risk")) return "risk";
-
-  return "normal";
+function projectRiskLevel(result: ScheduleProjectResultRow | null): ProjectAnalysisRiskLevel {
+  return toRiskLevel(result?.riskLevel);
 }
 
 function projectRiskMessage(
@@ -449,69 +419,23 @@ function projectRiskMessage(
   return "当前项目按现有录入信息正常推进。";
 }
 
-function currentTaskName(tasks: ProjectAnalysisTask[]) {
-  return tasks.find((task) => task.riskLevel === "risk" || task.riskLevel === "delay")?.taskName ?? tasks.find((task) => task.riskLevel === "normal")?.taskName ?? "待同步";
-}
-
-function taskRiskLevel({
-  task,
-  result,
-  completed,
-  actualFinishDate,
-  plannedFinishDate,
-  staleDays,
-}: {
-  task: ProjectTaskRow | undefined;
-  result: ScheduleTaskResultRow | undefined;
-  completed: boolean;
-  actualFinishDate?: Date | null;
-  plannedFinishDate?: Date | null;
-  staleDays: number;
-}): ProjectAnalysisRiskLevel {
-  if (completed) {
-    return actualFinishDate && plannedFinishDate && actualFinishDate.getTime() > plannedFinishDate.getTime() ? "doneLate" : "done";
-  }
-
-  if (task?.isBlocked) {
-    return "risk";
-  }
-
-  const mapped = toRiskLevel(result?.riskLevel, result?.delayDays);
-  if (mapped !== "normal") {
-    return mapped;
-  }
-
-  if (typeof result?.remainingSafeDays === "number" && result.remainingSafeDays < 0) {
-    return "risk";
-  }
-
-  if (staleDays > 3) {
-    return "risk";
-  }
-
-  return "normal";
+function taskRiskLevel(result: ScheduleTaskResultRow | undefined): ProjectAnalysisRiskLevel {
+  return toRiskLevel(result?.riskLevel);
 }
 
 function taskBasis({
   task,
   result,
   riskLevel,
-  staleDays,
   completed,
-  actualFinishDate,
-  plannedFinishDate,
 }: {
   task: ProjectTaskRow | undefined;
   result: ScheduleTaskResultRow | undefined;
   riskLevel: ProjectAnalysisRiskLevel;
-  staleDays: number;
   completed: boolean;
-  actualFinishDate?: Date | null;
-  plannedFinishDate?: Date | null;
 }) {
   if (completed) {
-    const delayDays = actualFinishDate && plannedFinishDate ? dayDiff(actualFinishDate, plannedFinishDate) : 0;
-    return delayDays > 0 ? `已完成，较计划晚 ${delayDays} 天。` : "已完成，不作为当前风险。";
+    return result?.riskMessage ?? (riskLevel === "doneLate" ? "测算结果为延期完成。" : "已完成，不作为当前风险。");
   }
 
   if (task?.isBlocked) {
@@ -536,10 +460,6 @@ function taskBasis({
       : `安全余量已用完 ${Math.abs(result.remainingSafeDays)} 天。`;
   }
 
-  if (staleDays > 3) {
-    return `该任务已超过 ${staleDays} 天未更新。`;
-  }
-
   if (!task?.expectedFinishDate && !result?.expectedFinishDate) {
     return "未录入预计完成时间，测算只能使用计划日期。";
   }
@@ -547,14 +467,22 @@ function taskBasis({
   return "当前测算未发现明显风险。";
 }
 
-function toRiskLevel(value?: string | null, delayDays?: number | null): ProjectAnalysisRiskLevel {
+function toRiskLevel(value?: string | null): ProjectAnalysisRiskLevel {
   const text = value ?? "";
+
+  if (text === "doneLate" || text.includes("延期完成")) {
+    return "doneLate";
+  }
+
+  if (text === "done" || text.includes("已完成")) {
+    return "done";
+  }
 
   if (text === "delay" || text.includes("必然") || text.includes("严重")) {
     return "delay";
   }
 
-  if (text === "risk" || text.includes("风险") || (typeof delayDays === "number" && delayDays > 0)) {
+  if (text === "risk" || text.includes("风险")) {
     return "risk";
   }
 
@@ -605,10 +533,6 @@ function daysSince(value?: Date | null) {
   const end = startOfDay(new Date()).getTime();
 
   return Math.max(0, Math.floor((end - start) / 86_400_000));
-}
-
-function dayDiff(a: Date, b: Date) {
-  return Math.floor((startOfDay(a).getTime() - startOfDay(b).getTime()) / 86_400_000);
 }
 
 function startOfDay(date: Date) {
