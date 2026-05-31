@@ -141,7 +141,7 @@ type WorkLogRow = {
   id: string;
   modelingTaskId: string;
   startedAt: Date;
-  endedAt: Date;
+  endedAt: Date | null;
   durationMinutes: number;
   stopReason: string;
   stoppedBy: string | null;
@@ -642,6 +642,7 @@ function buildRealTasks(
   const feedbackCountByTaskId = new Map<string, number>();
   const feedbackHistoryByTaskId = new Map<string, ModelingFeedbackSummary[]>();
   const workLogsByTaskId = new Map<string, ModelingWorkLogSummary[]>();
+  const workLogCountByTaskId = new Map<string, number>();
 
   for (const feedback of feedbackRows) {
     feedbackCountByTaskId.set(feedback.modelingTaskId, (feedbackCountByTaskId.get(feedback.modelingTaskId) ?? 0) + 1);
@@ -671,12 +672,14 @@ function buildRealTasks(
   }
 
   for (const log of workLogRows) {
+    workLogCountByTaskId.set(log.modelingTaskId, (workLogCountByTaskId.get(log.modelingTaskId) ?? 0) + 1);
+
     const logs = workLogsByTaskId.get(log.modelingTaskId) ?? [];
     if (logs.length < 20) {
       logs.push({
         id: log.id,
         startedAt: formatDateTime(log.startedAt) ?? "",
-        endedAt: formatDateTime(log.endedAt) ?? "",
+        endedAt: formatDateTime(log.endedAt) ?? undefined,
         durationMinutes: log.durationMinutes,
         stopReason: log.stopReason,
         stoppedBy: log.stoppedBy ?? undefined,
@@ -758,6 +761,7 @@ function buildRealTasks(
       latestSubmissionStatus: isCompletedBySchedule ? undefined : latestSubmission?.status,
       feedbackHistory: isCompletedBySchedule ? [] : (feedbackHistoryByTaskId.get(task.id) ?? []),
       workLogs: workLogsByTaskId.get(task.id) ?? [],
+      workLogCount: workLogCountByTaskId.get(task.id) ?? 0,
       isVirtual: false,
       canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
@@ -852,6 +856,7 @@ function buildVirtualTasks(
           latestSubmissionStatus: undefined,
           feedbackHistory: [],
           workLogs: [],
+          workLogCount: 0,
           isVirtual: true,
           canDragAssign: status === "未分配" && !isCompletedBySchedule,
         });

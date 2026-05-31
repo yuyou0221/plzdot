@@ -35,6 +35,8 @@ export async function POST(request: Request) {
       deletedTaskCount: 0,
       deletedStyleCount: 0,
       deletedFeedbackCount: 0,
+      deletedWorkLogCount: 0,
+      deletedAssignmentHistoryCount: 0,
       deletedProgressCount: 0,
       deletedEventCount: 0,
     });
@@ -48,6 +50,12 @@ export async function POST(request: Request) {
     const modelingTaskIds = modelingTasks.map((task) => task.id);
 
     const feedback = await tx.modelingFeedback.deleteMany({
+      where: { modelingTaskId: { in: modelingTaskIds } },
+    });
+    const workLogs = await tx.modelingWorkLog.deleteMany({
+      where: { modelingTaskId: { in: modelingTaskIds } },
+    });
+    const assignmentHistory = await tx.modelingAssignmentHistory.deleteMany({
       where: { modelingTaskId: { in: modelingTaskIds } },
     });
     const progress = await tx.projectModelingProgress.deleteMany({
@@ -71,6 +79,8 @@ export async function POST(request: Request) {
       deletedTaskCount: projectTasks.count,
       deletedStyleCount: styles.count,
       deletedFeedbackCount: feedback.count,
+      deletedWorkLogCount: workLogs.count,
+      deletedAssignmentHistoryCount: assignmentHistory.count,
       deletedProgressCount: progress.count,
       deletedEventCount: events.count,
     };

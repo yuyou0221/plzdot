@@ -123,6 +123,11 @@ type ProjectProgress = {
   projectedAllApprovedDate?: string | null;
 };
 
+type ProjectStateSnapshot = {
+  styles: ProjectStyle[];
+  progress: ProjectProgress;
+};
+
 type ApiPayload = Record<string, unknown> | null;
 
 type ScenarioId =
@@ -225,6 +230,48 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
     () => projectOptions.find((project) => project.id === selectedProjectId) ?? projectOptions[0],
     [projectOptions, selectedProjectId],
   );
+
+  useEffect(() => {
+    const projectId = selectedProject?.id;
+
+    if (!projectId) {
+      void Promise.resolve().then(() => {
+        setProjectStyles([]);
+        setProgress(null);
+        setSelectedModelingTaskId("");
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    void fetchProjectStateSnapshot(projectId)
+      .then((state) => {
+        if (cancelled) return;
+
+        setProjectStyles(state.styles);
+        setProgress(state.progress);
+        setSelectedModelingTaskId((current) =>
+          current && state.styles.some((style) => style.modelingTaskId === current) ? current : state.styles[0]?.modelingTaskId ?? "",
+        );
+
+        if (state.styles.some((style) => style.modelingStatus === "退回补充")) {
+          setStyleDraft((current) => ({
+            ...current,
+            styles: buildEditableStylesFromProjectStyles(state.styles),
+          }));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : "读取测试项目状态失败。");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProject?.id]);
 
   const selectedStyle = useMemo(
     () => projectStyles.find((style) => style.modelingTaskId === selectedModelingTaskId),
@@ -417,7 +464,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
       }
 
       if (!selectedStyle.modelerId) {
-        await assignStyleForWork(selectedStyle.modelingTaskId);
+        await assignStyleForWork(selectedProject, selectedStyle.modelingTaskId);
       }
 
       const data = await submitWork(
@@ -435,6 +482,8 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
     if (!selectedProject || !selectedStyle) return;
 
     await runAction("开始计时", async () => {
+      assertContractTestProject(selectedProject);
+
       if (selectedStyle.modelingStatus === "未启动") {
         throw new Error("这款还没有被任务 7/10 启动，请先点击启动任务。");
       }
@@ -444,7 +493,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
       }
 
       if (!selectedStyle.modelerId) {
-        await assignStyleForWork(selectedStyle.modelingTaskId);
+        await assignStyleForWork(selectedProject, selectedStyle.modelingTaskId);
       }
 
       const data = await postJson(`/api/modeling/tasks/${selectedStyle.modelingTaskId}/work-timer`, { action });
@@ -587,7 +636,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
         }
 
         await startStylesFor(fixture.project, 7);
-        await assignStyleForWork(firstSubmittedStyle.modelingTaskId);
+        await assignStyleForWork(fixture.project, firstSubmittedStyle.modelingTaskId);
         await submitWork(fixture.project, firstSubmittedStyle.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${fixture.seed}/first-style`);
         const internalRejection = await expectReviewRejected(fixture.project, firstSubmittedStyle.modelingTaskId, "内部不通过", "必须填写文字反馈");
         await reviewStyle(fixture.project, firstSubmittedStyle.modelingTaskId, "内部通过可送审", "");
@@ -688,7 +737,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
 
       if (scenarioId === "normal") {
         for (const style of submittedStyles) {
-          await assignStyleForWork(style.modelingTaskId);
+          await assignStyleForWork(selectedProject, style.modelingTaskId);
           await submitWork(selectedProject, style.modelingTaskId, `${style.styleName} 建模成果已提交`, `https://example.local/modeling/${seed}/${style.modelingTaskId}`);
           await reviewStyle(selectedProject, style.modelingTaskId, "内部通过可送审", `${style.styleName} 内部通过`);
           await reviewStyle(selectedProject, style.modelingTaskId, "送审通过", `${style.styleName} 版权方通过`);
@@ -697,13 +746,13 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
       }
 
       if (scenarioId === "work-submit") {
-        await assignStyleForWork(firstTask.modelingTaskId);
+        await assignStyleForWork(selectedProject, firstTask.modelingTaskId);
         workSubmissionResult = await submitWork(selectedProject, firstTask.modelingTaskId, "第一款建模成果已提交，等待产品美术检修", `https://example.local/modeling/${seed}/first-style`);
         steps.push({ name: "建模师提交第一款成果", status: "待验收" });
       }
 
       if (scenarioId === "internal-reject") {
-        await assignStyleForWork(firstTask.modelingTaskId);
+        await assignStyleForWork(selectedProject, firstTask.modelingTaskId);
         await submitWork(selectedProject, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${seed}/first-style`);
         await reviewStyle(selectedProject, firstTask.modelingTaskId, "内部不通过", "内部检修发现比例问题，退回排队", {
           feedbackAttachments: {
@@ -715,7 +764,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
       }
 
       if (scenarioId === "copyright-reject") {
-        await assignStyleForWork(firstTask.modelingTaskId);
+        await assignStyleForWork(selectedProject, firstTask.modelingTaskId);
         await submitWork(selectedProject, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${seed}/first-style`);
         await reviewStyle(selectedProject, firstTask.modelingTaskId, "内部通过可送审", "内部通过，待送审");
         await reviewStyle(selectedProject, firstTask.modelingTaskId, "送审不通过", "版权方反馈表情需要调整", {
@@ -727,7 +776,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
       }
 
       if (scenarioId === "partial-pass") {
-        await assignStyleForWork(firstTask.modelingTaskId);
+        await assignStyleForWork(selectedProject, firstTask.modelingTaskId);
         await submitWork(selectedProject, firstTask.modelingTaskId, "第一款建模成果已提交，等待内部检修", `https://example.local/modeling/${seed}/first-style`);
         await reviewStyle(selectedProject, firstTask.modelingTaskId, "内部通过可送审", "第一款内部通过");
         await reviewStyle(selectedProject, firstTask.modelingTaskId, "送审通过", "第一款版权方通过");
@@ -808,6 +857,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
   }
 
   async function submitStylesFor(project: ModelingContractTestProject, draftStyles: EditableStyle[], batchSeed: string) {
+    assertContractTestProject(project);
     const data = await postJson("/api/modeling/style-submissions", {
       projectId: project.id,
       sourceRequestId: `local-contract-test-${batchSeed}`,
@@ -844,6 +894,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
   }
 
   async function startStylesFor(project: ModelingContractTestProject, taskNo: number, startScope?: string) {
+    assertContractTestProject(project);
     return postJson("/api/modeling/style-start-events", {
       projectId: project.id,
       projectTaskId: taskNo === 7 ? project.task7.id : taskNo === 10 ? project.task10.id : undefined,
@@ -871,6 +922,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
   }
 
   async function confirmStylesFor(project: ModelingContractTestProject, action: "confirm" | "return", note?: string) {
+    assertContractTestProject(project);
     return postJson("/api/modeling/style-confirmations", {
       projectId: project.id,
       action,
@@ -886,6 +938,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
     content: string,
     attachments?: ReviewFeedbackAttachmentPayload,
   ) {
+    assertContractTestProject(project);
     return postJson("/api/modeling/review-results", {
       projectId: project.id,
       modelingTaskId,
@@ -920,6 +973,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
   }
 
   async function submitWork(project: ModelingContractTestProject, modelingTaskId: string, content: string, deliverableUrl: string) {
+    assertContractTestProject(project);
     return postJson(`/api/modeling/tasks/${modelingTaskId}/work-submissions`, {
       projectId: project.id,
       content,
@@ -927,25 +981,24 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
     });
   }
 
-  async function assignStyleForWork(modelingTaskId: string) {
+  async function assignStyleForWork(project: ModelingContractTestProject, modelingTaskId: string) {
+    assertContractTestProject(project);
     const modelerId = selectedModelerId || testModelers[0]?.id;
 
     if (!modelerId) {
       throw new Error("没有可用测试建模师，请先在用户数据里保留冷茂华或孟凡菲。");
     }
 
-    return patchJson(`/api/modeling/tasks/${modelingTaskId}`, {
+    return postJson(`/api/modeling/tasks/${modelingTaskId}/assignment-events`, {
+      action: "assign",
       modelerId,
     });
   }
 
   async function loadProjectState(projectId: string, preferredTaskId = "") {
-    const [styleData, progressData] = await Promise.all([
-      getJson(`/api/modeling/projects/${projectId}/styles`),
-      getJson(`/api/modeling/projects/${projectId}/progress`),
-    ]);
-    const nextStyles = Array.isArray(styleData.styles) ? (styleData.styles as ProjectStyle[]) : [];
-    const nextProgress = progressData as unknown as ProjectProgress;
+    const state = await fetchProjectStateSnapshot(projectId);
+    const nextStyles = state.styles;
+    const nextProgress = state.progress;
     const nextSelectedTaskId =
       preferredTaskId || (selectedModelingTaskId && nextStyles.some((style) => style.modelingTaskId === selectedModelingTaskId) ? selectedModelingTaskId : "");
 
@@ -963,7 +1016,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
     return {
       styles: nextStyles,
       progress: nextProgress,
-      raw: { styles: styleData, progress: progressData },
+      raw: state,
     };
   }
 
@@ -982,10 +1035,10 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-5 py-5 text-slate-950">
-      <div className="mx-auto flex max-w-[1440px] flex-col gap-4">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-          <div className="flex items-center gap-3">
+    <main className="min-h-screen overflow-x-hidden bg-slate-50 px-5 py-5 text-slate-950">
+      <div className="mx-auto flex w-full min-w-0 max-w-[1440px] flex-col gap-4">
+        <header className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+          <div className="flex min-w-0 items-center gap-3">
             <Link
               className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
               href="/modeling"
@@ -993,7 +1046,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
             >
               <ArrowLeft className="h-4 w-4" />
             </Link>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold tracking-normal">建模排期模拟器</h1>
               <p className="mt-1 text-sm text-slate-500">用模拟项目压测款式清单、任务启动、审核结果和进度回传。</p>
             </div>
@@ -1139,8 +1192,8 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
           />
         ) : null}
 
-        <section className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)_360px]">
-          <div className="flex flex-col gap-4">
+        <section className="grid min-w-0 gap-4 lg:grid-cols-[360px_minmax(0,1fr)_360px]">
+          <div className="flex min-w-0 flex-col gap-4">
             <Panel title="测试项目">
               <label className="block text-xs font-medium text-slate-500" htmlFor="project-select">
                 项目
@@ -1315,7 +1368,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
             </Panel>
           </div>
 
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             <Panel title="启动与产品反馈">
               <div className="grid gap-3 sm:grid-cols-2">
                 <ActionButton disabled={!selectedProject || pendingConfirmationStyleCount === 0} loading={loadingAction === "确认款式清单"} onClick={confirmStyles}>
@@ -1464,7 +1517,7 @@ export function ModelingContractTestPage({ currentUserName, currentUserRole, ini
             </Panel>
           </div>
 
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             <Panel title="项目建模进度">
               {progress ? (
                 <div className="space-y-4">
@@ -2114,7 +2167,7 @@ function ProjectScheduleReadableInfoPanel({ canViewTestFields, progress }: { can
             </div>
           ) : null}
           {canViewTestFields ? (
-            <pre className="max-h-[280px] overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+            <pre className="max-h-[280px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
               {JSON.stringify(
                 {
                   sourceTaskNos: progress.sourceTaskNos,
@@ -2170,7 +2223,7 @@ function ProductGuideReadableInfoPanel({
             <Metric label="待验收/送审" value={readableInfo.submittedStyles} />
           </div>
           {canViewTestFields ? (
-            <pre className="max-h-[360px] overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+            <pre className="max-h-[360px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
               {JSON.stringify(readableInfo, null, 2)}
             </pre>
           ) : (
@@ -2318,10 +2371,10 @@ function Panel({
   title: string;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-        {action}
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex min-w-0 items-center justify-between gap-3">
+        <h2 className="min-w-0 text-base font-semibold text-slate-900">{title}</h2>
+        <div className="shrink-0">{action}</div>
       </div>
       {children}
     </section>
@@ -2453,6 +2506,18 @@ async function getJson(path: string) {
   return parseJsonResponse(response);
 }
 
+async function fetchProjectStateSnapshot(projectId: string): Promise<ProjectStateSnapshot> {
+  const [styleData, progressData] = await Promise.all([
+    getJson(`/api/modeling/projects/${projectId}/styles`),
+    getJson(`/api/modeling/projects/${projectId}/progress`),
+  ]);
+
+  return {
+    styles: Array.isArray(styleData.styles) ? (styleData.styles as ProjectStyle[]) : [],
+    progress: progressData as unknown as ProjectProgress,
+  };
+}
+
 async function postJson(path: string, body: Record<string, unknown>) {
   const response = await fetch(path, {
     body: JSON.stringify(body),
@@ -2464,15 +2529,10 @@ async function postJson(path: string, body: Record<string, unknown>) {
   return parseJsonResponse(response);
 }
 
-async function patchJson(path: string, body: Record<string, unknown>) {
-  const response = await fetch(path, {
-    body: JSON.stringify(body),
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    method: "PATCH",
-  });
-
-  return parseJsonResponse(response);
+function assertContractTestProject(project: ModelingContractTestProject) {
+  if (!project.projectCode?.startsWith("MT-TEST-")) {
+    throw new Error("模拟器只允许操作 MT-TEST- 开头的隔离测试项目。");
+  }
 }
 
 async function parseJsonResponse(response: Response) {

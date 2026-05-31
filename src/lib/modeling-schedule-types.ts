@@ -25,6 +25,13 @@ export type ModelingReferenceImage = {
 export type ModelingFeedbackSummary = {
   id: string;
   feedbackType: string;
+  category:
+    | "work-submission"
+    | "internal-review"
+    | "copyright-review"
+    | "style-list-return"
+    | "cancel-reopen"
+    | "other";
   roundNo: number;
   feedbackByName?: string;
   feedbackAt: string;
@@ -36,7 +43,7 @@ export type ModelingFeedbackSummary = {
 export type ModelingWorkLogSummary = {
   id: string;
   startedAt: string;
-  endedAt: string;
+  endedAt?: string;
   durationMinutes: number;
   stopReason: string;
   stoppedBy?: string;
@@ -44,7 +51,7 @@ export type ModelingWorkLogSummary = {
 
 export type ModelingMetric = {
   label: string;
-  value: number;
+  value: number | string;
   helper: string;
   tone: "neutral" | "warning" | "danger" | "info";
 };
@@ -103,6 +110,7 @@ export type ModelingTaskCard = {
   latestSubmissionStatus?: string;
   feedbackHistory: ModelingFeedbackSummary[];
   workLogs: ModelingWorkLogSummary[];
+  workLogCount: number;
   isVirtual: boolean;
   canDragAssign: boolean;
 };
