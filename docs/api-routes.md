@@ -167,7 +167,7 @@ projectTeamId
 当前行为：
 
 ```text
-1. 仅 admin / manager 可用。
+1. 普通产品组任务事实允许所有已登录启用账号写入；强制、历史、Excel 类写入仅 admin / manager 可用。
 2. 接收单条 ProjectTaskFactEvent；也兼容 { event } 或单条 { events: [...] } 包装。
 3. 使用 eventId 做幂等，重复事件不重复写入。
 4. 使用 projectId + taskNo 定位 ProjectTask；任务不存在时按 TaskRule 初始化。
@@ -216,10 +216,10 @@ task_resumed
 task_note_updated
 ```
 
-第一版联调契约：
+产品组真实试用契约：
 
 ```text
-1. 产品组工作指引第一版只发送 task_started 和 task_completed。
+1. 产品组工作指引正式页可发送 task_started、task_completed、task_expected_finish_updated、task_blocked、task_unblocked、task_submitted_for_review、task_note_updated。
 2. 产品组只提交任务事实，不提交风险、预测、延期、里程碑状态或产能结论。
 3. projectId 必须是系统项目 ID，不用项目编号或项目名匹配。
 4. taskNo 必须是 1-31。
@@ -228,6 +228,7 @@ task_note_updated
 7. task_completed 如果 payload 带 actualStartDate，且原任务没有 actualStartDate，则补写；如果原任务已有 actualStartDate，不覆盖。
 8. 接收成功返回 ok=true、message、needsRecalculation=true、scheduleRunId 和 recalculation。
 9. 接收失败返回 ok=false 和可读 message，例如 缺少 projectId。
+10. 普通任务事实可以由产品组执行人写入；override、force、backfill、bulk、importSource 等高风险字段仍只允许 admin / manager。
 ```
 
 task_started 示例：
@@ -408,7 +409,7 @@ POST /api/product-guide/modeling-tasks
 1. PATCH /api/product-guide/tasks/:id 是兼容层：页面动作先转换成 ProjectTaskFactEvent，再调用项目排期任务事实接收服务。
 2. 该接口不再直接写 ProjectTask / ProgressUpdate。
 3. progress 且状态为“进行中”、原任务没有 actualStartDate 时，转换为 task_started。
-4. complete 转换为 task_completed；expected-finish、submit-review、block、unblock 转换为对应扩展事件。
+4. complete 转换为 task_completed；expected-finish、submit-review、block、unblock、note 转换为对应扩展事件。
 5. 任务事实服务负责写入事实、记录事件日志，并触发统一排期内核重算。
 6. POST /api/product-guide/modeling-tasks 作为旧入口保留，内部桥接到建模排期 style-submissions 契约，提交后 ModelingTask.status=待确认。
 7. 产品组工作指引只提交执行事实和款式清单，不直接写项目排期规划基线、预测结果或建模分配。

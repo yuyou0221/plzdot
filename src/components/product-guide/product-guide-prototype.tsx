@@ -27,7 +27,21 @@ type WorkbenchPageKey = "task" | "messages" | "approval";
 type RiskLevel = "done" | "doneLate" | "normal" | "risk" | "delay";
 
 type ProductGuidePrototypeScheduleData = ScheduleWorkbenchData & {
+  productGuideProjectMasters?: Record<string, ProductGuideProjectMaster>;
   productGuideStyleSummaries?: ProductGuideStyleSummary[];
+};
+
+type ProductGuideProjectMaster = {
+  projectId: string;
+  projectCode?: string;
+  projectName: string;
+  licensorName?: string;
+  ipName?: string;
+  productType?: string;
+  productLine?: string;
+  projectTeamName?: string;
+  projectOwnerName?: string;
+  artOwnerName?: string;
 };
 
 type PrototypeProject = {
@@ -191,6 +205,8 @@ type TaskOperationOptions = {
   missingPredecessorIds?: string[];
 };
 
+type QuickTaskAction = "expected-finish" | "block" | "unblock" | "submit-review" | "note";
+
 type TaskOperationAvailability = {
   canRun: boolean;
   reason: string;
@@ -201,8 +217,19 @@ type TaskOperationDraft = {
   taskKey: string;
   actualStartDate: string;
   actualFinishDate: string;
+  expectedFinishDate: string;
   note: string;
+  blockReason: string;
+  reviewTarget: string;
+  submittedAt: string;
   overrideReason: string;
+};
+
+type StyleListContext = {
+  project: PrototypeProject;
+  task: PrototypeTask;
+  completionOptions?: TaskOperationOptions;
+  returnMessage?: ReturnMessage;
 };
 
 type ReviewResultOptions = {
@@ -481,11 +508,17 @@ function managerOverrideDisabledReason(
 }
 
 function defaultTaskOperationDraft(taskKey: string, task: PrototypeTask): TaskOperationDraft {
+  const expectedFinishDate = parseDateText(task.expectedFinish) ? task.expectedFinish : todayDateOnly();
+
   return {
     taskKey,
     actualStartDate: task.actualStart || "",
     actualFinishDate: todayDateOnly(),
+    expectedFinishDate,
     note: "",
+    blockReason: "",
+    reviewTarget: "版权方 / 审核方",
+    submittedAt: todayDateOnly(),
     overrideReason: "",
   };
 }
@@ -1058,9 +1091,101 @@ function operationEventLabel(eventType: string) {
   const labels: Record<string, string> = {
     task_started: "任务开始",
     task_completed: "任务完成",
+    task_expected_finish_updated: "更新预计完成",
+    task_submitted_for_review: "任务送审",
+    task_blocked: "标记阻塞",
+    task_unblocked: "解除阻塞",
+    task_note_updated: "记录备注",
   };
 
   return labels[eventType] ?? eventType;
+}
+
+function quickTaskActionLabel(action: QuickTaskAction) {
+  const labels: Record<QuickTaskAction, string> = {
+    "expected-finish": "更新预计完成",
+    block: "标记阻塞",
+    unblock: "解除阻塞",
+    "submit-review": "送审",
+    note: "记录备注",
+  };
+
+  return labels[action];
+}
+
+function quickTaskActionHelper(action: QuickTaskAction) {
+  const helpers: Record<QuickTaskAction, string> = {
+    "expected-finish": "写入预计完成日期，并触发项目排期重算。",
+    block: "写入阻塞原因，项目排期会重新判断压力。",
+    unblock: "解除阻塞并恢复进行中。",
+    "submit-review": "记录送审节点，不等同于任务完成。",
+    note: "只更新当前进度说明，也会记录为任务事实。",
+  };
+
+  return helpers[action];
+}
+
+function quickTaskActionDisabledReason(action: QuickTaskAction, draft: TaskOperationDraft, project: PrototypeProject, task: PrototypeTask) {
+  const identityReason = missingTaskIdentityReason(project, task);
+  if (identityReason) return identityReason;
+  if (action === "expected-finish" && !draft.expectedFinishDate) return "请先填写预计完成日期。";
+  if (action === "block" && !draft.blockReason.trim()) return "请先填写阻塞原因。";
+  if (action === "submit-review" && !draft.submittedAt) return "请先填写送审日期。";
+  if (action === "submit-review" && !draft.reviewTarget.trim()) return "请先填写送审对象。";
+  if (action === "note" && !draft.note.trim()) return "请先填写备注。";
+  if (action === "unblock" && !isBlockedStatus(task.status)) return "当前任务未标记阻塞。";
+  return "";
+}
+
+function buildQuickTaskFactRequest(
+  project: PrototypeProject,
+  task: PrototypeTask,
+  action: QuickTaskAction,
+  operatorId: string,
+  operatorName: string,
+  draft: TaskOperationDraft,
+): IntegrationRequest {
+  const baseNote = draft.note.trim();
+
+  if (action === "expected-finish") {
+    return taskFactEventRequest(project, task, operatorId, operatorName, "task_expected_finish_updated", {
+      expectedFinishDate: draft.expectedFinishDate,
+      status: "进行中",
+      ...(baseNote ? { note: baseNote } : {}),
+    });
+  }
+
+  if (action === "block") {
+    return taskFactEventRequest(project, task, operatorId, operatorName, "task_blocked", {
+      status: "阻塞",
+      blockReason: draft.blockReason.trim(),
+      ...(draft.expectedFinishDate ? { expectedFinishDate: draft.expectedFinishDate } : {}),
+      ...(baseNote ? { note: baseNote } : {}),
+    });
+  }
+
+  if (action === "unblock") {
+    return taskFactEventRequest(project, task, operatorId, operatorName, "task_unblocked", {
+      status: "进行中",
+      ...(draft.expectedFinishDate ? { expectedFinishDate: draft.expectedFinishDate } : {}),
+      ...(baseNote ? { note: baseNote } : {}),
+    });
+  }
+
+  if (action === "submit-review") {
+    return taskFactEventRequest(project, task, operatorId, operatorName, "task_submitted_for_review", {
+      submittedAt: draft.submittedAt,
+      expectedFinishDate: draft.expectedFinishDate || draft.submittedAt,
+      status: "送审中",
+      reviewTarget: draft.reviewTarget.trim(),
+      ...(baseNote ? { note: baseNote } : {}),
+    });
+  }
+
+  return taskFactEventRequest(project, task, operatorId, operatorName, "task_note_updated", {
+    status: task.status,
+    note: baseNote,
+  });
 }
 
 function summarizeIntegrationLog(log: IntegrationLog) {
@@ -1078,7 +1203,19 @@ function summarizeIntegrationLog(log: IntegrationLog) {
     const taskName = textOrUndefined(scheduleExchange.payload?.taskName);
     const taskLabel = taskNo ? `#${taskNo}${taskName ? ` ${taskName}` : ""}` : "当前任务";
     const projectTaskId = textOrUndefined(scheduleExchange.response.projectTaskId);
-    const recalculationText = scheduleExchange.response.needsRecalculation === true ? "已标记需要重算。" : "";
+    const recalculation = isRecord(scheduleExchange.response.recalculation) ? scheduleExchange.response.recalculation : undefined;
+    const recalculationStatus = textOrUndefined(recalculation?.status);
+    const recalculationMessage = textOrUndefined(recalculation?.message);
+    const recalculationText =
+      recalculationStatus === "success"
+        ? `已完成项目排期重算${textOrUndefined(scheduleExchange.response.scheduleRunId) ? `（批次 ${scheduleExchange.response.scheduleRunId}）` : ""}。`
+        : recalculationStatus === "failed"
+          ? `任务事实已写入，但重算失败：${recalculationMessage ?? "请联系中控检查排期内核"}。`
+          : recalculationStatus === "skipped"
+            ? `${recalculationMessage ?? "本次未触发重算"}。`
+            : scheduleExchange.response.needsRecalculation === true
+              ? "已标记需要重算。"
+              : "";
     const projectTaskText = projectTaskId ? `任务记录：${projectTaskId}。` : "";
     const modelingText = modelingExchange ? "同时已通知建模排期。" : "";
 
@@ -1167,6 +1304,75 @@ function applyTaskFactExchangeToScheduleRows(rows: ScheduleTaskRow[], exchange: 
       };
     }
 
+    if (eventType === "task_expected_finish_updated") {
+      const expectedFinishDate = textOrUndefined(payload.expectedFinishDate) ?? row.expectedFinishDate;
+
+      return {
+        ...row,
+        projectTaskId: nextProjectTaskId,
+        expectedFinishDate,
+        progressForecastFinishDate: expectedFinishDate || row.progressForecastFinishDate,
+        calculatedFinishDate: expectedFinishDate || row.calculatedFinishDate,
+        taskStatus: "进行中",
+        shouldStartLabel: "进行中",
+        impactStatus: "进行中",
+        riskText: textOrUndefined(payload.note) ?? "产品组工作指引已更新预计完成日期。",
+      };
+    }
+
+    if (eventType === "task_blocked") {
+      const expectedFinishDate = textOrUndefined(payload.expectedFinishDate) ?? row.expectedFinishDate;
+
+      return {
+        ...row,
+        projectTaskId: nextProjectTaskId,
+        expectedFinishDate,
+        taskStatus: "阻塞",
+        shouldStartLabel: "阻塞",
+        impactStatus: "阻塞",
+        riskLevel: "delay" as RiskLevel,
+        riskText: textOrUndefined(payload.blockReason) ?? textOrUndefined(payload.note) ?? "产品组工作指引已标记阻塞。",
+      };
+    }
+
+    if (eventType === "task_unblocked") {
+      const expectedFinishDate = textOrUndefined(payload.expectedFinishDate) ?? row.expectedFinishDate;
+
+      return {
+        ...row,
+        projectTaskId: nextProjectTaskId,
+        expectedFinishDate,
+        taskStatus: "进行中",
+        shouldStartLabel: "进行中",
+        impactStatus: "进行中",
+        riskLevel: "normal" as RiskLevel,
+        riskText: textOrUndefined(payload.note) ?? "产品组工作指引已解除阻塞。",
+      };
+    }
+
+    if (eventType === "task_submitted_for_review") {
+      const expectedFinishDate = textOrUndefined(payload.expectedFinishDate) ?? row.expectedFinishDate;
+
+      return {
+        ...row,
+        projectTaskId: nextProjectTaskId,
+        expectedFinishDate,
+        taskStatus: "送审中",
+        shouldStartLabel: "送审中",
+        impactStatus: "送审中",
+        riskText: textOrUndefined(payload.note) ?? `产品组工作指引已记录送审：${textOrUndefined(payload.reviewTarget) ?? "审核方"}。`,
+      };
+    }
+
+    if (eventType === "task_note_updated") {
+      return {
+        ...row,
+        projectTaskId: nextProjectTaskId,
+        taskStatus: textOrUndefined(payload.status) ?? row.taskStatus,
+        riskText: textOrUndefined(payload.note) ?? row.riskText,
+      };
+    }
+
     return row;
   });
 
@@ -1201,10 +1407,13 @@ function buildProjectsFromScheduleData(data: ProductGuidePrototypeScheduleData):
       const taskRows = tasksByProjectId.get(projectId) ?? [];
       const cards = cardsByProjectId.get(projectId) ?? [];
       const detail = data.projectDetails[projectId];
+      const master = data.productGuideProjectMasters?.[projectId];
       const firstTask = taskRows[0];
       const planned = buildMilestoneMonthMap(cards, "planned");
       const forecast = buildMilestoneMonthMap(cards, "forecast");
-      const tasks = taskRows.map(scheduleTaskToPrototypeTask);
+      const productOwner = businessText(master?.projectOwnerName, detail?.owner, "待补充产品研发");
+      const artOwner = businessText(master?.artOwnerName, detail?.artOwner, "待补充产品美术");
+      const tasks = taskRows.map((task) => scheduleTaskToPrototypeTask(task, { productOwner, artOwner }));
       const currentTask = detail?.currentTask ?? firstActionableTask(tasks)?.name ?? "待同步";
       const currentTaskRow = tasks.find((task) => task.name === currentTask) ?? firstActionableTask(tasks);
       const risk = normalizeRiskLevel(detail?.riskLevel ?? worstRisk(tasks));
@@ -1213,14 +1422,14 @@ function buildProjectsFromScheduleData(data: ProductGuidePrototypeScheduleData):
 
       return {
         id: projectId,
-        name: detail?.name ?? firstTask?.projectName ?? cards[0]?.name ?? projectId,
-        code: firstTask?.projectCode || projectId,
-        team: detail?.projectTeam ?? "待补充项目组",
-        productOwner: detail?.owner ?? "待补充产品研发",
-        artOwner: detail?.artOwner ?? "待补充产品美术",
-        licensor: "项目排期未返回",
-        ip: "项目排期未返回",
-        productType: "项目排期未返回",
+        name: master?.projectName ?? detail?.name ?? firstTask?.projectName ?? cards[0]?.name ?? projectId,
+        code: master?.projectCode ?? firstTask?.projectCode ?? projectId,
+        team: businessText(master?.projectTeamName, detail?.projectTeam, "待补充项目组"),
+        productOwner,
+        artOwner,
+        licensor: businessText(master?.licensorName, undefined, "待补充版权方"),
+        ip: businessText(master?.ipName, undefined, "待补充 IP"),
+        productType: businessText(master?.productType, master?.productLine, "待补充品类"),
         status: firstTask?.projectStage || "项目排期",
         plannedLaunch: firstTask?.plannedLaunchDate || detail?.plannedFinish || "-",
         forecastLaunch: firstTask?.forecastLaunchDate || detail?.forecastFinish || "-",
@@ -1234,14 +1443,14 @@ function buildProjectsFromScheduleData(data: ProductGuidePrototypeScheduleData):
         forecast,
         tasks,
         styles,
-        updates: [`任务来源：项目排期 / ${data.sourceLabel}`],
+        updates: [`任务来源：项目排期 / ${data.sourceLabel}`, master ? "项目基础信息来源：Project 主数据" : "项目基础信息待项目主数据补齐"],
       } satisfies PrototypeProject;
     })
     .filter((project) => project.tasks.length > 0 || Object.keys(project.planned).length > 0 || Object.keys(project.forecast).length > 0)
     .sort((a, b) => a.plannedLaunch.localeCompare(b.plannedLaunch, "zh-CN") || a.name.localeCompare(b.name, "zh-CN"));
 }
 
-function scheduleTaskToPrototypeTask(row: ScheduleTaskRow): PrototypeTask {
+function scheduleTaskToPrototypeTask(row: ScheduleTaskRow, owners: { productOwner: string; artOwner: string }): PrototypeTask {
   const actualStart = textOrUndefined(row.actualStartDate);
   const actualFinish = textOrUndefined(row.actualFinishDate) ?? textOrUndefined(row.inferredCompletionDate);
   const plannedStart = textOrDash(row.plannedStartDate || row.originalLatestStartDate);
@@ -1259,7 +1468,7 @@ function scheduleTaskToPrototypeTask(row: ScheduleTaskRow): PrototypeTask {
     no: row.taskNo,
     name: row.taskName || `任务 ${row.taskNo}`,
     milestone: row.milestoneType || milestoneByTaskNoLabel(row.taskNo),
-    owner: "项目排期未返回",
+    owner: ownerForTaskNo(row.taskNo, owners),
     plannedStart,
     forecastStart,
     plannedFinish,
@@ -1298,6 +1507,17 @@ function styleSummaryToPrototypeStyle(summary: ProductGuideStyleSummary): Protot
     referenceImageCount: summary.referenceImageUrls?.length ?? 0,
     referenceImageUrls: summary.referenceImageUrls,
   };
+}
+
+function businessText(primary: string | undefined, secondary: string | undefined, fallback: string) {
+  const value = textOrUndefined(primary) ?? textOrUndefined(secondary);
+  if (!value || value === "项目排期未返回") return fallback;
+  return value;
+}
+
+function ownerForTaskNo(taskNo: number, owners: { productOwner: string; artOwner: string }) {
+  if (taskNo >= 4 && taskNo <= 10) return owners.artOwner;
+  return owners.productOwner;
 }
 
 function styleSummariesFromSubmissionResponse(
@@ -2153,6 +2373,7 @@ function WorkbenchPage({
   const [runningOperation, setRunningOperation] = useState("");
   const [integrationLog, setIntegrationLog] = useState<IntegrationLog | null>(null);
   const [styleListOpen, setStyleListOpen] = useState(false);
+  const [styleListContext, setStyleListContext] = useState<StyleListContext | null>(null);
   const [styleDraftRows, setStyleDraftRows] = useState<StyleListDraftRow[]>(() => defaultStyleDraftRows(emptyProject));
   const [styleUploadingRowId, setStyleUploadingRowId] = useState("");
   const [styleUploadMessage, setStyleUploadMessage] = useState("");
@@ -2170,6 +2391,9 @@ function WorkbenchPage({
   const canManageOverride = canUseManagerOverride(currentUserRole);
   const operationDraftKey = `${selectedProject.id}:${selectedTask.id}`;
   const activeDraft = operationDraft.taskKey === operationDraftKey ? operationDraft : defaultTaskOperationDraft(operationDraftKey, selectedTask);
+  const activeStyleListProject = styleListContext?.project ?? selectedProject;
+  const activeStyleListTask = styleListContext?.task ?? selectedTask;
+  const activeStyleCompletion = styleListContext?.completionOptions ?? pendingStyleCompletion;
   const selectedTaskAttachments = taskAttachments[taskAttachmentKey(selectedProject, selectedTask)] ?? [];
   const selectedTaskReviewRecords = taskReviewRecords[taskAttachmentKey(selectedProject, selectedTask)] ?? [];
 
@@ -2180,12 +2404,33 @@ function WorkbenchPage({
     });
   }
 
-  function openStyleListModal(completionOptions?: TaskOperationOptions) {
-    setStyleDraftRows(defaultStyleDraftRows(selectedProject));
+  function openStyleListModal(completionOptions?: TaskOperationOptions, context?: Pick<StyleListContext, "project" | "task" | "returnMessage">) {
+    const targetProject = context?.project ?? selectedProject;
+    const targetTask = context?.task ?? selectedTask;
+
+    setStyleDraftRows(defaultStyleDraftRows(targetProject));
     setStyleUploadMessage("");
     setStyleUploadingRowId("");
     setPendingStyleCompletion(completionOptions ?? null);
+    setStyleListContext({
+      project: targetProject,
+      task: targetTask,
+      completionOptions,
+      returnMessage: context?.returnMessage,
+    });
     setStyleListOpen(true);
+  }
+
+  function openReturnedStyleList(message: ReturnMessage) {
+    const targetProject = projects.find((project) => project.id === message.projectId) ?? selectedProject;
+    const targetTask =
+      targetProject.tasks.find((task) => (message.taskNo ? task.no === message.taskNo : false)) ??
+      targetProject.tasks.find((task) => task.no === 7) ??
+      targetProject.tasks.find((task) => task.no === 10) ??
+      selectedTask;
+
+    onOpenTask(targetProject.id, targetTask.no);
+    openStyleListModal(undefined, { project: targetProject, task: targetTask, returnMessage: message });
   }
 
   function openAttachmentModal(operation: TaskOperation) {
@@ -2328,21 +2573,21 @@ function WorkbenchPage({
   async function submitStyleList() {
     if (validateStyleDraftRows(styleDraftRows).length > 0) return;
 
-    const shouldCompleteTaskAfterStyleSubmit = Boolean(pendingStyleCompletion);
+    const shouldCompleteTaskAfterStyleSubmit = Boolean(activeStyleCompletion);
     const label = shouldCompleteTaskAfterStyleSubmit ? "提交款式清单并完成任务" : "提交建模款式清单";
     setRunningOperation(label);
     try {
       const requests: IntegrationRequest[] = [
         {
-          ...styleSubmissionRequest(selectedProject, currentUserId, currentUserName, styleDraftRows),
+          ...styleSubmissionRequest(activeStyleListProject, currentUserId, currentUserName, styleDraftRows),
           haltOnFailure: shouldCompleteTaskAfterStyleSubmit,
         },
       ];
 
-      if (pendingStyleCompletion) {
-        const completeOperation = taskOps(selectedTask.name, ["完成"]).operations[0];
+      if (activeStyleCompletion) {
+        const completeOperation = taskOps(activeStyleListTask.name, ["完成"]).operations[0];
         requests.push(
-          ...buildOperationRequests(selectedProject, selectedTask, completeOperation, currentUserId, currentUserName, pendingStyleCompletion),
+          ...buildOperationRequests(activeStyleListProject, activeStyleListTask, completeOperation, currentUserId, currentUserName, activeStyleCompletion),
         );
       }
 
@@ -2351,9 +2596,13 @@ function WorkbenchPage({
       onTaskFactLog(log);
       const styleSubmissionExchange = log.exchanges.find((exchange) => exchange.path.includes("/api/modeling/style-submissions"));
       if (styleSubmissionExchange?.ok) {
-        onModelingStylesSubmitted(styleSummariesFromSubmissionResponse(selectedProject, styleDraftRows, styleSubmissionExchange.response));
+        onModelingStylesSubmitted(styleSummariesFromSubmissionResponse(activeStyleListProject, styleDraftRows, styleSubmissionExchange.response));
         setStyleListOpen(false);
         setPendingStyleCompletion(null);
+        setStyleListContext(null);
+        if (styleListContext?.returnMessage) {
+          onReturnMessageHandled(styleListContext.returnMessage.id);
+        }
         if (log.exchanges.every((exchange) => exchange.ok)) {
           setActivePage("detail");
         }
@@ -2399,6 +2648,23 @@ function WorkbenchPage({
     try {
       const requests = buildOperationRequests(selectedProject, selectedTask, operation, currentUserId, currentUserName, operationOptions);
       const log = await executeIntegrationRequests(operation.label, requests);
+      setIntegrationLog(log);
+      onTaskFactLog(log);
+    } finally {
+      setRunningOperation("");
+    }
+  }
+
+  async function runQuickTaskAction(action: QuickTaskAction) {
+    const disabledReason = quickTaskActionDisabledReason(action, activeDraft, selectedProject, selectedTask);
+    if (disabledReason) return;
+
+    const label = quickTaskActionLabel(action);
+    setRunningOperation(label);
+    try {
+      const log = await executeIntegrationRequests(label, [
+        buildQuickTaskFactRequest(selectedProject, selectedTask, action, currentUserId, currentUserName, activeDraft),
+      ]);
       setIntegrationLog(log);
       onTaskFactLog(log);
     } finally {
@@ -2490,6 +2756,7 @@ function WorkbenchPage({
           sourceLabel={returnMessageSource}
           onOpenProject={onOpenProject}
           onOpenTask={onOpenTask}
+          onOpenStyleList={openReturnedStyleList}
           onOpenApproval={(messageId) => {
             setSelectedApprovalMessageId(messageId);
             setWorkbenchPage("approval");
@@ -2591,7 +2858,7 @@ function WorkbenchPage({
                   </div>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-[150px_150px_minmax(0,1fr)] gap-2 max-lg:grid-cols-1">
+              <div className="mt-3 grid grid-cols-[150px_150px_150px_minmax(0,1fr)] gap-2 max-lg:grid-cols-2 max-md:grid-cols-1">
                 <label className="grid gap-1 text-xs font-medium text-slate-600">
                   实际开始（开始为空默认今天，补录可选）
                   <input
@@ -2611,12 +2878,52 @@ function WorkbenchPage({
                   />
                 </label>
                 <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  预计完成
+                  <input
+                    type="date"
+                    value={activeDraft.expectedFinishDate}
+                    onChange={(event) => updateOperationDraft({ expectedFinishDate: event.target.value })}
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
                   备注
                   <input
                     type="text"
                     value={activeDraft.note}
                     onChange={(event) => updateOperationDraft({ note: event.target.value })}
                     placeholder="可填写补录依据、附件说明或当前处理说明"
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                  />
+                </label>
+              </div>
+              <div className="mt-2 grid grid-cols-[minmax(0,1fr)_180px_160px] gap-2 max-lg:grid-cols-1">
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  阻塞原因
+                  <input
+                    type="text"
+                    value={activeDraft.blockReason}
+                    onChange={(event) => updateOperationDraft({ blockReason: event.target.value })}
+                    placeholder="例如：版权方反馈未回 / 资料缺失 / 工厂确认中"
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  送审日期
+                  <input
+                    type="date"
+                    value={activeDraft.submittedAt}
+                    onChange={(event) => updateOperationDraft({ submittedAt: event.target.value })}
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  送审对象
+                  <input
+                    type="text"
+                    value={activeDraft.reviewTarget}
+                    onChange={(event) => updateOperationDraft({ reviewTarget: event.target.value })}
+                    placeholder="版权方 / 内部审核"
                     className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
                   />
                 </label>
@@ -2645,6 +2952,35 @@ function WorkbenchPage({
                     </button>
                   );
                 })}
+              </div>
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-semibold">进度事实补充</h4>
+                    <div className="mt-1 text-xs text-slate-500">这些动作会写入项目排期任务事实，并自动触发正式重算。</div>
+                  </div>
+                  <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-800">普通成员可用</span>
+                </div>
+                <div className="mt-3 grid grid-cols-5 gap-2 max-xl:grid-cols-3 max-lg:grid-cols-2 max-md:grid-cols-1">
+                  {(["expected-finish", "block", "unblock", "submit-review", "note"] as const).map((action) => {
+                    const disabledReason = quickTaskActionDisabledReason(action, activeDraft, selectedProject, selectedTask);
+                    const label = quickTaskActionLabel(action);
+                    const disabled = Boolean(runningOperation) || Boolean(disabledReason);
+
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        onClick={() => void runQuickTaskAction(action)}
+                        disabled={disabled}
+                        className="min-h-10 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <div>{label}</div>
+                        <div className="mt-1 text-xs font-normal text-emerald-800">{runningOperation === label ? "正在写入任务事实..." : disabledReason || quickTaskActionHelper(action)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2721,15 +3057,17 @@ function WorkbenchPage({
       )}
       <StyleListModal
         open={styleListOpen}
-        project={selectedProject}
+        project={activeStyleListProject}
         rows={styleDraftRows}
         running={runningOperation === "提交建模款式清单" || runningOperation === "提交款式清单并完成任务"}
-        completeTaskAfterSubmit={Boolean(pendingStyleCompletion)}
+        completeTaskAfterSubmit={Boolean(activeStyleCompletion)}
+        returnMessage={styleListContext?.returnMessage}
         uploadingRowId={styleUploadingRowId}
         uploadMessage={styleUploadMessage}
         onClose={() => {
           setStyleListOpen(false);
           setPendingStyleCompletion(null);
+          setStyleListContext(null);
         }}
         onSubmit={() => void submitStyleList()}
         onAddRow={addStyleDraftRow}
@@ -3054,6 +3392,7 @@ function StyleListModal({
   rows,
   running,
   completeTaskAfterSubmit,
+  returnMessage,
   uploadingRowId,
   uploadMessage,
   onClose,
@@ -3070,6 +3409,7 @@ function StyleListModal({
   rows: StyleListDraftRow[];
   running: boolean;
   completeTaskAfterSubmit: boolean;
+  returnMessage?: ReturnMessage;
   uploadingRowId: string;
   uploadMessage: string;
   onClose: () => void;
@@ -3099,10 +3439,17 @@ function StyleListModal({
             <div className="text-xs font-semibold text-rose-700">{project.code} / {project.name}</div>
             <h2 className="mt-1 text-xl font-semibold">建模款式清单</h2>
             <div className="mt-1 text-sm text-slate-500">
-              {completeTaskAfterSubmit
+              {returnMessage
+                ? "建模排期退回了款式清单，请补齐完整系列后重新提交。"
+                : completeTaskAfterSubmit
                 ? "完成原画收口任务前，先提交完整系列款式清单；提交成功后会继续完成当前任务。"
                 : "原画里程碑完成后提交完整系列；第一款挂任务 7，其余款式挂任务 10。"}
             </div>
+            {returnMessage ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                退回原因：{returnMessage.summary}
+              </div>
+            ) : null}
           </div>
           <button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="关闭">
             <X size={16} />
@@ -3335,7 +3682,7 @@ function IntegrationLogPanel({ log, runningOperation }: { log: IntegrationLog | 
     <section className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-base font-semibold">真实接口联调结果</h3>
+          <h3 className="text-base font-semibold">真实接口结果</h3>
           <div className="mt-1 text-xs text-slate-500">点击任务操作后，这里显示产品组实际发给项目排期 / 建模排期的请求和返回。</div>
         </div>
         <div className={clsx("rounded-full px-2.5 py-1 text-xs font-semibold", runningOperation ? "bg-blue-100 text-blue-800" : log ? (log.exchanges.every((exchange) => exchange.ok) ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700") : "bg-slate-100 text-slate-600")}>
@@ -3382,12 +3729,14 @@ function MessageReminderPage({
   sourceLabel,
   onOpenProject,
   onOpenTask,
+  onOpenStyleList,
   onOpenApproval,
 }: {
   messages: ReturnMessage[];
   sourceLabel: string;
   onOpenProject: (projectId: string) => void;
   onOpenTask: (projectId: string, taskNo: number) => void;
+  onOpenStyleList: (message: ReturnMessage) => void;
   onOpenApproval: (messageId: string) => void;
 }) {
   const actionableMessages = messages.filter((message) => message.status !== "预留");
@@ -3413,7 +3762,7 @@ function MessageReminderPage({
         <h3 className="text-base font-semibold">回传通知</h3>
         <div className="mt-3 grid gap-2">
           {actionableMessages.map((message) => (
-            <MessageRow key={message.id} message={message} onOpenProject={onOpenProject} onOpenTask={onOpenTask} onOpenApproval={onOpenApproval} />
+            <MessageRow key={message.id} message={message} onOpenProject={onOpenProject} onOpenTask={onOpenTask} onOpenStyleList={onOpenStyleList} onOpenApproval={onOpenApproval} />
           ))}
         </div>
       </section>
@@ -3422,7 +3771,7 @@ function MessageReminderPage({
         <h3 className="text-base font-semibold">后续模块预留</h3>
         <div className="mt-3 grid gap-2">
           {reservedMessages.map((message) => (
-            <MessageRow key={message.id} message={message} onOpenProject={onOpenProject} onOpenTask={onOpenTask} onOpenApproval={onOpenApproval} />
+            <MessageRow key={message.id} message={message} onOpenProject={onOpenProject} onOpenTask={onOpenTask} onOpenStyleList={onOpenStyleList} onOpenApproval={onOpenApproval} />
           ))}
         </div>
       </section>
@@ -3434,16 +3783,19 @@ function MessageRow({
   message,
   onOpenProject,
   onOpenTask,
+  onOpenStyleList,
   onOpenApproval,
 }: {
   message: ReturnMessage;
   onOpenProject: (projectId: string) => void;
   onOpenTask: (projectId: string, taskNo: number) => void;
+  onOpenStyleList: (message: ReturnMessage) => void;
   onOpenApproval: (messageId: string) => void;
 }) {
   const canOpenApproval = message.target === "approval" && message.status !== "已处理" && message.status !== "预留";
   const canOpenTask = message.target === "task" && message.projectId && message.taskNo;
   const canOpenProject = message.target === "project" && message.projectId;
+  const canSupplementStyleList = message.eventType === "style_list_returned" && message.status !== "已处理" && message.status !== "预留" && Boolean(message.projectId);
 
   return (
     <div className={clsx("grid grid-cols-[132px_1fr_112px] items-center gap-3 rounded-lg border px-3 py-3 max-lg:grid-cols-1", message.status === "预留" ? "border-slate-200 bg-slate-50" : "border-slate-200 bg-white")}>
@@ -3460,6 +3812,11 @@ function MessageRow({
         <div className="mt-1 text-sm text-slate-700">{message.summary}</div>
       </div>
       <div className="grid gap-2">
+        {canSupplementStyleList ? (
+          <button type="button" onClick={() => onOpenStyleList(message)} className="h-9 rounded-lg border border-amber-200 bg-amber-50 text-sm font-semibold text-amber-900 hover:bg-amber-100">
+            补充款式清单
+          </button>
+        ) : null}
         {canOpenApproval ? (
           <button type="button" onClick={() => onOpenApproval(message.id)} className="h-9 rounded-lg border border-rose-200 bg-rose-50 text-sm font-semibold text-rose-700 hover:bg-rose-100">
             进入审批中心
@@ -3815,7 +4172,9 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
             <h3 className="text-base font-semibold">全部项目任务</h3>
             <div className="mt-1 text-xs text-slate-500">共 {sortedTasks.length} 项，来自项目排期任务清单；点击任一任务进入工作台处理。</div>
             {missingTaskNos.length > 0 ? (
-              <div className="mt-1 text-xs font-medium text-amber-700">缺失任务编号：{missingTaskNos.join("、")}，需由项目排期确认是否初始化。</div>
+              <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
+                缺失任务编号：{missingTaskNos.join("、")}。需由项目排期初始化确认，产品组不要手动补任务编号。
+              </div>
             ) : null}
           </div>
           <div className="flex flex-wrap gap-2 text-xs">

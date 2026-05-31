@@ -22,7 +22,21 @@ type PrototypeProjectTaskRow = {
   isBlocked: boolean;
 };
 
+export type ProductGuideProjectMaster = {
+  projectId: string;
+  projectCode?: string;
+  projectName: string;
+  licensorName?: string;
+  ipName?: string;
+  productType?: string;
+  productLine?: string;
+  projectTeamName?: string;
+  projectOwnerName?: string;
+  artOwnerName?: string;
+};
+
 export type ProductGuidePrototypeData = ScheduleWorkbenchData & {
+  productGuideProjectMasters: Record<string, ProductGuideProjectMaster>;
   productGuideStyleSummaries: ProductGuideStyleSummary[];
 };
 
@@ -38,11 +52,76 @@ const milestoneOptions: ProjectCard["milestone"][] = [
 export async function getProductGuidePrototypeData(): Promise<ProductGuidePrototypeData> {
   const scheduleData = await getScheduleWorkbenchData({ includeTaskRows: true, includeProjectDetails: true });
   const baseData = scheduleData.scheduleTasks.length > 0 ? scheduleData : await withProjectTaskRows(scheduleData);
+  const enrichedData = await withProjectMasterRows(baseData);
 
-  return withModelingRows(baseData);
+  return withModelingRows(enrichedData);
 }
 
-async function withModelingRows(scheduleData: ScheduleWorkbenchData): Promise<ProductGuidePrototypeData> {
+async function withProjectMasterRows(scheduleData: ScheduleWorkbenchData): Promise<ProductGuidePrototypeData> {
+  const projectIds = [
+    ...new Set(
+      [
+        ...scheduleData.scheduleTasks.map((task) => task.projectId),
+        ...scheduleData.projectCards.map((card) => card.projectId),
+        ...Object.keys(scheduleData.projectDetails),
+      ].filter(Boolean),
+    ),
+  ];
+
+  if (projectIds.length === 0) {
+    return { ...scheduleData, productGuideProjectMasters: {}, productGuideStyleSummaries: [] };
+  }
+
+  const projects = await prisma.project.findMany({
+    where: { id: { in: projectIds } },
+    select: {
+      id: true,
+      projectCode: true,
+      projectName: true,
+      licensorName: true,
+      ipName: true,
+      productType: true,
+      productLine: true,
+      projectTeamId: true,
+      projectOwnerId: true,
+      artOwnerId: true,
+    },
+  });
+  const teamIds = [...new Set(projects.map((project) => project.projectTeamId).filter((id): id is string => Boolean(id)))];
+  const userIds = [
+    ...new Set(
+      projects
+        .flatMap((project) => [project.projectOwnerId, project.artOwnerId])
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const [teams, users] = await Promise.all([
+    teamIds.length > 0 ? prisma.team.findMany({ where: { id: { in: teamIds } }, select: { id: true, name: true } }) : [],
+    userIds.length > 0 ? prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } }) : [],
+  ]);
+  const teamById = new Map(teams.map((team) => [team.id, team.name]));
+  const userById = new Map(users.map((user) => [user.id, user.name]));
+  const masters: Record<string, ProductGuideProjectMaster> = {};
+
+  for (const project of projects) {
+    masters[project.id] = {
+      projectId: project.id,
+      projectCode: project.projectCode ?? undefined,
+      projectName: project.projectName,
+      licensorName: project.licensorName ?? undefined,
+      ipName: project.ipName ?? undefined,
+      productType: project.productType ?? undefined,
+      productLine: project.productLine ?? undefined,
+      projectTeamName: project.projectTeamId ? teamById.get(project.projectTeamId) ?? project.projectTeamId : undefined,
+      projectOwnerName: project.projectOwnerId ? userById.get(project.projectOwnerId) ?? project.projectOwnerId : undefined,
+      artOwnerName: project.artOwnerId ? userById.get(project.artOwnerId) ?? project.artOwnerId : undefined,
+    };
+  }
+
+  return { ...scheduleData, productGuideProjectMasters: masters, productGuideStyleSummaries: [] };
+}
+
+async function withModelingRows(scheduleData: ProductGuidePrototypeData): Promise<ProductGuidePrototypeData> {
   const projectIds = [
     ...new Set(
       [
