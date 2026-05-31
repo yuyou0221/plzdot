@@ -660,6 +660,7 @@ function buildRealTasks(
       history.push({
         id: feedback.id,
         feedbackType: feedback.feedbackType,
+        category: classifyFeedbackCategory(feedback.feedbackType),
         roundNo: feedback.roundNo,
         feedbackByName: feedback.feedbackByName ?? undefined,
         feedbackAt: formatDateTime(feedback.feedbackAt) ?? formatDate(feedback.feedbackAt) ?? "",
@@ -766,6 +767,30 @@ function buildRealTasks(
       canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
   });
+}
+
+function classifyFeedbackCategory(feedbackType: string): ModelingFeedbackSummary["category"] {
+  if (feedbackType.includes("建模师提交")) {
+    return "work-submission";
+  }
+
+  if (feedbackType.includes("内部") || feedbackType.includes("检修") || feedbackType.includes("验收")) {
+    return "internal-review";
+  }
+
+  if (feedbackType.includes("版权") || feedbackType.includes("送审")) {
+    return "copyright-review";
+  }
+
+  if (feedbackType.includes("退回补充") || feedbackType.includes("清单")) {
+    return "style-list-return";
+  }
+
+  if (feedbackType.includes("取消") || feedbackType.includes("重开")) {
+    return "cancel-reopen";
+  }
+
+  return "other";
 }
 
 function buildVirtualTasks(
