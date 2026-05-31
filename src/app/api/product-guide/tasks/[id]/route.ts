@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
+import { requireApiUser } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
 import { formatDate, optionalText, parseDateOnly, requiredText, todayDateOnly } from "@/lib/product-guide-mutation";
 import {
@@ -32,7 +32,7 @@ const allowedTaskActions: TaskAction[] = ["complete", "progress", "expected-fini
 const allowedTaskStatuses = new Set(["未开始", "进行中", "已完成", "阻塞", "暂停", "取消", "送审中", "已送审"]);
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
 
   const { id } = await context.params;
@@ -48,6 +48,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
   if (!action || !allowedTaskActions.includes(action)) {
     return NextResponse.json({ ok: false, message: "无法识别任务动作。" }, { status: 400 });
+  }
+
+  if (requiresManagerOverride(payload) && auth.user.authRole !== "admin" && auth.user.authRole !== "manager") {
+    return NextResponse.json({ ok: false, message: "强制处理、历史补录和覆盖关键事实仅管理者可操作。" }, { status: 403 });
   }
 
   try {
@@ -128,6 +132,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       { status: 500 },
     );
   }
+}
+
+function requiresManagerOverride(payload: Record<string, unknown>) {
+  return Boolean(
+    payload.override ||
+      payload.force ||
+      payload.forceComplete ||
+      payload.overrideExistingFact ||
+      payload.backfill ||
+      payload.historyBackfill ||
+      payload.bulk,
+  );
 }
 
 function buildProjectTaskFactEvent({
@@ -273,8 +289,10 @@ function eventPayloadForAction(
   }
 
   if (status === "进行中" && !task.actualStartDate) {
+    const actualStartDate = parseDateOnly(payload.actualStartDate) ?? todayDateOnly();
+
     return {
-      actualStartDate: formatDate(todayDateOnly()),
+      actualStartDate: formatDate(actualStartDate),
       status: "进行中",
       ...(note ? { note } : {}),
     };

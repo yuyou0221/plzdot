@@ -33,6 +33,15 @@ export type ModelingFeedbackSummary = {
   attachmentUrl?: string;
 };
 
+export type ModelingWorkLogSummary = {
+  id: string;
+  startedAt: string;
+  endedAt: string;
+  durationMinutes: number;
+  stopReason: string;
+  stoppedBy?: string;
+};
+
 export type ModelingMetric = {
   label: string;
   value: number;
@@ -93,6 +102,7 @@ export type ModelingTaskCard = {
   latestSubmissionBy?: string;
   latestSubmissionStatus?: string;
   feedbackHistory: ModelingFeedbackSummary[];
+  workLogs: ModelingWorkLogSummary[];
   isVirtual: boolean;
   canDragAssign: boolean;
 };

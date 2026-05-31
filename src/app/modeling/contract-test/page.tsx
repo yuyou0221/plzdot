@@ -4,8 +4,10 @@ import {
   type ModelingContractTestModeler,
   type ModelingContractTestProject,
 } from "@/components/modeling/modeling-contract-test-page";
+import { AccessDeniedPanel } from "@/components/layout/access-denied-panel";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { prisma } from "@/lib/db/prisma";
+import { canAccessInternalTestTools } from "@/lib/runtime-flags";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,9 @@ export const metadata: Metadata = {
 
 export default async function ModelingContractTestRoute() {
   const currentUser = await requireCurrentUser("/modeling/contract-test");
+  if (!canAccessInternalTestTools(currentUser)) {
+    return <AccessDeniedPanel />;
+  }
 
   const projectTasks = await prisma.projectTask.findMany({
     where: { taskNo: { in: [7, 10] } },

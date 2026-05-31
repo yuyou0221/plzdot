@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import { buildModelingTodosFromTasks } from "@/lib/modeling-todos";
+import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
 import type {
   ModelerCapacity,
@@ -10,6 +11,7 @@ import type {
   ModelingMilestoneRiskLevel,
   ModelingMetric,
   ModelingFeedbackSummary,
+  ModelingWorkLogSummary,
   ModelingReferenceImage,
   ModelingScheduleData,
   ModelingTaskCard,
@@ -135,6 +137,16 @@ type FeedbackRow = {
   submissionSnapshot: unknown;
 };
 
+type WorkLogRow = {
+  id: string;
+  modelingTaskId: string;
+  startedAt: Date;
+  endedAt: Date;
+  durationMinutes: number;
+  stopReason: string;
+  stoppedBy: string | null;
+};
+
 type ScheduleTaskResultRow = {
   projectId: string;
   projectTaskId: string;
@@ -238,16 +250,20 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     ]);
 
     const userIds = users.map((user) => user.id);
-    const [capabilityTags, feedbackRows, milestoneRows] = await Promise.all([
+    const projectById = new Map(projects.map((project) => [project.id, project]));
+    const formalRealTasks = realTasks.filter((task) => projectById.has(task.projectId));
+    const formalRealTaskIds = formalRealTasks.map((task) => task.id);
+
+    const [capabilityTags, feedbackRows, workLogRows, milestoneRows] = await Promise.all([
       userIds.length > 0
         ? prisma.modelerCapabilityTag.findMany({
             where: { userId: { in: userIds } },
             orderBy: [{ userId: "asc" }, { tagName: "asc" }],
           })
         : Promise.resolve([]),
-      realTasks.length > 0
+      formalRealTaskIds.length > 0
         ? prisma.modelingFeedback.findMany({
-            where: { modelingTaskId: { in: realTasks.map((task) => task.id) } },
+            where: { modelingTaskId: { in: formalRealTaskIds } },
             orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
             take: 800,
             select: {
@@ -263,6 +279,22 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
               submissionSnapshot: true,
             },
         })
+        : Promise.resolve([]),
+      formalRealTaskIds.length > 0
+        ? prisma.modelingWorkLog.findMany({
+            where: { modelingTaskId: { in: formalRealTaskIds } },
+            orderBy: [{ endedAt: "desc" }, { createdAt: "desc" }],
+            take: 1000,
+            select: {
+              id: true,
+              modelingTaskId: true,
+              startedAt: true,
+              endedAt: true,
+              durationMinutes: true,
+              stopReason: true,
+              stoppedBy: true,
+            },
+          })
         : Promise.resolve([]),
       latestRun
         ? prisma.scheduleTaskResult.findMany({
@@ -286,24 +318,26 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
         : Promise.resolve([]),
     ]);
 
-    const projectById = new Map(projects.map((project) => [project.id, project]));
-    const modelers = buildModelers(users, capabilityTags, realTasks);
+    const modelers = buildModelers(users, capabilityTags, formalRealTasks);
     const vendorById = new Map(vendors.map((vendor) => [vendor.id, vendor]));
     const vendorOptions = buildVendors(vendors);
     const modelingCompletionByProjectId = buildModelingCompletionByProjectId(projects, milestoneRows);
     const tasks =
-      realTasks.length > 0
-        ? buildRealTasks(realTasks, projectById, modelers, vendorById, feedbackRows, modelingCompletionByProjectId)
-        : buildVirtualTasks(
-            projects,
-            modelers,
-            vendors.length > 0 ? vendors[0].name : "待补充外包供应商",
-            modelingCompletionByProjectId,
-          );
-    const summaries = buildProjectSummaries(projects, tasks, progressRows, realTasks.length === 0, modelingCompletionByProjectId);
+      formalRealTasks.length > 0
+        ? buildRealTasks(formalRealTasks, projectById, modelers, vendorById, feedbackRows, workLogRows, modelingCompletionByProjectId)
+        : isDemoDataAllowed()
+          ? buildVirtualTasks(
+              projects,
+              modelers,
+              vendors.length > 0 ? vendors[0].name : "待补充外包供应商",
+              modelingCompletionByProjectId,
+            )
+          : [];
+    const hasOnlyVirtualTasks = formalRealTasks.length === 0 && tasks.length > 0;
+    const summaries = buildProjectSummaries(projects, tasks, progressRows, hasOnlyVirtualTasks, modelingCompletionByProjectId);
 
     return {
-      sourceLabel: realTasks.length > 0 ? "数据库建模任务" : "数据库项目 + 虚拟款式任务",
+      sourceLabel: formalRealTasks.length > 0 ? "数据库建模任务" : isDemoDataAllowed() ? "数据库项目 + 虚拟款式任务" : "暂无真实建模任务",
       generatedAt: new Date().toISOString(),
       todos: buildModelingTodosFromTasks(tasks),
       milestoneOverview: buildMilestoneOverview(projects, milestoneRows),
@@ -316,6 +350,21 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     };
   } catch (error) {
     console.error("Failed to build modeling schedule data", error);
+    if (!isDemoDataAllowed()) {
+      return {
+        sourceLabel: "建模排期读取失败",
+        generatedAt: new Date().toISOString(),
+        todos: [],
+        milestoneOverview: buildMilestoneOverview([], []),
+        metrics: buildMetrics([], []),
+        tasks: [],
+        modelers: [],
+        vendors: [],
+        projectSummaries: [],
+        statusColumns,
+      };
+    }
+
     const fallbackProjects = buildFallbackProjects();
     const tasks = buildVirtualTasks(fallbackProjects, defaultVirtualModelers, "待补充外包供应商");
     const fallbackVendors = buildVendors([]);
@@ -409,7 +458,7 @@ function buildModelers(
     });
   }
 
-  return modelers.length > 0 ? modelers : defaultVirtualModelers;
+  return modelers.length > 0 ? modelers : isDemoDataAllowed() ? defaultVirtualModelers : [];
 }
 
 function buildMilestoneOverview(
@@ -584,6 +633,7 @@ function buildRealTasks(
   modelers: ModelerCapacity[],
   vendorById: Map<string, { id: string; name: string; stableCapacity: boolean }>,
   feedbackRows: FeedbackRow[],
+  workLogRows: WorkLogRow[],
   completedModelingByProjectId: Map<string, ModelingMilestoneCompletion>,
 ): ModelingTaskCard[] {
   const modelerById = new Map(modelers.map((modeler) => [modeler.id, modeler]));
@@ -591,6 +641,7 @@ function buildRealTasks(
   const latestSubmissionByTaskId = new Map<string, FeedbackRow>();
   const feedbackCountByTaskId = new Map<string, number>();
   const feedbackHistoryByTaskId = new Map<string, ModelingFeedbackSummary[]>();
+  const workLogsByTaskId = new Map<string, ModelingWorkLogSummary[]>();
 
   for (const feedback of feedbackRows) {
     feedbackCountByTaskId.set(feedback.modelingTaskId, (feedbackCountByTaskId.get(feedback.modelingTaskId) ?? 0) + 1);
@@ -616,6 +667,21 @@ function buildRealTasks(
         attachmentUrl: feedback.attachmentUrl ?? undefined,
       });
       feedbackHistoryByTaskId.set(feedback.modelingTaskId, history);
+    }
+  }
+
+  for (const log of workLogRows) {
+    const logs = workLogsByTaskId.get(log.modelingTaskId) ?? [];
+    if (logs.length < 20) {
+      logs.push({
+        id: log.id,
+        startedAt: formatDateTime(log.startedAt) ?? "",
+        endedAt: formatDateTime(log.endedAt) ?? "",
+        durationMinutes: log.durationMinutes,
+        stopReason: log.stopReason,
+        stoppedBy: log.stoppedBy ?? undefined,
+      });
+      workLogsByTaskId.set(log.modelingTaskId, logs);
     }
   }
 
@@ -691,6 +757,7 @@ function buildRealTasks(
       latestSubmissionBy: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.submittedByName ?? latestSubmission?.feedbackByName ?? undefined),
       latestSubmissionStatus: isCompletedBySchedule ? undefined : latestSubmission?.status,
       feedbackHistory: isCompletedBySchedule ? [] : (feedbackHistoryByTaskId.get(task.id) ?? []),
+      workLogs: workLogsByTaskId.get(task.id) ?? [],
       isVirtual: false,
       canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
@@ -784,6 +851,7 @@ function buildVirtualTasks(
           latestSubmissionBy: undefined,
           latestSubmissionStatus: undefined,
           feedbackHistory: [],
+          workLogs: [],
           isVirtual: true,
           canDragAssign: status === "未分配" && !isCompletedBySchedule,
         });
@@ -936,7 +1004,7 @@ function buildProjectSummaries(
 }
 
 function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): ModelingMetric[] {
-  const overloadedModelerCount = modelers.filter((modeler) => assignedActiveTasks(tasks, modeler.id).length > 4).length;
+  const overloadedModelerCount = modelers.filter((modeler) => activeModelingWorkdays(tasks, modeler.id) > 24).length;
   const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || Boolean(task.blockType));
 
   return [
@@ -955,7 +1023,7 @@ function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): M
     {
       label: "超载建模师数",
       value: overloadedModelerCount,
-      helper: "排队款式超过 4 个",
+      helper: "活跃剩余/预计工时超过 24 个工作日",
       tone: overloadedModelerCount > 0 ? "danger" : "neutral",
     },
     {
@@ -968,7 +1036,15 @@ function buildMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): M
 }
 
 function assignedActiveTasks(tasks: ModelingTaskCard[], modelerId: string) {
-  return tasks.filter((task) => task.modelerId === modelerId && activeQueueStatuses.has(task.status));
+  return tasks.filter((task) => task.modelerId === modelerId && !task.isOutsourced && activeQueueStatuses.has(task.status));
+}
+
+function activeModelingWorkdays(tasks: ModelingTaskCard[], modelerId: string) {
+  return assignedActiveTasks(tasks, modelerId).reduce((total, task) => total + taskRemainingWorkdays(task), 0);
+}
+
+function taskRemainingWorkdays(task: ModelingTaskCard) {
+  return Math.max(0, task.remainingWorkdays ?? task.estimatedWorkdays);
 }
 
 function normalizeStatus(value: string, isOutsourced: boolean): ModelingTaskStatus {

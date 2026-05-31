@@ -146,6 +146,10 @@ function projectProgressPercent(rows: ScheduleEngineTaskResult[], projectId: str
 }
 
 function toProjectRiskLevel(project: ScheduleEngineProjectResult) {
+  if (project.riskLevel) {
+    return project.riskLevel;
+  }
+
   const delayDays = Number(project.launchDeltaDays || 0);
   if (isCompletedProjectResult(project)) {
     return delayDays > 0 ? "延期完成" : "已完成";
@@ -162,6 +166,10 @@ function isCompletedProjectResult(project: ScheduleEngineProjectResult) {
 }
 
 function toTaskRiskLevel(row: ScheduleEngineTaskResult) {
+  if (row.riskLevel) {
+    return row.riskLevel;
+  }
+
   if (displayTaskStatus(row.taskStatus) === "已完成") return "正常";
   if (Number(row.planDeltaDays || 0) >= 7 || Number(row.deadlineRiskDays || 0) >= 7) return "必然延期";
   if (Number(row.planDeltaDays || 0) > 0 || Number(row.deadlineRiskDays || 0) > 0 || row.isBlockingLaunch) return "延期风险";

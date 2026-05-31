@@ -6,6 +6,7 @@ import {
   recordPlannedLaunchDateAdjustment,
   type PlannedLaunchAdjustmentRecord,
 } from "@/lib/schedule-planning-adjustments";
+import { createOfficialScheduleRecalculation } from "@/lib/schedule-recalculation";
 
 export const runtime = "nodejs";
 
@@ -75,6 +76,22 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, message: `找不到项目：${missingProject.projectId}。` },
         { status: 404 },
+      );
+    }
+
+    const delayedWithoutReason = normalizedAdjustments.find((adjustment) => {
+      const project = projectById.get(adjustment.projectId);
+      if (!project) return false;
+
+      const targetDate = resolveTargetDate(project.plannedLaunchDate, adjustment);
+      return Boolean(targetDate && targetDate.getTime() > project.plannedLaunchDate.getTime() && !adjustment.reason);
+    });
+
+    if (delayedWithoutReason) {
+      const project = projectById.get(delayedWithoutReason.projectId);
+      return NextResponse.json(
+        { ok: false, message: `项目「${project?.projectName ?? delayedWithoutReason.projectId}」上线月份延后时必须填写调整原因。` },
+        { status: 400 },
       );
     }
 
@@ -160,13 +177,26 @@ export async function POST(request: Request) {
       return saved;
     });
 
+    const recalculation =
+      savedAdjustments.length > 0
+        ? await createOfficialScheduleRecalculation({
+            runName: `上线日历调整重算 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+            runType: "上线日历调整重算",
+            source: "calendar-adjustment",
+            createdBy: auth.user.id,
+          })
+        : null;
+
     return NextResponse.json({
-      ok: true,
+      ok: recalculation ? recalculation.ok : true,
       savedCount: savedAdjustments.length,
       adjustments: savedAdjustments,
+      recalculation,
       message:
         savedAdjustments.length > 0
-          ? `已保存 ${savedAdjustments.length} 项上线日历调整。${plannedLaunchAdjustmentSummary(savedAdjustments)}`
+          ? `已保存 ${savedAdjustments.length} 项上线日历调整。${plannedLaunchAdjustmentSummary(savedAdjustments)}${
+              recalculation ? ` ${recalculation.message}` : ""
+            }`
           : "没有日期发生变化，未生成新的调整记录。",
     });
   } catch (error) {

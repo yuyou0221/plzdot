@@ -72,6 +72,9 @@ type PreviewResponse = {
   ok: boolean;
   message: string;
   preview?: ProjectImportPreview;
+  previewId?: string;
+  expiresAt?: string;
+  fileHash?: string;
 };
 
 type ApplyResponse = {
@@ -92,6 +95,7 @@ type ApplyResponse = {
     rowCount: number;
     requiresRecalculation: boolean;
   };
+  recalculation?: AnalyzeResponse;
 };
 
 type AnalyzeResponse = {
@@ -136,6 +140,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ProjectImportPreview | null>(null);
+  const [previewToken, setPreviewToken] = useState<{ previewId: string; fileHash: string; expiresAt?: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"info" | "warning" | "error">("info");
   const [isLoading, setIsLoading] = useState(false);
@@ -175,6 +180,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
   function resetImportState(nextFile: File | null) {
     setFile(nextFile);
     setPreview(null);
+    setPreviewToken(null);
     setApplyResult(null);
     setAnalyzeResult(null);
     setMessage(null);
@@ -218,6 +224,11 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
       }
 
       setPreview(result.preview);
+      setPreviewToken(
+        result.previewId && result.fileHash
+          ? { previewId: result.previewId, fileHash: result.fileHash, expiresAt: result.expiresAt }
+          : null,
+      );
       setTone(result.preview.summary.errorCount > 0 || result.preview.summary.warningCount > 0 ? "warning" : "info");
       setMessage(result.message);
     } catch {
@@ -239,6 +250,11 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
       setMessage("请先生成预览。");
       return;
     }
+    if (!previewToken) {
+      setTone("warning");
+      setMessage("预览凭证缺失，请重新生成预览。");
+      return;
+    }
     if (!canApply) {
       setTone("warning");
       setMessage("当前预览存在未校验、冲突或错误，暂不能确认导入。");
@@ -254,6 +270,8 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
     const formData = new FormData();
     formData.set("importType", "project-main");
     formData.set("file", file);
+    formData.set("previewId", previewToken.previewId);
+    formData.set("fileHash", previewToken.fileHash);
 
     try {
       const response = await fetch("/api/imports/apply", {
@@ -262,14 +280,17 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
       });
       const result = (await response.json()) as ApplyResponse;
 
-      if (!response.ok || !result.ok || !result.result) {
+      if (!response.ok || !result.result) {
         setTone("error");
         setMessage(result.message || "项目主数据导入失败。");
         return;
       }
 
       setApplyResult(result.result);
-      setTone("info");
+      if (result.recalculation) {
+        setAnalyzeResult(result.recalculation);
+      }
+      setTone(result.ok ? "info" : "warning");
       setMessage(result.message);
     } catch {
       setTone("error");

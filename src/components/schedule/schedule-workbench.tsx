@@ -23,8 +23,9 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
+import { AppSideNav } from "@/components/layout/app-side-nav";
 import { ScheduleProjectImportPanel } from "@/components/schedule/schedule-project-import-panel";
-import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
+import type { AuthUser } from "@/lib/auth/permissions";
 import {
   type CalendarProject,
   type Metric,
@@ -106,7 +107,6 @@ const planningViewLabel: Record<PlanningView, string> = {
 
 export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser; data: ScheduleWorkbenchData }) {
   const router = useRouter();
-  const canOpenUserData = canAccessUserData(currentUser);
   const [search, setSearch] = useState("");
   const [milestone, setMilestone] = useState<Milestone | "全部里程碑">("全部里程碑");
   const [riskOnly, setRiskOnly] = useState(false);
@@ -307,35 +307,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               P0 工程版 · 当前数据源：{data.sourceLabel}
             </div>
           </div>
-          <nav className="mt-5 grid gap-2">
-            <button className="flex h-10 items-center justify-between rounded-lg bg-rose-50 px-3 text-sm font-semibold text-rose-700">
-              项目排期
-              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            <button
-              onClick={() => router.push("/product-guide")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              产品组工作指引
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            <button
-              onClick={() => router.push("/modeling")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              建模排期
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            {canOpenUserData ? (
-              <button
-                onClick={() => router.push("/users")}
-                className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-              >
-                用户数据
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
-              </button>
-            ) : null}
-          </nav>
+          <AppSideNav currentPath="/" currentUser={currentUser} />
           <AccountPanel currentUser={currentUser} />
         </aside>
 
@@ -684,25 +656,17 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
           })),
         }),
       });
-      const result = (await response.json()) as { ok?: boolean; message?: string };
+      const result = (await response.json()) as { ok?: boolean; message?: string; recalculation?: { ok?: boolean; message?: string } | null };
 
-      if (!response.ok || !result.ok) {
+      if (!response.ok) {
         setOperationTone("warning");
         setOperationMessage(result.message ?? "上线日历调整没有保存成功。");
         return;
       }
 
       setCalendarDateOverrides({});
-      setOperationTone("info");
-      setOperationMessage("上线日历调整已保存，正在重新测算...");
-      const analyzeResult = await requestScheduleAnalyze();
-
-      setOperationTone(analyzeResult.ok ? "info" : "warning");
-      setOperationMessage(
-        analyzeResult.ok
-          ? `${result.message ?? "上线日历调整已保存。"} 重新测算已完成。`
-          : `${result.message ?? "上线日历调整已保存。"} 但重新测算未完成：${analyzeResult.message}`,
-      );
+      setOperationTone(result.ok ? "info" : "warning");
+      setOperationMessage(result.message ?? "上线日历调整已保存。");
       router.refresh();
     } catch {
       setOperationTone("warning");

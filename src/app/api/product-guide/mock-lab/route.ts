@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
+import { requireApiUser } from "@/lib/auth/api";
+import { canAccessInternalTestTools } from "@/lib/runtime-flags";
 import {
   appendMockIntegrationEntry,
   buildMockModelingProgress,
@@ -13,8 +14,9 @@ import {
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
+  if (!canAccessInternalTestTools(auth.user)) return testToolForbidden();
 
   const url = new URL(request.url);
   const projectId = url.searchParams.get("projectId")?.trim();
@@ -40,8 +42,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
+  if (!canAccessInternalTestTools(auth.user)) return testToolForbidden();
 
   let body: Record<string, unknown>;
 
@@ -75,11 +78,16 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE() {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
+  if (!canAccessInternalTestTools(auth.user)) return testToolForbidden();
 
   await clearMockIntegrationStore();
   return NextResponse.json({ ok: true, message: "已清空本地模拟记录。" });
+}
+
+function testToolForbidden() {
+  return NextResponse.json({ ok: false, message: "联调模拟工具仅允许本地开发或管理员使用。" }, { status: 403 });
 }
 
 function normalizeKind(value: unknown): MockIntegrationKind | null {
