@@ -13,6 +13,7 @@ import type {
   ModelingScheduleData,
   ModelingTaskCard,
   ModelingTaskStatus,
+  ModelingWorkLogSummary,
   OutsourceVendorOption,
   ProjectModelingSummary,
 } from "@/lib/modeling-schedule-types";
@@ -133,6 +134,16 @@ type FeedbackRow = {
   submissionSnapshot: unknown;
 };
 
+type WorkLogRow = {
+  id: string;
+  modelingTaskId: string;
+  startedAt: Date;
+  endedAt: Date | null;
+  durationMinutes: number;
+  stopReason: string;
+  stoppedBy: string | null;
+};
+
 type ScheduleTaskResultRow = {
   projectId: string;
   projectTaskId: string;
@@ -238,16 +249,17 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     ]);
 
     const userIds = users.map((user) => user.id);
-    const [capabilityTags, feedbackRows, milestoneRows] = await Promise.all([
+    const realTaskIds = realTasks.map((task) => task.id);
+    const [capabilityTags, feedbackRows, workLogRows, milestoneRows] = await Promise.all([
       userIds.length > 0
         ? prisma.modelerCapabilityTag.findMany({
             where: { userId: { in: userIds } },
             orderBy: [{ userId: "asc" }, { tagName: "asc" }],
           })
         : Promise.resolve([]),
-      realTasks.length > 0
+      realTaskIds.length > 0
         ? prisma.modelingFeedback.findMany({
-            where: { modelingTaskId: { in: realTasks.map((task) => task.id) } },
+            where: { modelingTaskId: { in: realTaskIds } },
             orderBy: [{ roundNo: "desc" }, { feedbackAt: "desc" }, { createdAt: "desc" }],
             take: 800,
             select: {
@@ -263,6 +275,22 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
               submissionSnapshot: true,
             },
         })
+        : Promise.resolve([]),
+      realTaskIds.length > 0
+        ? prisma.modelingWorkLog.findMany({
+            where: { modelingTaskId: { in: realTaskIds } },
+            orderBy: [{ endedAt: "desc" }, { createdAt: "desc" }],
+            take: 1200,
+            select: {
+              id: true,
+              modelingTaskId: true,
+              startedAt: true,
+              endedAt: true,
+              durationMinutes: true,
+              stopReason: true,
+              stoppedBy: true,
+            },
+          })
         : Promise.resolve([]),
       latestRun
         ? prisma.scheduleTaskResult.findMany({
@@ -293,7 +321,7 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
     const modelingCompletionByProjectId = buildModelingCompletionByProjectId(projects, milestoneRows);
     const tasks =
       realTasks.length > 0
-        ? buildRealTasks(realTasks, projectById, modelers, vendorById, feedbackRows, modelingCompletionByProjectId)
+        ? buildRealTasks(realTasks, projectById, modelers, vendorById, feedbackRows, workLogRows, modelingCompletionByProjectId)
         : buildVirtualTasks(
             projects,
             modelers,
@@ -584,6 +612,7 @@ function buildRealTasks(
   modelers: ModelerCapacity[],
   vendorById: Map<string, { id: string; name: string; stableCapacity: boolean }>,
   feedbackRows: FeedbackRow[],
+  workLogRows: WorkLogRow[],
   completedModelingByProjectId: Map<string, ModelingMilestoneCompletion>,
 ): ModelingTaskCard[] {
   const modelerById = new Map(modelers.map((modeler) => [modeler.id, modeler]));
@@ -591,6 +620,8 @@ function buildRealTasks(
   const latestSubmissionByTaskId = new Map<string, FeedbackRow>();
   const feedbackCountByTaskId = new Map<string, number>();
   const feedbackHistoryByTaskId = new Map<string, ModelingFeedbackSummary[]>();
+  const workLogsByTaskId = new Map<string, ModelingWorkLogSummary[]>();
+  const workLogCountByTaskId = new Map<string, number>();
 
   for (const feedback of feedbackRows) {
     feedbackCountByTaskId.set(feedback.modelingTaskId, (feedbackCountByTaskId.get(feedback.modelingTaskId) ?? 0) + 1);
@@ -608,6 +639,7 @@ function buildRealTasks(
       history.push({
         id: feedback.id,
         feedbackType: feedback.feedbackType,
+        category: classifyFeedbackCategory(feedback.feedbackType),
         roundNo: feedback.roundNo,
         feedbackByName: feedback.feedbackByName ?? undefined,
         feedbackAt: formatDateTime(feedback.feedbackAt) ?? formatDate(feedback.feedbackAt) ?? "",
@@ -616,6 +648,23 @@ function buildRealTasks(
         attachmentUrl: feedback.attachmentUrl ?? undefined,
       });
       feedbackHistoryByTaskId.set(feedback.modelingTaskId, history);
+    }
+  }
+
+  for (const workLog of workLogRows) {
+    workLogCountByTaskId.set(workLog.modelingTaskId, (workLogCountByTaskId.get(workLog.modelingTaskId) ?? 0) + 1);
+
+    const logs = workLogsByTaskId.get(workLog.modelingTaskId) ?? [];
+    if (logs.length < 12) {
+      logs.push({
+        id: workLog.id,
+        startedAt: formatDateTime(workLog.startedAt) ?? "",
+        endedAt: formatDateTime(workLog.endedAt) ?? undefined,
+        durationMinutes: workLog.durationMinutes,
+        stopReason: workLog.stopReason,
+        stoppedBy: workLog.stoppedBy ?? undefined,
+      });
+      workLogsByTaskId.set(workLog.modelingTaskId, logs);
     }
   }
 
@@ -682,19 +731,45 @@ function buildRealTasks(
         ? 0
         : (task.blockedDays ?? (reviewBlockedStatuses.has(status) ? Math.max(1, daysSince(task.lastFeedbackAt)) : 0)),
       blockType: isCompletedBySchedule ? undefined : (task.blockType ?? (reviewBlockedStatuses.has(status) ? (status === "待验收" ? "待产品美术验收" : "送审 / 反馈") : undefined)),
-      latestFeedback: isCompletedBySchedule ? undefined : latestFeedback?.content,
-      feedbackStatus: isCompletedBySchedule ? undefined : latestFeedback?.status,
-      latestSubmissionFeedbackId: isCompletedBySchedule ? undefined : latestSubmission?.id,
-      latestSubmissionContent: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.content || latestSubmission?.content),
-      latestSubmissionDeliverableUrls: isCompletedBySchedule ? [] : latestSubmissionSnapshot.deliverableUrls,
-      latestSubmissionAt: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.submittedAt ?? formatDateTime(latestSubmission?.feedbackAt)),
-      latestSubmissionBy: isCompletedBySchedule ? undefined : (latestSubmissionSnapshot.submittedByName ?? latestSubmission?.feedbackByName ?? undefined),
-      latestSubmissionStatus: isCompletedBySchedule ? undefined : latestSubmission?.status,
-      feedbackHistory: isCompletedBySchedule ? [] : (feedbackHistoryByTaskId.get(task.id) ?? []),
+      latestFeedback: latestFeedback?.content,
+      feedbackStatus: latestFeedback?.status,
+      latestSubmissionFeedbackId: latestSubmission?.id,
+      latestSubmissionContent: latestSubmissionSnapshot.content || latestSubmission?.content,
+      latestSubmissionDeliverableUrls: latestSubmissionSnapshot.deliverableUrls,
+      latestSubmissionAt: latestSubmissionSnapshot.submittedAt ?? formatDateTime(latestSubmission?.feedbackAt),
+      latestSubmissionBy: latestSubmissionSnapshot.submittedByName ?? latestSubmission?.feedbackByName ?? undefined,
+      latestSubmissionStatus: latestSubmission?.status,
+      feedbackHistory: feedbackHistoryByTaskId.get(task.id) ?? [],
+      workLogs: workLogsByTaskId.get(task.id) ?? [],
+      workLogCount: workLogCountByTaskId.get(task.id) ?? 0,
       isVirtual: false,
       canDragAssign: !task.modelerId && !task.isOutsourced && status === "未分配" && !isCompletedBySchedule,
     };
   });
+}
+
+function classifyFeedbackCategory(feedbackType: string): ModelingFeedbackSummary["category"] {
+  if (feedbackType.includes("建模师提交")) {
+    return "work-submission";
+  }
+
+  if (feedbackType.includes("内部") || feedbackType.includes("检修") || feedbackType.includes("验收")) {
+    return "internal-review";
+  }
+
+  if (feedbackType.includes("版权") || feedbackType.includes("送审")) {
+    return "copyright-review";
+  }
+
+  if (feedbackType.includes("退回补充") || feedbackType.includes("清单")) {
+    return "style-list-return";
+  }
+
+  if (feedbackType.includes("取消") || feedbackType.includes("重开")) {
+    return "cancel-reopen";
+  }
+
+  return "other";
 }
 
 function buildVirtualTasks(
@@ -784,6 +859,8 @@ function buildVirtualTasks(
           latestSubmissionBy: undefined,
           latestSubmissionStatus: undefined,
           feedbackHistory: [],
+          workLogs: [],
+          workLogCount: 0,
           isVirtual: true,
           canDragAssign: status === "未分配" && !isCompletedBySchedule,
         });

@@ -730,7 +730,7 @@ export async function refreshProjectModelingProgress(
     actualFinishDate: formatDate(projectedAllApprovedDate),
     requiredStyles: totalRequiredStyles,
     approvedStyles,
-    message: "所有必做款式已通过，可由项目排期确认回写“根据效果图建模”完成。",
+    message: "所有必做款式已通过，项目排期可读取为“根据效果图建模”完成事实。",
   };
 }
 

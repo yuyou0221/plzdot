@@ -93,15 +93,7 @@ export default async function ModelingContractTestRoute() {
     })
     .filter((project): project is ModelingContractTestProject => Boolean(project));
 
-  const testModelers: ModelingContractTestModeler[] = await prisma.user.findMany({
-    where: {
-      isModeler: true,
-      status: { not: "停用" },
-      name: { in: ["冷茂华", "孟凡菲"] },
-    },
-    select: { id: true, name: true },
-    orderBy: [{ name: "asc" }],
-  });
+  const testModelers = await getOrCreateContractTestModelers();
 
   return (
     <ModelingContractTestPage
@@ -118,4 +110,45 @@ export default async function ModelingContractTestRoute() {
 function formatDate(value: Date | null) {
   if (!value) return "";
   return value.toISOString().slice(0, 10);
+}
+
+async function getOrCreateContractTestModelers(): Promise<ModelingContractTestModeler[]> {
+  const names = ["冷茂华", "孟凡菲"];
+  const existing = await prisma.user.findMany({
+    where: {
+      isModeler: true,
+      status: { not: "停用" },
+      name: { in: names },
+    },
+    select: { id: true, name: true },
+    orderBy: [{ name: "asc" }],
+  });
+  const existingNames = new Set(existing.map((modeler) => modeler.name));
+  const missingNames = names.filter((name) => !existingNames.has(name));
+
+  if (missingNames.length > 0) {
+    await prisma.user.createMany({
+      data: missingNames.map((name) => ({
+        name,
+        roleTitle: "测试建模师",
+        userType: "内部",
+        isModeler: true,
+        weeklyCapacityStyles: 4,
+        weeklyAvailableWorkdays: 5,
+        isSchedulable: true,
+        status: "启用",
+        notes: "CONTRACT_TEST_MODELING_SIMULATOR",
+      })),
+    });
+  }
+
+  return prisma.user.findMany({
+    where: {
+      isModeler: true,
+      status: { not: "停用" },
+      name: { in: names },
+    },
+    select: { id: true, name: true },
+    orderBy: [{ name: "asc" }],
+  });
 }
