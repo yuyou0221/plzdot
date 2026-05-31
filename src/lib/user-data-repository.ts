@@ -20,17 +20,6 @@ import type {
   UserDataViewerPolicy,
 } from "@/lib/user-data-types";
 
-const baseTeams = [
-  { name: "产品团队", teamType: "产品" },
-  { name: "原画团队", teamType: "制作" },
-  { name: "建模团队", teamType: "制作" },
-  { name: "平面设计团队", teamType: "设计" },
-  { name: "样品团队", teamType: "打样" },
-  { name: "新媒体运营团队", teamType: "运营" },
-  { name: "商务团队", teamType: "商务" },
-  { name: "供应链团队", teamType: "供应链" },
-];
-
 export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<UserDataWorkbenchData> {
   try {
     const viewer = buildViewerPolicy(currentUser);
@@ -228,27 +217,18 @@ export async function getUserDataWorkbenchData(currentUser: AuthUser): Promise<U
     };
   } catch (error) {
     console.error("Failed to build user data workbench", error);
-
-    const teams = baseTeams.map((team, index): UserDataTeam => ({
-      id: `fallback-team-${index}`,
-      name: team.name,
-      teamType: team.teamType,
-      parentTeamName: "无",
-      leaderName: "未设置",
-      status: "启用",
-      notes: "",
-    }));
+    const viewer = buildViewerPolicy(currentUser);
 
     return {
-      sourceLabel: "基础团队样例",
+      sourceLabel: "用户数据读取失败",
       generatedAt: new Date().toISOString(),
-      viewer: buildViewerPolicy(currentUser),
+      viewer,
       fieldVisibility: buildFieldVisibilityRows(),
       moduleReadModels: buildModuleReadModels(),
-      moduleReadSnapshots: buildModuleReadSnapshots([], teams, [], [], buildViewerPolicy(currentUser).canSeeSensitiveUserFields),
-      metrics: buildMetrics([], teams, []),
+      moduleReadSnapshots: buildModuleReadSnapshots([], [], [], [], viewer.canSeeSensitiveUserFields),
+      metrics: buildMetrics([], [], []),
       people: [],
-      teams,
+      teams: [],
       vendors: [],
       availabilityBlocks: [],
       auditLogs: [],

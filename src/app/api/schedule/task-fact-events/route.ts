@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { requireApiRole } from "@/lib/auth/api";
+import { requireApiUser } from "@/lib/auth/api";
 import {
+  type ProjectTaskFactEvent,
   parseProjectTaskFactEvent,
   TaskFactEventValidationError,
 } from "@/lib/schedule-task-fact-events";
@@ -9,7 +10,7 @@ import { ingestTaskFactEventAndRecalculate } from "@/lib/schedule-task-fact-even
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const auth = await requireApiRole(["admin", "manager"]);
+  const auth = await requireApiUser();
   if ("response" in auth) return auth.response;
 
   let payload: unknown;
@@ -22,6 +23,10 @@ export async function POST(request: Request) {
 
   try {
     const event = parseProjectTaskFactEvent(eventInputFromPayload(payload));
+    if (requiresPrivilegedTaskFactWrite(event) && auth.user.authRole !== "admin" && auth.user.authRole !== "manager") {
+      return NextResponse.json({ ok: false, message: "强制、历史、Excel 类任务事实仅管理者可写。" }, { status: 403 });
+    }
+
     const result = await ingestTaskFactEventAndRecalculate(event);
 
     if (!result.ok) {
@@ -45,6 +50,23 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
+}
+
+function requiresPrivilegedTaskFactWrite(event: ProjectTaskFactEvent) {
+  if (event.sourceModule !== "product-guide") {
+    return true;
+  }
+
+  const payload = event.payload ?? {};
+  return Boolean(
+    payload.force ||
+      payload.forceComplete ||
+      payload.overrideExistingFact ||
+      payload.backfill ||
+      payload.historyBackfill ||
+      payload.bulk ||
+      payload.importSource,
+  );
 }
 
 function eventInputFromPayload(payload: unknown) {

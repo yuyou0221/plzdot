@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
+import { AppSideNav } from "@/components/layout/app-side-nav";
 import { authRoleOptions, type AuthUser } from "@/lib/auth/permissions";
 import type {
   UserDataMetric,
@@ -429,11 +430,7 @@ export function UserDataPortal({
             <div className="mt-2 text-sm leading-6 text-slate-500">P0 工程版 · 当前数据源：{data.sourceLabel}</div>
           </div>
 
-          <nav className="mt-5 grid gap-2">
-            <SideNavLink href="/" label="项目排期" badge="P0" />
-            <SideNavLink href="/product-guide" label="产品组工作指引" badge="P0" />
-            <SideNavLink href="/modeling" label="建模排期" badge="P0" />
-          </nav>
+          <AppSideNav currentPath="/users" currentUser={currentUser} />
 
           <div className="mt-5 border-t border-slate-200 pt-5">
             <div className="px-2 text-xs font-semibold uppercase tracking-wide text-slate-400">用户数据</div>
@@ -1416,15 +1413,6 @@ export function UserDataPortal({
       </section>
     );
   }
-}
-
-function SideNavLink({ href, label, badge }: { href: string; label: string; badge: string }) {
-  return (
-    <Link href={href} className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50">
-      {label}
-      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{badge}</span>
-    </Link>
-  );
 }
 
 function UserDataNavLink({ href, active, icon, label }: { href: string; active: boolean; icon: ReactNode; label: string }) {

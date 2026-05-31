@@ -25,7 +25,8 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AccountPanel } from "@/components/auth/account-panel";
-import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
+import { AppSideNav } from "@/components/layout/app-side-nav";
+import type { AuthUser } from "@/lib/auth/permissions";
 import { canDisplayModelingFieldValue, isModelingTestFieldValue } from "@/lib/modeling-test-fields";
 import type {
   ModelerCapacity,
@@ -50,6 +51,7 @@ type CapacityRow = ModelerCapacity & {
   queueTasks: ModelingTaskCard[];
   weekTasks: ModelingTaskCard[];
   staleTasks: ModelingTaskCard[];
+  activeWorkdays: number;
   isOverloaded: boolean;
 };
 type ReviewSimulationForm = {
@@ -203,7 +205,6 @@ const milestoneRiskLabel: Record<ModelingMilestoneRiskLevel, string> = {
 
 export function ModelingScheduleBoard({ currentUser, data }: { currentUser: AuthUser; data: ModelingScheduleData }) {
   const router = useRouter();
-  const canOpenUserData = canAccessUserData(currentUser);
   const [view, setView] = useState<ModelingView>("milestones");
   const [styleBoardMode, setStyleBoardMode] = useState<StyleBoardMode>("active");
   const [profileModelerId, setProfileModelerId] = useState(
@@ -578,12 +579,12 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
 
   async function submitReviewSimulation(task: ModelingTaskCard, payload: ModelingReviewSimulationRequest) {
     if (task.isVirtual) {
-      setOperationMessage({ tone: "warning", text: "虚拟款式不能模拟审核，请先录入真实款式。" });
+      setOperationMessage({ tone: "warning", text: "虚拟款式不能提交审核结果，请先录入真实款式。" });
       return;
     }
 
     if (!task.latestSubmissionFeedbackId) {
-      setOperationMessage({ tone: "danger", text: "当前款式没有最新建模成果提交记录，不能模拟产品审核。" });
+      setOperationMessage({ tone: "danger", text: "当前款式没有最新建模成果提交记录，不能提交产品审核结果。" });
       return;
     }
 
@@ -604,7 +605,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
       const result = (await response.json()) as ModelingReviewSimulationResponse;
 
       if (!response.ok || !result.ok) {
-        throw new Error(result.message || "模拟产品审核失败。");
+        throw new Error(result.message || "提交产品审核结果失败。");
       }
 
       if (result.task) {
@@ -624,7 +625,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
     } catch (error) {
       setOperationMessage({
         tone: "danger",
-        text: error instanceof Error && error.message ? error.message : "模拟产品审核失败。",
+        text: error instanceof Error && error.message ? error.message : "提交产品审核结果失败。",
       });
     } finally {
       setSavingTaskId(null);
@@ -692,35 +693,7 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
               P0 工程版 · 当前数据源：{data.sourceLabel}
             </div>
           </div>
-          <nav className="mt-5 grid gap-2">
-            <button
-              onClick={() => router.push("/")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              项目排期
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            <button
-              onClick={() => router.push("/product-guide")}
-              className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-            >
-              产品组工作指引
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            <button className="flex h-10 items-center justify-between rounded-lg bg-rose-50 px-3 text-sm font-semibold text-rose-700">
-              建模排期
-              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs">P0</span>
-            </button>
-            {canOpenUserData ? (
-              <button
-                onClick={() => router.push("/users")}
-                className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-              >
-                用户数据
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">基础</span>
-              </button>
-            ) : null}
-          </nav>
+          <AppSideNav currentPath="/modeling" currentUser={currentUser} />
           <AccountPanel currentUser={currentUser} />
         </aside>
 
@@ -744,14 +717,6 @@ export function ModelingScheduleBoard({ currentUser, data }: { currentUser: Auth
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => router.push("/modeling/contract-test")}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <Workflow size={16} />
-                模拟器
-              </button>
               <div className="inline-flex h-10 rounded-lg bg-slate-100 p-1">
                 <button
                   onClick={() => setView("milestones")}
@@ -2336,6 +2301,7 @@ function TaskDetailPanel({
         />
 
         <FeedbackHistoryPanel task={task} />
+        <WorkLogHistoryPanel task={task} />
       </div>
     </section>
   );
@@ -2416,15 +2382,15 @@ function ReviewSimulationPanel({
   return (
     <div className="grid gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="text-xs font-semibold text-indigo-900">模拟产品审核 / 送审</label>
+        <label className="text-xs font-semibold text-indigo-900">产品审核 / 送审结果</label>
         <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-indigo-700">{status}</span>
       </div>
       <div className="text-xs leading-5 text-indigo-900">
-        这是建模排期内的模拟入口，用来验证产品组未来回传审核结果后的状态流转；不代表产品组页面已经接入。
+        这里记录产品组回传的审核和送审结果，状态会由审核事件生成。
       </div>
       {!hasLatestSubmission ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-sm text-amber-900">
-          当前款式没有最新建模成果提交记录，不能模拟审核或送审结果。
+          当前款式没有最新建模成果提交记录，不能提交审核或送审结果。
         </div>
       ) : null}
       <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
@@ -2495,7 +2461,7 @@ function ReviewSimulationPanel({
         className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-indigo-700 px-3 text-sm font-semibold text-white transition hover:bg-indigo-800 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         {saving ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-        提交模拟审核结果
+        提交审核结果
       </button>
     </div>
   );
@@ -2541,7 +2507,7 @@ function FeedbackHistoryPanel({ task }: { task: ModelingTaskCard }) {
         </div>
       )}
       <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-500">
-        检修和送审结果由产品组或本页模拟入口写入；建模师只能阅读这些记录。
+        检修和送审结果由产品组或授权审核入口写入；建模师只能阅读这些记录。
       </div>
     </div>
   );
@@ -2838,23 +2804,56 @@ function compareStyleSequence(a?: string, b?: string) {
 
 function buildCapacityRows(modelers: ModelerCapacity[], tasks: ModelingTaskCard[]): CapacityRow[] {
   return modelers.map((modeler) => {
-    const queueTasks = tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status));
+    const queueTasks = tasks.filter((task) => task.modelerId === modeler.id && !task.isOutsourced && activeQueueStatuses.has(task.status));
     const weekTasks = queueTasks.filter(isThisWeekTask);
     const staleTasks = queueTasks.filter((task) => task.isStale);
+    const activeWorkdays = activeModelingWorkdays(queueTasks);
 
     return {
       ...modeler,
       queueTasks,
       weekTasks,
       staleTasks,
-      isOverloaded: queueTasks.length > modeler.weeklyAvailableWorkdays,
+      activeWorkdays,
+      isOverloaded: activeWorkdays > 24,
     };
   });
 }
 
+function WorkLogHistoryPanel({ task }: { task: ModelingTaskCard }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-slate-700">工时明细</label>
+        <span className="text-xs text-slate-500">{task.workLogs.length} 段记录</span>
+      </div>
+      {task.workLogs.length > 0 ? (
+        <div className="grid gap-2">
+          {task.workLogs.map((log) => (
+            <div key={log.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-800">{formatWorkMinutes(log.durationMinutes)}</span>
+                <span>{formatDateTimeForDisplay(log.startedAt)} - {formatDateTimeForDisplay(log.endedAt)}</span>
+              </div>
+              <div className="mt-1">
+                停止原因：{log.stopReason}
+                {log.stoppedBy ? ` / 操作人：${log.stoppedBy}` : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-400">
+          暂无已结束的计时段。
+        </div>
+      )}
+    </div>
+  );
+}
+
 function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]): ModelingMetric[] {
   const overloadedModelerCount = modelers.filter((modeler) => {
-    return tasks.filter((task) => task.modelerId === modeler.id && activeQueueStatuses.has(task.status)).length > modeler.weeklyAvailableWorkdays;
+    return activeModelingWorkdays(tasks.filter((task) => task.modelerId === modeler.id && !task.isOutsourced && activeQueueStatuses.has(task.status))) > 24;
   }).length;
   const stuckTasks = tasks.filter((task) => task.status === "修改中" || reviewBlockedStatuses.has(task.status) || Boolean(task.blockType));
 
@@ -2874,7 +2873,7 @@ function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]
     {
       label: "超载建模师数",
       value: overloadedModelerCount,
-      helper: "排队款式超过每周可用工作日",
+      helper: "活跃剩余/预计工时超过 24 个工作日",
       tone: overloadedModelerCount > 0 ? "danger" : "neutral",
     },
     {
@@ -2884,6 +2883,10 @@ function buildLiveMetrics(tasks: ModelingTaskCard[], modelers: ModelerCapacity[]
       tone: stuckTasks.length > 0 ? "danger" : "info",
     },
   ];
+}
+
+function activeModelingWorkdays(tasks: ModelingTaskCard[]) {
+  return tasks.reduce((total, task) => total + Math.max(0, task.remainingWorkdays ?? task.estimatedWorkdays), 0);
 }
 
 function buildApprovedMetrics(tasks: ModelingTaskCard[]): ModelingMetric[] {

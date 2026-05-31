@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiUserDataLevelZero } from "@/lib/auth/api";
 import { assertPasswordExportSecretConfigured } from "@/lib/auth/password-export";
@@ -10,7 +8,6 @@ import {
 } from "@/lib/user-data-import-preview";
 import {
   importUserDataWorkbook,
-  sanitizeUserDataImportFileName,
   UserDataImportValidationError,
 } from "@/lib/user-data-import";
 
@@ -77,12 +74,6 @@ export async function POST(request: Request) {
     }
 
     assertPasswordExportSecretConfigured();
-    const importDir = path.join(process.cwd(), ".local", "imports", "user-data", timestampId());
-    await fs.mkdir(importDir, { recursive: true });
-
-    const workbookPath = path.join(importDir, sanitizeUserDataImportFileName(file.name));
-    await fs.writeFile(workbookPath, buffer);
-
     const result = await importUserDataWorkbook({
       buffer,
       fileName: file.name,
@@ -99,7 +90,6 @@ export async function POST(request: Request) {
       ok: true,
       message: `用户数据覆盖导入完成：人员新增 ${result.people.created}、更新 ${result.people.updated}、停用 ${result.deactivated.people}；权限角色新增 ${result.permissionRoles.created}、更新 ${result.permissionRoles.updated}；团队新增 ${result.teams.created}、更新 ${result.teams.updated}、停用 ${result.deactivated.teams}；外包新增 ${result.vendors.created}、更新 ${result.vendors.updated}、停用 ${result.deactivated.vendors}；不可排期记录新增 ${result.availabilityBlocks.created}、更新 ${result.availabilityBlocks.updated}、停用 ${result.deactivated.availabilityBlocks}。`,
       result,
-      outputDir: importDir,
     });
   } catch (error) {
     if (isUserDataAuditWriteError(error)) {
@@ -136,8 +126,4 @@ export async function POST(request: Request) {
       { status: isValidationError ? 400 : 500 },
     );
   }
-}
-
-function timestampId() {
-  return new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
 }

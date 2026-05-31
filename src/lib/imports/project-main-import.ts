@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { extractProjectWorkbook, previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
+import { isProtectedRuntime } from "@/lib/runtime-flags";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
 import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 import {
@@ -308,10 +309,10 @@ async function applyActualTaskFactsFromWorkbook(
     const projectId = stringFieldAny(record, ["项目ID", "系统项目ID", "projectId"]);
     const projectName = stringFieldAny(record, ["项目名称"]);
     const projectCode = stringFieldAny(record, ["项目编号"]) || projectCodeFromRecordKey(recordKey);
-    const project =
-      projectById.get(normalizeKey(projectId)) ||
-      projectByCode.get(normalizeKey(projectCode)) ||
-      projectByName.get(normalizeKey(projectName));
+    const projectBySystemId = projectById.get(normalizeKey(projectId));
+    const project = isProtectedRuntime()
+      ? projectBySystemId
+      : projectBySystemId || projectByCode.get(normalizeKey(projectCode)) || projectByName.get(normalizeKey(projectName));
 
     const taskName = stringFieldAny(record, ["taskName", "任务名称"]);
     const taskNo =

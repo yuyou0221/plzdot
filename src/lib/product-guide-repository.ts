@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
+import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import { getModelingProductGuideEvents } from "@/lib/modeling-product-guide-events";
 import type {
   ProductGuideData,
@@ -257,7 +258,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       getScheduleWorkbenchData({ includeTaskRows: false, includeProjectDetails: true }),
     ]);
 
-    if (projects.length === 0) {
+    if (projects.length === 0 && isDemoDataAllowed()) {
       return buildFallbackData();
     }
 
@@ -698,8 +699,30 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
     };
   } catch (error) {
     console.error("Failed to build product guide data", error);
-    return buildFallbackData();
+    return isDemoDataAllowed() ? buildFallbackData() : buildEmptyProductGuideData("产品组工作指引读取失败");
   }
+}
+
+function buildEmptyProductGuideData(sourceLabel: string): ProductGuideData {
+  return {
+    sourceLabel,
+    generatedAt: new Date().toISOString(),
+    metrics: buildMetrics([]),
+    milestoneBoard: {
+      months: [],
+      initialMonth: "",
+      milestones: [],
+      cards: [],
+    },
+    filters: {
+      teams: [],
+      productOwners: [],
+      artOwners: [],
+      people: [],
+    },
+    items: [],
+    styleSummaries: [],
+  };
 }
 
 function buildScheduleTaskItem({

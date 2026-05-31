@@ -9,6 +9,7 @@ export type ScheduleEngineProjectResult = {
   plannedLaunchDate: string;
   projectedLaunchDate?: string;
   launchDeltaDays?: number;
+  riskLevel?: string;
   status?: string;
   summary?: {
     unfinishedTasks?: number;

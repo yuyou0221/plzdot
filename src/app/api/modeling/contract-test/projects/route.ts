@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { prisma } from "@/lib/db/prisma";
+import { canAccessInternalTestTools } from "@/lib/runtime-flags";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
   const auth = await requireApiRole(["admin", "manager"]);
   if ("response" in auth) return auth.response;
 
-  if (!isLocalContractTestEnabled()) {
+  if (!canAccessInternalTestTools(auth.user)) {
     return NextResponse.json({ ok: false, message: "建模接口测试数据只允许在本地开发环境使用。" }, { status: 403 });
   }
 
@@ -92,10 +93,6 @@ export async function POST(request: Request) {
     project: result.project,
     styles: buildFixtureStyles(seed, styleCount),
   });
-}
-
-function isLocalContractTestEnabled() {
-  return process.env.NODE_ENV !== "production" || process.env.ALLOW_MODELING_CONTRACT_TEST === "true";
 }
 
 function buildFixtureStyles(seed: string, count: number) {

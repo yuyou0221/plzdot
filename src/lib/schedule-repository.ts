@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
 import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
 import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
@@ -109,7 +110,7 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     ]);
 
     if (projects.length === 0 || !latestRun) {
-      return sampleScheduleData;
+      return isDemoDataAllowed() ? sampleScheduleData : emptyScheduleData("无正式排期测算");
     }
 
     const projectIds = projects.map((project) => project.id);
@@ -135,7 +136,7 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     ]);
 
     if (taskResults.length === 0) {
-      return sampleScheduleData;
+      return isDemoDataAllowed() ? sampleScheduleData : emptyScheduleData("正式排期测算暂无任务结果");
     }
 
     const scheduledProjectIds = new Set([
@@ -202,8 +203,8 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
 
     return {
       sourceLabel: latestRun.runName ? `${latestRun.runType ?? "排期测算"}：${latestRun.runName}` : "数据库",
-      months: months.length > 0 ? months : sampleScheduleData.months,
-      initialMonth: initialMonth ?? sampleScheduleData.initialMonth,
+      months,
+      initialMonth: initialMonth ?? "",
       milestones,
       metrics: [
         { label: "看板项目数", value: scheduledProjects.length, helper: "包含已完结项目" },
@@ -237,7 +238,7 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
     };
   } catch (error) {
     console.error("Failed to build schedule workbench data", error);
-    return sampleScheduleData;
+    return isDemoDataAllowed() ? sampleScheduleData : emptyScheduleData("排期数据读取失败");
   }
 }
 
@@ -262,9 +263,29 @@ export async function checkDatabaseConnection() {
   } catch {
     return {
       ok: false,
-      message: "数据库不可用，当前页面会回退到样例数据",
+      message: "数据库不可用，正式页面不会显示样例数据",
     };
   }
+}
+
+function emptyScheduleData(sourceLabel: string): ScheduleWorkbenchData {
+  return {
+    sourceLabel,
+    months: [],
+    initialMonth: "",
+    milestones,
+    metrics: [
+      { label: "看板项目数", value: 0, helper: "暂无正式数据" },
+      { label: "有延期风险", value: 0, helper: "暂无正式数据" },
+      { label: "必然延期", value: 0, helper: "暂无正式数据" },
+      { label: "未处理提醒", value: 0, helper: "暂无正式数据" },
+    ],
+    projectCards: [],
+    calendarMonths: [],
+    calendarProjects: [],
+    scheduleTasks: [],
+    projectDetails: {},
+  };
 }
 
 function projectDisplayRiskLevel(result: ProjectResultRow | undefined): RiskLevel {
@@ -531,7 +552,7 @@ function normalizeMilestone(value: string, taskNo: number): Milestone | null {
 
 function groupRiskLevel(rows: TaskResultRow[]): RiskLevel {
   if (rows.length > 0 && rows.every(isCompletedTask)) {
-    return "done";
+    return rows.some((row) => toRiskLevel(row.riskLevel) === "doneLate") ? "doneLate" : "done";
   }
 
   return rows.filter((row) => !isCompletedTask(row)).reduce<RiskLevel>((level, row) => {

@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { previewModelingImport } from "@/lib/imports/modeling-import";
+import { createImportPreviewToken, type ManagedImportType } from "@/lib/imports/preview-token";
 import { previewProjectMainImport } from "@/lib/imports/project-main-preview";
 
 export const runtime = "nodejs";
@@ -28,23 +31,35 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: "当前只支持 .xlsx 格式。" }, { status: 400 });
     }
 
-    const importDir = path.join(process.cwd(), ".local", "import-previews", timestampId());
-    await fs.mkdir(importDir, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "project-import-preview-"));
+    const workbookPath = path.join(tempDir, sanitizeFileName(file.name));
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+    const fileHash = sha256(fileBuffer);
 
-    const workbookPath = path.join(importDir, sanitizeFileName(file.name));
-    await fs.writeFile(workbookPath, Buffer.from(await file.arrayBuffer()));
+    try {
+      await fs.writeFile(workbookPath, fileBuffer);
 
-    const preview =
-      importType === "modeling"
-        ? await previewModelingImport(workbookPath, file.name)
-        : await previewProjectMainImport(workbookPath, file.name);
+      const preview =
+        importType === "modeling"
+          ? await previewModelingImport(workbookPath, file.name)
+          : await previewProjectMainImport(workbookPath, file.name);
+      const token = await createImportPreviewToken({
+        importType: importType as ManagedImportType,
+        fileName: file.name,
+        fileHash,
+        importedBy: auth.user.id,
+        rowCount: preview.summary.totalRows,
+      });
 
-    return NextResponse.json({
-      ok: true,
-      message: "预览已生成。本次没有写入数据库。",
-      preview,
-      outputDir: importDir,
-    });
+      return NextResponse.json({
+        ok: true,
+        message: "预览已生成。本次没有写入数据库，请用同一份文件确认导入。",
+        preview,
+        ...token,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   } catch (error) {
     return NextResponse.json(
       {
@@ -70,6 +85,6 @@ function sanitizeFileName(value: string) {
   return basename || "project-import.xlsx";
 }
 
-function timestampId() {
-  return new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
+function sha256(buffer: Buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
 }

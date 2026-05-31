@@ -10,5 +10,13 @@ export default async function ProductGuidePrototypePage() {
     getProductGuidePrototypeData(),
   ]);
 
-  return <ProductGuidePrototype currentUserId={currentUser.id} currentUserName={currentUser.name} currentUserRole={currentUser.authRole} scheduleData={scheduleData} />;
+  return (
+    <ProductGuidePrototype
+      currentUser={currentUser}
+      currentUserId={currentUser.id}
+      currentUserName={currentUser.name}
+      currentUserRole={currentUser.authRole}
+      scheduleData={scheduleData}
+    />
+  );
 }

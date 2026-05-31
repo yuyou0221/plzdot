@@ -7,19 +7,18 @@ import {
   Bell,
   CalendarDays,
   Clock3,
-  Database,
   FileText,
   Gauge,
   ListChecks,
-  Palette,
   Plus,
   Search,
   Trash2,
   Upload,
-  Users,
   X,
 } from "lucide-react";
 import clsx from "clsx";
+import { AppSideNav } from "@/components/layout/app-side-nav";
+import type { AuthUser } from "@/lib/auth/permissions";
 import type { ProductGuideStyleSummary } from "@/lib/product-guide-types";
 import type { ProjectCard, ScheduleTaskRow, ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
@@ -253,6 +252,7 @@ const milestones = ["原画里程碑", "建模里程碑", "红蜡里程碑", "�
 const fallbackMonths = ["26年5月", "26年6月", "26年7月", "26年8月", "26年9月", "26年10月", "26年11月"];
 
 const taskOperationSourceLabel = "任务处理.xlsx";
+const standardTaskNos = Array.from({ length: 31 }, (_, index) => index + 1);
 
 const taskOperationConfig: Record<number, { taskName: string; operations: TaskOperation[] }> = {
   1: taskOps("市场调研", ["开始", "结束", "上传调研结果"]),
@@ -312,14 +312,6 @@ const pages: Array<{ key: PageKey; label: string; icon: typeof Gauge }> = [
   { key: "detail", label: "项目明细", icon: FileText },
 ];
 
-const systemNavItems: Array<{ label: string; href: string; badge: string; icon: typeof Gauge }> = [
-  { label: "项目排期", href: "/", badge: "排期", icon: CalendarDays },
-  { label: "建模排期", href: "/modeling", badge: "建模", icon: Palette },
-  { label: "用户数据", href: "/users", badge: "人员", icon: Users },
-  { label: "数据导入", href: "/imports", badge: "导入", icon: Upload },
-  { label: "联调模拟", href: "/product-guide/mock-lab", badge: "测试", icon: Database },
-];
-
 function taskOps(taskName: string, labels: string[]) {
   return {
     taskName,
@@ -351,7 +343,7 @@ function operationHelper(label: string) {
   if (label === "完成" || label === "结束") return "写入 task_completed，记录实际完成日期。";
   if (label.includes("上传")) return "上传附件后续走独立附件接口，本轮不写项目排期。";
   if (label.includes("建模款式")) return "打开建模款式清单大弹窗，提交给建模排期。";
-  if (label.includes("审核") || label.includes("送审")) return "记录审核 / 送审事实；本动作不向项目排期发送任务事实事件。";
+  if (label.includes("审核") || label.includes("送审")) return "任务送审会写入 task_submitted_for_review；普通附件记录不代表任务完成。";
   return "按该任务的业务规则提交处理结果。";
 }
 
@@ -1878,15 +1870,19 @@ const emptyProject: PrototypeProject = {
 };
 
 export function ProductGuidePrototype({
+  currentUser,
   currentUserId,
   currentUserName,
   currentUserRole,
   scheduleData,
+  formal = false,
 }: {
+  currentUser: AuthUser;
   currentUserId: string;
   currentUserName: string;
   currentUserRole: string;
   scheduleData: ProductGuidePrototypeScheduleData;
+  formal?: boolean;
 }) {
   const [activePage, setActivePage] = useState<PageKey>("workbench");
   const [workbenchPage, setWorkbenchPage] = useState<WorkbenchPageKey>("task");
@@ -2003,7 +1999,7 @@ export function ProductGuidePrototype({
         <aside className="border-r border-slate-200 bg-white px-4 py-5 max-lg:border-b max-lg:border-r-0">
           <div className="border-b border-slate-200 pb-4">
             <div className="text-lg font-semibold">产品组工作指引</div>
-            <div className="mt-1 text-sm text-slate-500">五页原型 · {currentUserName}</div>
+            <div className="mt-1 text-sm text-slate-500">{formal ? "正式工作页" : `五页原型 · ${currentUserName}`}</div>
           </div>
           <div className="mt-4 grid gap-2">
             {pages.map((page) => {
@@ -2027,25 +2023,7 @@ export function ProductGuidePrototype({
           </div>
           <div className="mt-5 border-t border-slate-200 pt-4">
             <div className="mb-2 px-1 text-xs font-medium text-slate-500">其他模块</div>
-            <div className="grid gap-2">
-              {systemNavItems.map((item) => {
-                const Icon = item.icon;
-
-                return (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    className="flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Icon size={16} />
-                      <span className="truncate">{item.label}</span>
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">{item.badge}</span>
-                  </a>
-                );
-              })}
-            </div>
+            <AppSideNav currentPath="/product-guide" currentUser={currentUser} />
           </div>
           <div className="mt-5 rounded-lg border border-slate-200 p-3">
             <div className="text-xs font-medium text-slate-500">项目组</div>
@@ -3783,11 +3761,12 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
   const currentTask = sortedTasks.find((task) => task.name === project.currentTask);
   const riskTasks = sortedTasks.filter((task) => task.risk === "risk" || task.risk === "delay");
   const movedMilestones = milestones.filter((milestone) => project.planned[milestone] !== project.forecast[milestone]);
+  const missingTaskNos = missingStandardTaskNos(sortedTasks);
 
   return (
-    <div className="grid gap-3">
-      <section className="grid grid-cols-[1.05fr_0.95fr] gap-3 max-xl:grid-cols-1">
-        <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="grid min-w-0 gap-3">
+      <section className="grid min-w-0 grid-cols-[1.05fr_0.95fr] gap-3 max-xl:grid-cols-1">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs font-semibold text-rose-700">{project.code}</div>
@@ -3809,7 +3788,7 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-3">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">排期总览</h3>
             <StatusPill status={project.riskLabel} risk={project.riskLabel.includes("必然") ? "delay" : project.riskLabel.includes("后移") ? "risk" : "normal"} />
@@ -3830,11 +3809,14 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-3">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-base font-semibold">全部项目任务</h3>
             <div className="mt-1 text-xs text-slate-500">共 {sortedTasks.length} 项，来自项目排期任务清单；点击任一任务进入工作台处理。</div>
+            {missingTaskNos.length > 0 ? (
+              <div className="mt-1 text-xs font-medium text-amber-700">缺失任务编号：{missingTaskNos.join("、")}，需由项目排期确认是否初始化。</div>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">当前：#{currentTask?.no ?? "-"} {project.currentTask}</span>
@@ -3887,8 +3869,8 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
         </div>
       </section>
 
-      <section className="grid grid-cols-[0.95fr_1.05fr] gap-3 max-xl:grid-cols-1">
-        <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <section className="grid min-w-0 grid-cols-[0.95fr_1.05fr] gap-3 max-xl:grid-cols-1">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
           <h3 className="text-sm font-semibold">规划 vs 压力预测</h3>
           <div className="mt-2 grid gap-2">
             {milestones.map((milestone) => (
@@ -3902,7 +3884,7 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
           <div className="mt-2 text-xs text-slate-500">{movedMilestones.length > 0 ? `${movedMilestones.length} 个里程碑预测后移。` : "规划和压力预测一致。"}</div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4">
           <h3 className="text-base font-semibold">建模进度摘要</h3>
           <div className="mt-3 grid grid-cols-3 gap-2 max-md:grid-cols-1">
             <Metric label="总款式" value={`${project.modelingProgress.total || project.styles.length}`} />
@@ -3939,8 +3921,8 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
         </div>
       </section>
 
-      <section className="grid grid-cols-[1fr_1fr] gap-3 max-xl:grid-cols-1">
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <section className="grid min-w-0 grid-cols-[1fr_1fr] gap-3 max-xl:grid-cols-1">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4">
           <h3 className="text-base font-semibold">最近进度记录</h3>
           <div className="mt-3 grid gap-2">
             {project.updates.map((update) => (
@@ -3957,6 +3939,11 @@ function ProjectDetailPage({ project, setActivePage, onOpenTask }: { project: Pr
       </section>
     </div>
   );
+}
+
+function missingStandardTaskNos(tasks: PrototypeTask[]) {
+  const existingNos = new Set(tasks.map((task) => task.no));
+  return standardTaskNos.filter((taskNo) => !existingNos.has(taskNo));
 }
 
 function NavTile({ icon, title, value, onClick }: { icon: React.ReactNode; title: string; value: string; onClick: () => void }) {

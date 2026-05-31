@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { syncApprovedModelingProgressToProjectTasks } from "@/lib/schedule-recalculation";
 import { defaultScheduleEnginePort, runAndPersistScheduleAnalysis } from "@/lib/schedule-engine/service";
 import {
   ingestProjectTaskFactEvent,
@@ -33,6 +34,7 @@ export async function ingestTaskFactEventAndRecalculate(
     };
   }
 
+  const syncedModelingFacts = await syncApprovedModelingProgressToProjectTasks();
   const scheduleRun = await prisma.scheduleRun.create({
     data: {
       runName: `任务事实重算 ${event.projectId} #${event.taskNo}`,
@@ -46,6 +48,7 @@ export async function ingestTaskFactEventAndRecalculate(
         sourceModule: event.sourceModule,
         projectId: event.projectId,
         taskNo: event.taskNo,
+        syncedModelingFacts,
       },
       runStatus: "进行中",
       createdBy: event.operatorId,

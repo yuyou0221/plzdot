@@ -1188,7 +1188,7 @@ export async function getProjectModelingProgress(projectId: string) {
   const sourceTaskNos = [7, 10] as const;
   const projectTasks = await prisma.projectTask.findMany({
     where: { projectId, taskNo: { in: [...sourceTaskNos] } },
-    select: { id: true, taskNo: true, taskName: true },
+    select: { id: true, taskNo: true, taskName: true, status: true, actualFinishDate: true },
   });
   const taskNoByProjectTaskId = new Map(projectTasks.map((task) => [task.id, task.taskNo]));
   const sourceProjectTaskIds = projectTasks.map((task) => task.id);
@@ -1230,6 +1230,11 @@ export async function getProjectModelingProgress(projectId: string) {
   const unstartedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "未启动").length;
   const unassignedStyles = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "未分配" && !task.modelerId && !task.isOutsourced).length;
   const allRequiredStylesApproved = totalRequiredStyles > 0 && approvedStyles === totalRequiredStyles;
+  const scheduleMilestoneCompleted =
+    projectTasks.length > 0 &&
+    projectTasks.every((task) => Boolean(task.actualFinishDate) || task.status.includes("已完成") || task.status.includes("已通过"));
+  const completionSource = allRequiredStylesApproved ? "modeling_tasks" : scheduleMilestoneCompleted ? "schedule_milestone" : "none";
+  const canProjectScheduleTreatModelingDone = completionSource !== "none";
   const approvedRequiredTasks = requiredTasks.filter((task) => normalizeStatus(task.status, task.isOutsourced) === "已通过");
   const lastRequiredStyleApprovedDate = maxDate(approvedRequiredTasks.map((task) => task.copyrightApprovedDate ?? task.actualFinishDate));
   const unapprovedRequiredStyles = requiredTasks
@@ -1253,7 +1258,9 @@ export async function getProjectModelingProgress(projectId: string) {
     projectTaskIds: [...new Set(tasks.map((task) => task.projectTaskId))],
     sourceTaskNos: [...sourceTaskNos],
     allRequiredStylesApproved,
-    canProjectScheduleTreatModelingDone: allRequiredStylesApproved,
+    completionSource,
+    canProjectScheduleTreatModelingDone,
+    canWritebackProjectTask: canProjectScheduleTreatModelingDone,
     requiredStyleCount: totalRequiredStyles,
     approvedRequiredStyleCount: approvedStyles,
     lastRequiredStyleApprovedDate: formatDate(lastRequiredStyleApprovedDate),
@@ -1268,9 +1275,17 @@ export async function getProjectModelingProgress(projectId: string) {
     outsourcedStyles,
     unstartedStyles,
     unassignedStyles,
-    progressPercent: totalRequiredStyles > 0 ? Math.round((approvedStyles / totalRequiredStyles) * 100) : 0,
+    progressPercent:
+      totalRequiredStyles > 0
+        ? Math.round((approvedStyles / totalRequiredStyles) * 100)
+        : scheduleMilestoneCompleted
+          ? 100
+          : 0,
     projectedAllApprovedDate: formatDate(
-      maxDate(requiredTasks.map((task) => (allRequiredStylesApproved ? task.actualFinishDate : task.plannedFinishDate ?? task.actualFinishDate))),
+      maxDate([
+        ...requiredTasks.map((task) => (allRequiredStylesApproved ? task.actualFinishDate : task.plannedFinishDate ?? task.actualFinishDate)),
+        ...(scheduleMilestoneCompleted ? projectTasks.map((task) => task.actualFinishDate) : []),
+      ]),
     ),
   };
 }
