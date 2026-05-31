@@ -317,7 +317,7 @@ const taskOperationConfig: Record<number, { taskName: string; operations: TaskOp
 
 const bucketMeta: Record<GuideTask["bucket"], { title: string; helper: string }> = {
   due: { title: "本周需完成", helper: "到期任务优先补录事实" },
-  progress: { title: "本周在推进", helper: "进行中任务保持更新时间" },
+  progress: { title: "本周要推进", helper: "推进本周窗口内任务和前置卡点" },
   start: { title: "本周要开始", helper: "启动前确认上游资料" },
   risk: { title: "风险任务", helper: "先确认卡点和预计完成时间" },
   licensor: { title: "版权方反馈", helper: "记录送审和反馈边界" },
@@ -1838,12 +1838,23 @@ function isDueThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
 }
 
 function shouldStartThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
-  if (!task.status.includes("未开始") && !task.status.includes("待")) return false;
-  return [task.forecastStart, task.plannedStart].some((dateText) => isDateTextInRange(dateText, week.start, week.end));
+  if (!isStartReadyStatus(task.status)) return false;
+  const start = firstDate(task.forecastStart, task.plannedStart);
+  return Boolean(start && start <= week.end);
+}
+
+function isStartReadyStatus(status: string) {
+  return status.includes("未开始") || status.includes("现在该开始");
 }
 
 function isProgressThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
-  if (!task.status.includes("进行") && !task.status.includes("推进") && !task.status.includes("送审")) return false;
+  const needsProgress =
+    task.status.includes("进行") ||
+    task.status.includes("推进") ||
+    task.status.includes("送审") ||
+    task.status.includes("等前置");
+
+  if (!needsProgress) return false;
 
   const start = firstDate(task.forecastStart, task.plannedStart);
   const end = firstDate(task.forecastFinish, task.expectedFinish, task.ddl);
@@ -1904,7 +1915,16 @@ function compareDateText(a: string, b: string) {
 }
 
 function isDoneStatus(status: string) {
-  return status.includes("完成") || status.includes("已通过") || status.toLowerCase() === "done";
+  const text = status.trim();
+  const lowerText = text.toLowerCase();
+  return (
+    lowerText === "done" ||
+    text === "完成" ||
+    text === "通过" ||
+    text.includes("已完成") ||
+    text.includes("已通过") ||
+    text.includes("送审通过")
+  );
 }
 
 function isCancelledStatus(status: string) {
@@ -2312,7 +2332,7 @@ export function ProductGuidePrototype({
             ) : null}
             {activePage === "plan" ? <MilestoneBoard mode="plan" months={boardMonths} milestones={boardMilestones} cards={teamProjectCards} onOpenProject={openProject} /> : null}
             {activePage === "forecast" ? <MilestoneBoard mode="forecast" months={boardMonths} milestones={boardMilestones} cards={teamProjectCards} onOpenProject={openProject} /> : null}
-            {activePage === "week" ? <WeekGuidePage tasks={visibleGuideTasks} projects={projects} onOpenTask={openTask} /> : null}
+            {activePage === "week" ? <WeekGuidePage tasks={visibleGuideTasks} projects={teamProjects} onOpenTask={openTask} /> : null}
             {activePage === "detail" ? <ProjectDetailPage project={selectedProject} setActivePage={setActivePage} onOpenTask={openTask} /> : null}
           </div>
         </main>
@@ -4076,8 +4096,30 @@ function MilestoneBoard({
 }
 
 function WeekGuidePage({ tasks, projects, onOpenTask }: { tasks: GuideTask[]; projects: PrototypeProject[]; onOpenTask: (projectId: string, taskNo: number) => void }) {
+  const unfinishedTasks = projects.flatMap((project) =>
+    project.tasks
+      .filter((task) => !isDoneStatus(task.status))
+      .map((task) => ({ project, task })),
+  );
+  const firstUnfinishedTask = unfinishedTasks[0];
+
   return (
     <div className="grid gap-3">
+      {tasks.length === 0 && unfinishedTasks.length > 0 ? (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="font-semibold">当前项目组有未完成任务，但没有命中本周、风险或版权方反馈规则。</div>
+          <div className="mt-1 text-xs">可以先进入工作台任务队列确认下一步；如果这里仍应出现事项，需要回看项目排期返回的日期和风险判断。</div>
+          {firstUnfinishedTask ? (
+            <button
+              type="button"
+              onClick={() => onOpenTask(firstUnfinishedTask.project.id, firstUnfinishedTask.task.no)}
+              className="mt-3 inline-flex h-8 items-center rounded-md border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+            >
+              查看工作台任务队列
+            </button>
+          ) : null}
+        </section>
+      ) : null}
       {Object.entries(bucketMeta).map(([bucket, meta]) => {
         const bucketTasks = tasks.filter((task) => task.bucket === bucket);
 

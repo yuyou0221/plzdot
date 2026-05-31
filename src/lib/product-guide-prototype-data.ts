@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/db/prisma";
 import type { ProductGuideStyleSummary } from "@/lib/product-guide-types";
 import { getScheduleWorkbenchData } from "@/lib/schedule-repository";
+import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 import type { ProjectCard, ProjectDetail, RiskLevel, ScheduleTaskRow, ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
 type PrototypeProjectRow = {
@@ -20,6 +21,51 @@ type PrototypeProjectTaskRow = {
   expectedFinishDate: Date | null;
   status: string;
   isBlocked: boolean;
+};
+
+type FormalProjectRow = {
+  id: string;
+  projectCode: string | null;
+  projectName: string;
+  plannedLaunchDate: Date;
+  projectTeamId: string | null;
+  projectOwnerId: string | null;
+  artOwnerId: string | null;
+  currentStage: string | null;
+  status: string;
+};
+
+type FormalProjectResultRow = {
+  projectId: string;
+  plannedLaunchDate: Date;
+  forecastLaunchDate: Date | null;
+  delayDays: number | null;
+  riskLevel: string;
+  currentTaskName: string | null;
+  riskMessage: string | null;
+  projectProgressPercent: number | null;
+};
+
+type FormalTaskResultRow = {
+  id: string;
+  projectTaskId: string;
+  projectId: string;
+  taskNo: number;
+  taskName: string;
+  milestoneType: string;
+  plannedStartDate: Date | null;
+  plannedFinishDate: Date | null;
+  forecastStartDate: Date | null;
+  forecastFinishDate: Date | null;
+  expectedFinishDate: Date | null;
+  taskActionType: string | null;
+  displayStatus: string | null;
+  delayDays: number | null;
+  remainingSafeDays: number | null;
+  recoverableByDate: Date | null;
+  blockingPredecessorNames: unknown;
+  riskLevel: string;
+  riskMessage: string | null;
 };
 
 export type ProductGuideProjectMaster = {
@@ -51,10 +97,466 @@ const milestoneOptions: ProjectCard["milestone"][] = [
 
 export async function getProductGuidePrototypeData(): Promise<ProductGuidePrototypeData> {
   const scheduleData = await getScheduleWorkbenchData({ includeTaskRows: true, includeProjectDetails: true });
-  const baseData = scheduleData.scheduleTasks.length > 0 ? scheduleData : await withProjectTaskRows(scheduleData);
+  const baseData = await withProjectTaskFallbackRows(scheduleData);
   const enrichedData = await withProjectMasterRows(baseData);
 
   return withModelingRows(enrichedData);
+}
+
+async function withProjectTaskFallbackRows(scheduleData: ScheduleWorkbenchData): Promise<ScheduleWorkbenchData> {
+  const trustedScheduleData = isSimulationScheduleSource(scheduleData.sourceLabel)
+    ? (await buildLatestFormalScheduleData(scheduleData)) ?? scheduleData
+    : scheduleData;
+  const projectTaskData = await buildProjectTaskScheduleData(trustedScheduleData);
+
+  return mergeProjectTaskFallbackRows(trustedScheduleData, projectTaskData);
+}
+
+function mergeProjectTaskFallbackRows(
+  scheduleData: ScheduleWorkbenchData,
+  projectTaskData: ScheduleWorkbenchData,
+): ScheduleWorkbenchData {
+  const fallbackProjectIds = new Set(Object.keys(projectTaskData.projectDetails));
+  const trustsScheduleProjects =
+    !isSimulationScheduleSource(scheduleData.sourceLabel) &&
+    (scheduleData.scheduleTasks.length > 0 ||
+      scheduleData.projectCards.length > 0 ||
+      Object.keys(scheduleData.projectDetails).length > 0);
+
+  if (trustsScheduleProjects) {
+    const scheduleProjectIds = new Set([
+      ...scheduleData.scheduleTasks.map((task) => task.projectId),
+      ...scheduleData.projectCards.map((card) => card.projectId),
+      ...Object.keys(scheduleData.projectDetails),
+    ]);
+    const missingProjectIds = [...fallbackProjectIds].filter((projectId) => !scheduleProjectIds.has(projectId));
+
+    if (missingProjectIds.length === 0) {
+      return scheduleData;
+    }
+
+    const missingProjectIdSet = new Set(missingProjectIds);
+    return {
+      ...scheduleData,
+      sourceLabel: `${scheduleData.sourceLabel} + ProjectTask 补齐`,
+      months: mergeTextLists(scheduleData.months, projectTaskData.months),
+      initialMonth: scheduleData.initialMonth || projectTaskData.initialMonth,
+      projectCards: [
+        ...scheduleData.projectCards,
+        ...projectTaskData.projectCards.filter((card) => missingProjectIdSet.has(card.projectId)),
+      ],
+      scheduleTasks: [
+        ...scheduleData.scheduleTasks,
+        ...projectTaskData.scheduleTasks.filter((task) => missingProjectIdSet.has(task.projectId)),
+      ],
+      projectDetails: {
+        ...scheduleData.projectDetails,
+        ...Object.fromEntries(
+          Object.entries(projectTaskData.projectDetails).filter(([projectId]) => missingProjectIdSet.has(projectId)),
+        ),
+      },
+    };
+  }
+
+  const realProjectIds = fallbackProjectIds;
+
+  if (realProjectIds.size === 0) {
+    return scheduleData;
+  }
+
+  const realScheduleTasks = scheduleData.scheduleTasks.filter((task) => realProjectIds.has(task.projectId));
+  if (realScheduleTasks.length === 0) {
+    return projectTaskData;
+  }
+
+  const realScheduleProjectCards = scheduleData.projectCards.filter((card) => realProjectIds.has(card.projectId));
+  const realProjectDetails = Object.fromEntries(
+    Object.entries(scheduleData.projectDetails).filter(([projectId]) => realProjectIds.has(projectId)),
+  );
+  const realScheduleData = {
+    ...scheduleData,
+    projectCards: realScheduleProjectCards,
+    scheduleTasks: realScheduleTasks,
+    projectDetails: realProjectDetails,
+  };
+  const scheduleProjectIds = new Set(realScheduleTasks.map((task) => task.projectId));
+  const missingProjectIds = [...realProjectIds].filter((projectId) => !scheduleProjectIds.has(projectId));
+
+  if (missingProjectIds.length === 0) {
+    return realScheduleData;
+  }
+
+  const missingProjectIdSet = new Set(missingProjectIds);
+  const projectDetails = { ...realProjectDetails };
+  for (const projectId of missingProjectIds) {
+    const fallbackDetail = projectTaskData.projectDetails[projectId];
+    if (fallbackDetail) {
+      projectDetails[projectId] = fallbackDetail;
+    }
+  }
+
+  return {
+    ...realScheduleData,
+    sourceLabel: `${scheduleData.sourceLabel} + ProjectTask 补齐`,
+    months: mergeTextLists(scheduleData.months, projectTaskData.months),
+    initialMonth: scheduleData.initialMonth || projectTaskData.initialMonth,
+    projectCards: [
+      ...realScheduleProjectCards,
+      ...projectTaskData.projectCards.filter((card) => missingProjectIdSet.has(card.projectId)),
+    ],
+    scheduleTasks: [
+      ...realScheduleTasks,
+      ...projectTaskData.scheduleTasks.filter((task) => missingProjectIdSet.has(task.projectId)),
+    ],
+    projectDetails,
+  };
+}
+
+function isSimulationScheduleSource(sourceLabel: string) {
+  return /schedule-simulation:|simulation|模拟/i.test(sourceLabel);
+}
+
+async function buildLatestFormalScheduleData(
+  seedData: ScheduleWorkbenchData,
+): Promise<ScheduleWorkbenchData | null> {
+  const latestRun = await prisma.scheduleRun.findFirst({
+    where: { runStatus: "成功", runType: "正式测算" },
+    orderBy: { calculatedAt: "desc" },
+  });
+
+  if (!latestRun) {
+    return null;
+  }
+
+  const projects = await prisma.project.findMany({
+    where: excludeScheduleSimulationProjectsWhere(),
+    orderBy: [{ plannedLaunchDate: "asc" }, { projectName: "asc" }],
+    take: 300,
+    select: {
+      id: true,
+      projectCode: true,
+      projectName: true,
+      plannedLaunchDate: true,
+      projectTeamId: true,
+      projectOwnerId: true,
+      artOwnerId: true,
+      currentStage: true,
+      status: true,
+    },
+  });
+  const projectIds = projects.map((project) => project.id);
+
+  if (projectIds.length === 0) {
+    return null;
+  }
+
+  const [taskResults, projectResults, projectTasks, modelingProgress] = await Promise.all([
+    prisma.scheduleTaskResult.findMany({
+      where: { scheduleRunId: latestRun.id, projectId: { in: projectIds } },
+      orderBy: [{ projectId: "asc" }, { taskNo: "asc" }],
+      select: {
+        id: true,
+        projectTaskId: true,
+        projectId: true,
+        taskNo: true,
+        taskName: true,
+        milestoneType: true,
+        plannedStartDate: true,
+        plannedFinishDate: true,
+        forecastStartDate: true,
+        forecastFinishDate: true,
+        expectedFinishDate: true,
+        taskActionType: true,
+        displayStatus: true,
+        delayDays: true,
+        remainingSafeDays: true,
+        recoverableByDate: true,
+        blockingPredecessorNames: true,
+        riskLevel: true,
+        riskMessage: true,
+      },
+    }),
+    prisma.scheduleProjectResult.findMany({
+      where: { scheduleRunId: latestRun.id, projectId: { in: projectIds } },
+      select: {
+        projectId: true,
+        plannedLaunchDate: true,
+        forecastLaunchDate: true,
+        delayDays: true,
+        riskLevel: true,
+        currentTaskName: true,
+        riskMessage: true,
+        projectProgressPercent: true,
+      },
+    }),
+    prisma.projectTask.findMany({
+      where: { projectId: { in: projectIds } },
+      select: { id: true, projectId: true, taskNo: true },
+    }),
+    prisma.projectModelingProgress.findMany({
+      where: { projectId: { in: projectIds } },
+      select: {
+        projectId: true,
+        totalRequiredStyles: true,
+        approvedStyles: true,
+        inProgressStyles: true,
+        submittedStyles: true,
+        outsourcedStyles: true,
+        unassignedStyles: true,
+      },
+    }),
+  ]);
+
+  if (taskResults.length === 0) {
+    return null;
+  }
+
+  const scheduledProjectIds = new Set([
+    ...taskResults.map((row) => row.projectId),
+    ...projectResults.map((row) => row.projectId),
+  ]);
+  const scheduledProjects = projects.filter((project) => scheduledProjectIds.has(project.id));
+  const projectById = new Map(scheduledProjects.map((project) => [project.id, project]));
+  const resultByProjectId = new Map(projectResults.map((result) => [result.projectId, result]));
+  const projectTaskIdByKey = new Map(projectTasks.map((task) => [projectTaskKey(task.projectId, task.taskNo), task.id]));
+  const modelingByProjectId = new Map(modelingProgress.map((progress) => [progress.projectId, progress]));
+  const tasksByProjectId = new Map<string, typeof taskResults>();
+
+  for (const task of taskResults) {
+    tasksByProjectId.set(task.projectId, [...(tasksByProjectId.get(task.projectId) ?? []), task]);
+  }
+
+  const projectCards = buildFormalMilestoneCards(taskResults, projectById);
+  const months = buildMonthTimeline(projectCards, scheduledProjects.map((project) => project.plannedLaunchDate));
+  const scheduleTasks = buildFormalScheduleTaskRows(taskResults, projectById, resultByProjectId, projectTaskIdByKey);
+  const projectDetails: Record<string, ProjectDetail> = {};
+
+  for (const project of scheduledProjects) {
+    const rows = tasksByProjectId.get(project.id) ?? [];
+    const result = resultByProjectId.get(project.id);
+    const progress = modelingByProjectId.get(project.id);
+    const riskLevel = toRiskLevel(result?.riskLevel);
+    const unfinishedRows = rows.filter((row) => !isFormalTaskDone(row));
+
+    projectDetails[project.id] = {
+      id: project.id,
+      name: project.projectName,
+      projectTeam: project.projectTeamId ?? "待补充项目组",
+      owner: project.projectOwnerId ?? "待补充",
+      artOwner: project.artOwnerId ?? "待补充",
+      currentTask: result?.currentTaskName ?? unfinishedRows[0]?.taskName ?? "项目任务已完成",
+      plannedFinish: formatDate(project.plannedLaunchDate),
+      forecastFinish: formatDate(result?.forecastLaunchDate),
+      riskLevel,
+      riskMessage: result?.riskMessage ?? "来自最新正式测算。",
+      progressPercent: result?.projectProgressPercent ?? projectProgressFromFormalRows(rows),
+      modelingProgress: {
+        approved: progress?.approvedStyles ?? 0,
+        total: progress?.totalRequiredStyles ?? 0,
+        inProgress: progress?.inProgressStyles ?? 0,
+        submitted: progress?.submittedStyles ?? 0,
+        outsourced: progress?.outsourcedStyles ?? 0,
+        unassigned: progress?.unassignedStyles ?? 0,
+      },
+      weeklyTasks: unfinishedRows.slice(0, 5).map((task) => task.taskName),
+    };
+  }
+
+  return {
+    ...seedData,
+    sourceLabel: latestRun.runName ? `正式测算：${latestRun.runName}` : "正式测算",
+    months: months.length > 0 ? months : seedData.months,
+    initialMonth: months[0] ?? seedData.initialMonth,
+    metrics: [
+      { label: "正式项目", value: scheduledProjects.length, helper: "来自最新正式测算" },
+      { label: "正式任务", value: scheduleTasks.length, helper: "来自 ScheduleTaskResult" },
+      { label: "延期风险", value: scheduleTasks.filter((task) => task.riskLevel === "risk").length, helper: "正式测算任务风险" },
+      { label: "必然延期", value: scheduleTasks.filter((task) => task.riskLevel === "delay").length, helper: "正式测算任务风险" },
+    ],
+    projectCards,
+    scheduleTasks,
+    projectDetails,
+  };
+}
+
+function buildFormalScheduleTaskRows(
+  taskResults: FormalTaskResultRow[],
+  projectById: Map<string, FormalProjectRow>,
+  resultByProjectId: Map<string, FormalProjectResultRow>,
+  projectTaskIdByKey: Map<string, string>,
+): ScheduleTaskRow[] {
+  return taskResults
+    .map((row): ScheduleTaskRow => {
+      const project = projectById.get(row.projectId);
+      const projectResult = resultByProjectId.get(row.projectId);
+      const riskLevel = toRiskLevel(row.riskLevel);
+      const plannedFinish = formatDate(row.plannedFinishDate);
+      const forecastFinish = formatDate(row.forecastFinishDate);
+      const expectedFinish = formatDate(row.expectedFinishDate);
+      const recoverableByDate = formatDate(row.recoverableByDate);
+      const plannedStart = formatDate(row.plannedStartDate);
+      const forecastStart = formatDate(row.forecastStartDate);
+      const currentDdl = forecastFinish || expectedFinish || plannedFinish;
+      const latestFinish = recoverableByDate || forecastFinish || expectedFinish || plannedFinish;
+
+      return {
+        id: row.id,
+        projectTaskId: projectTaskIdByKey.get(projectTaskKey(row.projectId, row.taskNo)) ?? row.projectTaskId,
+        projectId: row.projectId,
+        projectCode: project?.projectCode ?? row.projectId,
+        projectName: project?.projectName ?? row.projectId,
+        projectStage: project?.currentStage ?? project?.status ?? "待补充",
+        plannedLaunchDate: formatDate(projectResult?.plannedLaunchDate ?? project?.plannedLaunchDate),
+        forecastLaunchDate: formatDate(projectResult?.forecastLaunchDate),
+        launchDeltaDays: projectResult?.delayDays ?? null,
+        taskNo: row.taskNo,
+        taskName: row.taskName,
+        milestoneType: row.milestoneType || normalizeMilestone(row.milestoneType, row.taskNo),
+        durationDays: null,
+        taskStatus: row.displayStatus ?? "未开始",
+        shouldStartLabel: row.displayStatus ?? "",
+        missingActualPredecessorIds: jsonText(row.blockingPredecessorNames) ?? "",
+        actualStartDate: "",
+        actualFinishDate: "",
+        expectedFinishDate: expectedFinish,
+        inferredCompletedLabel: isFormalTaskDone(row) ? "已完成" : "",
+        inferredCompletionDate: "",
+        plannedStartDate: plannedStart,
+        plannedFinishDate: plannedFinish,
+        progressForecastStartDate: forecastStart,
+        progressForecastFinishDate: forecastFinish,
+        calculatedStartDate: forecastStart,
+        calculatedFinishDate: forecastFinish,
+        currentDdlDate: currentDdl,
+        originalLatestStartDate: plannedStart,
+        originalLatestFinishDate: plannedFinish || expectedFinish,
+        latestStartDate: forecastStart || plannedStart,
+        latestFinishDate: latestFinish,
+        floatDays: null,
+        planDeltaDays: row.delayDays,
+        deadlineRiskDays: row.delayDays,
+        warningWindowDays: row.remainingSafeDays,
+        impactStatus: row.displayStatus ?? "",
+        riskLevel,
+        riskText: row.riskMessage ?? row.riskLevel,
+        isBlockingLaunchLabel: hasBlockingValue(row.blockingPredecessorNames) ? "是" : "否",
+      };
+    })
+    .sort((a, b) => a.projectName.localeCompare(b.projectName, "zh-CN") || a.taskNo - b.taskNo);
+}
+
+function buildFormalMilestoneCards(
+  taskResults: FormalTaskResultRow[],
+  projectById: Map<string, FormalProjectRow>,
+): ProjectCard[] {
+  const group = new Map<string, { projectId: string; milestone: ProjectCard["milestone"]; rows: FormalTaskResultRow[] }>();
+
+  for (const row of taskResults) {
+    const project = projectById.get(row.projectId);
+    if (!project) continue;
+
+    const milestone = normalizeMilestone(row.milestoneType, row.taskNo);
+    const key = `${row.projectId}:${milestone}`;
+    const current = group.get(key);
+    if (current) {
+      current.rows.push(row);
+    } else {
+      group.set(key, { projectId: row.projectId, milestone, rows: [row] });
+    }
+  }
+
+  const cards: ProjectCard[] = [];
+  for (const item of group.values()) {
+    const project = projectById.get(item.projectId);
+    if (!project) continue;
+
+    const plannedDate = maxDate(item.rows.map((row) => row.plannedFinishDate ?? row.expectedFinishDate ?? row.forecastFinishDate));
+    const forecastDate = maxDate(item.rows.map((row) => forecastDateForFormalRow(row)));
+    const plannedMonth = plannedDate ? monthLabel(plannedDate) : "";
+    const forecastMonth = forecastDate ? monthLabel(forecastDate) : plannedMonth;
+    const month = plannedMonth || forecastMonth;
+    if (!month) continue;
+
+    cards.push({
+      id: `${item.projectId}:${item.milestone}`,
+      projectId: item.projectId,
+      name: project.projectName,
+      month,
+      plannedMonth: plannedMonth || month,
+      forecastMonth: forecastMonth || month,
+      milestone: item.milestone,
+      riskLevel: groupFormalRiskLevel(item.rows),
+    });
+  }
+
+  return cards.sort((a, b) => compareMonthLabels(a.plannedMonth ?? a.month, b.plannedMonth ?? b.month) || a.name.localeCompare(b.name, "zh-CN"));
+}
+
+function forecastDateForFormalRow(row: FormalTaskResultRow) {
+  return row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate;
+}
+
+function groupFormalRiskLevel(rows: FormalTaskResultRow[]): RiskLevel {
+  if (rows.length > 0 && rows.every(isFormalTaskDone)) {
+    return rows.some((row) => toRiskLevel(row.riskLevel) === "doneLate") ? "doneLate" : "done";
+  }
+
+  return rows.filter((row) => !isFormalTaskDone(row)).reduce<RiskLevel>((level, row) => {
+    return worseRiskLevel(level, toRiskLevel(row.riskLevel));
+  }, "normal");
+}
+
+function isFormalTaskDone(row: FormalTaskResultRow) {
+  return isDoneText(row.displayStatus) || isDoneText(row.taskActionType);
+}
+
+function projectProgressFromFormalRows(rows: FormalTaskResultRow[]) {
+  if (rows.length === 0) return 0;
+  return Math.round((rows.filter(isFormalTaskDone).length / rows.length) * 100);
+}
+
+function projectTaskKey(projectId: string, taskNo: number) {
+  return `${projectId}:${taskNo}`;
+}
+
+function hasBlockingValue(value: unknown) {
+  if (!value) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "string") return Boolean(value.trim());
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return false;
+}
+
+function jsonText(value: unknown) {
+  if (!value) return null;
+  if (Array.isArray(value)) return value.map(String).join(",");
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function toRiskLevel(value?: string | null): RiskLevel {
+  if (!value) return "normal";
+  if (value === "done" || value === "doneLate" || value === "normal" || value === "risk" || value === "delay") {
+    return value;
+  }
+  if (value.includes("延期完成")) return "doneLate";
+  if (value.includes("已完成") || value.includes("已通过")) return "done";
+  if (value.includes("必然延期") || value.includes("严重延期")) return "delay";
+  if (value.includes("延期风险") || value.includes("风险")) return "risk";
+  if (value.includes("延期")) return "delay";
+  return "normal";
+}
+
+function worseRiskLevel(a: RiskLevel, b: RiskLevel): RiskLevel {
+  const weights: Record<RiskLevel, number> = {
+    done: 0,
+    doneLate: 0,
+    normal: 1,
+    risk: 2,
+    delay: 3,
+  };
+
+  return weights[b] > weights[a] ? b : a;
 }
 
 async function withProjectMasterRows(scheduleData: ScheduleWorkbenchData): Promise<ProductGuidePrototypeData> {
@@ -231,8 +733,9 @@ async function withModelingRows(scheduleData: ProductGuidePrototypeData): Promis
   };
 }
 
-async function withProjectTaskRows(scheduleData: ScheduleWorkbenchData): Promise<ScheduleWorkbenchData> {
+async function buildProjectTaskScheduleData(scheduleData: ScheduleWorkbenchData): Promise<ScheduleWorkbenchData> {
   const projects = await prisma.project.findMany({
+    where: excludeScheduleSimulationProjectsWhere(),
     orderBy: [{ plannedLaunchDate: "asc" }, { projectName: "asc" }],
     take: 300,
     select: {
@@ -391,6 +894,10 @@ async function withProjectTaskRows(scheduleData: ScheduleWorkbenchData): Promise
   };
 }
 
+function mergeTextLists(primary: string[], secondary: string[]) {
+  return [...new Set([...primary, ...secondary].filter(Boolean))];
+}
+
 function buildProjectTaskMilestoneCards(
   projects: PrototypeProjectRow[],
   projectTasks: PrototypeProjectTaskRow[],
@@ -512,5 +1019,15 @@ function normalizeMilestone(value: string, taskNo: number): ProjectCard["milesto
 }
 
 function isDoneText(value?: string | null) {
-  return Boolean(value?.includes("完成") || value?.includes("通过") || value?.toLowerCase() === "done");
+  const text = value?.trim();
+  if (!text) return false;
+  const lowerText = text.toLowerCase();
+  return (
+    lowerText === "done" ||
+    text === "完成" ||
+    text === "通过" ||
+    text.includes("已完成") ||
+    text.includes("已通过") ||
+    text.includes("送审通过")
+  );
 }
