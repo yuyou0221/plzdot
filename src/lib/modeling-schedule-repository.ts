@@ -171,7 +171,17 @@ export async function getModelingScheduleData(): Promise<ModelingScheduleData> {
   try {
     const [projects, realTasks, users, vendors, progressRows, latestRun] = await Promise.all([
       prisma.project.findMany({
-        where: excludeScheduleSimulationProjectsWhere(),
+        where: {
+          AND: [
+            excludeScheduleSimulationProjectsWhere(),
+            {
+              NOT: [
+                { projectCode: { startsWith: "MT-TEST-" } },
+                { projectName: { startsWith: "[建模测试]" } },
+              ],
+            },
+          ],
+        },
         orderBy: [{ plannedLaunchDate: "asc" }, { id: "asc" }],
         take: 300,
         select: {
