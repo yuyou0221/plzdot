@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { CalendarDays, ClipboardList, Palette, Users } from "lucide-react";
 import clsx from "clsx";
 import type { AuthUser } from "@/lib/auth/permissions";
@@ -19,7 +19,6 @@ const iconByName: Record<AppNavItem["icon"], typeof CalendarDays> = {
 };
 
 export function AppSideNav({ currentPath, currentUser }: AppSideNavProps) {
-  const router = useRouter();
   const items = getFormalAppNavItems(currentUser);
 
   return (
@@ -29,10 +28,10 @@ export function AppSideNav({ currentPath, currentUser }: AppSideNavProps) {
         const active = item.href === "/" ? currentPath === "/" : currentPath.startsWith(item.href);
 
         return (
-          <button
+          <Link
             key={item.href}
-            type="button"
-            onClick={() => router.push(item.href)}
+            href={item.href}
+            aria-current={active ? "page" : undefined}
             className={clsx(
               "flex h-10 items-center justify-between rounded-lg px-3 text-sm font-semibold transition",
               active ? "bg-rose-50 text-rose-700" : "text-slate-500 hover:bg-slate-50",
@@ -43,7 +42,7 @@ export function AppSideNav({ currentPath, currentUser }: AppSideNavProps) {
               <span className="truncate">{item.label}</span>
             </span>
             <span className={clsx("rounded-full px-2 py-0.5 text-xs", active ? "bg-rose-100" : "bg-slate-100")}>{item.badge}</span>
-          </button>
+          </Link>
         );
       })}
     </nav>
