@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarDays, ClipboardList, Palette, Users } from "lucide-react";
+import { CalendarDays, CircleDollarSign, ClipboardList, Palette, Users } from "lucide-react";
 import clsx from "clsx";
 import type { AuthUser } from "@/lib/auth/permissions";
 import { getFormalAppNavItems, type AppNavItem } from "@/lib/app-navigation";
@@ -15,6 +15,7 @@ const iconByName: Record<AppNavItem["icon"], typeof CalendarDays> = {
   calendar: CalendarDays,
   guide: ClipboardList,
   modeling: Palette,
+  finance: CircleDollarSign,
   users: Users,
 };
 
