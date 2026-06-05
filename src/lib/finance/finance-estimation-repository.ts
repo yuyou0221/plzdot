@@ -2,11 +2,15 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import {
-  financeLevelMultiplierRules,
-  financeProductRevenueRules,
+  defaultFinanceConfig,
+  financeLevelDefinitions,
   financeRuleVersion,
-  matchFinanceLevelRule,
-  matchFinanceProductRule,
+  matchFinanceLevel,
+  normalizeFinanceDiscount,
+  normalizeFinanceSalesByLevel,
+  parseProjectRetailPrice,
+  type FinanceConfigData,
+  type FinanceLevelKey,
 } from "@/lib/finance/finance-estimation-rules";
 
 export type FinanceProjectEstimate = {
@@ -17,17 +21,21 @@ export type FinanceProjectEstimate = {
   ipName: string | null;
   productType: string | null;
   productLine: string | null;
-  styleCount: number | null;
+  specificationCount: number | null;
   retailPrice: string | null;
+  retailPriceValue: number | null;
   projectLevel: string | null;
+  levelKey: FinanceLevelKey | null;
+  levelLabel: string | null;
+  predictedSales: number | null;
+  discountRate: number;
   status: string;
   plannedLaunchDate: string;
   plannedLaunchMonth: string;
-  productRuleLabel: string | null;
-  baseRevenuePerStyle: number | null;
-  levelRuleLabel: string | null;
-  levelMultiplier: number | null;
+  plannedLaunchYear: number;
   estimatedRevenue: number | null;
+  estimatedRevenueWan: number | null;
+  formulaText: string | null;
   issues: string[];
   isExcluded: boolean;
 };
@@ -38,13 +46,17 @@ export type FinanceBucket = {
   projectCount: number;
   estimatedProjectCount: number;
   totalEstimatedRevenue: number;
+  totalEstimatedRevenueWan: number;
 };
 
 export type FinanceEstimationData = {
   generatedAt: string;
   sourceLabel: string;
   ruleVersion: string;
+  selectedYear: number | null;
+  availableYears: number[];
   assumptions: string[];
+  config: FinanceConfigData;
   summary: {
     projectCount: number;
     activeProjectCount: number;
@@ -52,113 +64,171 @@ export type FinanceEstimationData = {
     blockedProjectCount: number;
     excludedProjectCount: number;
     totalEstimatedRevenue: number;
+    totalEstimatedRevenueWan: number;
     averageEstimatedRevenue: number;
+    averageEstimatedRevenueWan: number;
   };
   projects: FinanceProjectEstimate[];
+  yearBuckets: FinanceBucket[];
   monthBuckets: FinanceBucket[];
-  productBuckets: FinanceBucket[];
   levelBuckets: FinanceBucket[];
-  productRules: typeof financeProductRevenueRules;
-  levelRules: typeof financeLevelMultiplierRules;
+  levelDefinitions: typeof financeLevelDefinitions;
 };
 
-export async function getFinanceEstimationData(): Promise<FinanceEstimationData> {
-  const projects = await prisma.project.findMany({
-    orderBy: [{ plannedLaunchDate: "asc" }, { projectCode: "asc" }, { projectName: "asc" }],
-    select: {
-      id: true,
-      projectCode: true,
-      projectName: true,
-      licensorName: true,
-      ipName: true,
-      productType: true,
-      productLine: true,
-      styleCount: true,
-      retailPrice: true,
-      projectLevel: true,
-      plannedLaunchDate: true,
-      status: true,
-    },
-  });
+export async function getFinanceEstimationData(options: { year?: number | null } = {}): Promise<FinanceEstimationData> {
+  const [config, projects] = await Promise.all([
+    getOrCreateFinanceConfig(),
+    prisma.project.findMany({
+      orderBy: [{ plannedLaunchDate: "asc" }, { projectCode: "asc" }, { projectName: "asc" }],
+      select: {
+        id: true,
+        projectCode: true,
+        projectName: true,
+        licensorName: true,
+        ipName: true,
+        productType: true,
+        productLine: true,
+        styleCount: true,
+        retailPrice: true,
+        projectLevel: true,
+        plannedLaunchDate: true,
+        status: true,
+      },
+    }),
+  ]);
 
-  const estimates = projects.map(toFinanceProjectEstimate);
-  const activeEstimates = estimates.filter((project) => !project.isExcluded);
+  const allEstimates = projects.map((project) => toFinanceProjectEstimate(project, config));
+  const availableYears = [...new Set(allEstimates.map((project) => project.plannedLaunchYear))].sort((left, right) => left - right);
+  const selectedYear = resolveSelectedYear(options.year, availableYears);
+  const selectedEstimates =
+    selectedYear === null ? allEstimates : allEstimates.filter((project) => project.plannedLaunchYear === selectedYear);
+  const activeEstimates = selectedEstimates.filter((project) => !project.isExcluded);
   const estimatedProjects = activeEstimates.filter((project) => project.estimatedRevenue !== null);
   const blockedProjects = activeEstimates.filter((project) => project.estimatedRevenue === null);
   const totalEstimatedRevenue = estimatedProjects.reduce((total, project) => total + (project.estimatedRevenue ?? 0), 0);
+  const averageEstimatedRevenue = estimatedProjects.length > 0 ? Math.round(totalEstimatedRevenue / estimatedProjects.length) : 0;
 
   return {
     generatedAt: new Date().toISOString(),
     sourceLabel: "Project 项目主数据",
     ruleVersion: financeRuleVersion,
+    selectedYear,
+    availableYears,
     assumptions: [
-      "当前为基础试算规则，最终营收口径需要财务确认后再固化。",
-      "测算公式：款式数 × 产品规格基础营收 × 项目等级倍率。",
-      "缺少款式数、产品规格规则或项目等级规则时，不做猜测，列入待补规则。",
+      "测算公式：规格（款式数）× 零售价 × 统一折扣 × 项目等级预测销量。",
+      "折扣和各等级预测销量由管理员在财务测算页维护。",
+      "缺少规格、零售价、项目等级或预测销量时，不做猜测，列入待配置。",
       "状态为取消的项目暂不计入预计营收。",
+      "页面金额统一按万元展示。",
     ],
+    config,
     summary: {
-      projectCount: estimates.length,
+      projectCount: selectedEstimates.length,
       activeProjectCount: activeEstimates.length,
       estimatedProjectCount: estimatedProjects.length,
       blockedProjectCount: blockedProjects.length,
-      excludedProjectCount: estimates.length - activeEstimates.length,
+      excludedProjectCount: selectedEstimates.length - activeEstimates.length,
       totalEstimatedRevenue,
-      averageEstimatedRevenue: estimatedProjects.length > 0 ? Math.round(totalEstimatedRevenue / estimatedProjects.length) : 0,
+      totalEstimatedRevenueWan: toWan(totalEstimatedRevenue),
+      averageEstimatedRevenue,
+      averageEstimatedRevenueWan: toWan(averageEstimatedRevenue),
     },
-    projects: estimates,
+    projects: selectedEstimates,
+    yearBuckets: buildBuckets(allEstimates.filter((project) => !project.isExcluded), (project) => String(project.plannedLaunchYear), (project) => `${project.plannedLaunchYear} 年`),
     monthBuckets: buildBuckets(activeEstimates, (project) => project.plannedLaunchMonth, (project) => formatMonthLabel(project.plannedLaunchMonth)),
-    productBuckets: buildBuckets(
-      activeEstimates.filter((project) => project.productRuleLabel),
-      (project) => project.productRuleLabel ?? "未匹配规格",
-      (project) => project.productRuleLabel ?? "未匹配规格",
-    ),
     levelBuckets: buildBuckets(
-      activeEstimates.filter((project) => project.levelRuleLabel),
-      (project) => project.levelRuleLabel ?? "未匹配等级",
-      (project) => project.levelRuleLabel ?? "未匹配等级",
+      activeEstimates.filter((project) => project.levelLabel),
+      (project) => project.levelLabel ?? "未匹配等级",
+      (project) => project.levelLabel ?? "未匹配等级",
     ),
-    productRules: financeProductRevenueRules,
-    levelRules: financeLevelMultiplierRules,
+    levelDefinitions: financeLevelDefinitions,
   };
 }
 
-function toFinanceProjectEstimate(project: {
-  id: string;
-  projectCode: string | null;
-  projectName: string;
-  licensorName: string | null;
-  ipName: string | null;
-  productType: string | null;
-  productLine: string | null;
-  styleCount: number | null;
-  retailPrice: string | null;
-  projectLevel: string | null;
-  plannedLaunchDate: Date;
-  status: string;
-}): FinanceProjectEstimate {
-  const productRule = matchFinanceProductRule(project.productType, project.productLine);
-  const levelRule = matchFinanceLevelRule(project.projectLevel);
+export async function updateFinanceEstimationConfig(input: { discountRate: unknown; salesByLevel: unknown; updatedByUserId?: string | null }) {
+  const discountRate = normalizeFinanceDiscount(input.discountRate);
+  const salesByLevel = normalizeFinanceSalesByLevel(input.salesByLevel);
+
+  const config = await prisma.financeEstimationConfig.upsert({
+    where: { name: "default" },
+    create: {
+      name: "default",
+      discountRate,
+      salesByLevel,
+      updatedByUserId: input.updatedByUserId ?? null,
+    },
+    update: {
+      discountRate,
+      salesByLevel,
+      updatedByUserId: input.updatedByUserId ?? null,
+    },
+  });
+
+  return toFinanceConfigData(config);
+}
+
+async function getOrCreateFinanceConfig(): Promise<FinanceConfigData> {
+  const config = await prisma.financeEstimationConfig.upsert({
+    where: { name: "default" },
+    create: {
+      name: "default",
+      discountRate: defaultFinanceConfig.discountRate,
+      salesByLevel: defaultFinanceConfig.salesByLevel,
+    },
+    update: {},
+  });
+
+  return toFinanceConfigData(config);
+}
+
+function toFinanceProjectEstimate(
+  project: {
+    id: string;
+    projectCode: string | null;
+    projectName: string;
+    licensorName: string | null;
+    ipName: string | null;
+    productType: string | null;
+    productLine: string | null;
+    styleCount: number | null;
+    retailPrice: string | null;
+    projectLevel: string | null;
+    plannedLaunchDate: Date;
+    status: string;
+  },
+  config: FinanceConfigData,
+): FinanceProjectEstimate {
+  const level = matchFinanceLevel(project.projectLevel);
+  const retailPriceValue = parseProjectRetailPrice(project.retailPrice);
+  const predictedSales = level ? config.salesByLevel[level.key] : null;
   const issues: string[] = [];
   const isExcluded = project.status.includes("取消");
 
   if (!isExcluded) {
     if (!project.styleCount || project.styleCount <= 0) {
-      issues.push("缺少有效款式数");
+      issues.push("缺少有效规格 / 款式数");
     }
 
-    if (!productRule) {
-      issues.push("产品规格未匹配营收规则");
+    if (!retailPriceValue) {
+      issues.push("缺少有效零售价");
     }
 
-    if (!levelRule) {
-      issues.push("项目等级未匹配倍率规则");
+    if (!level) {
+      issues.push("项目等级未匹配");
+    }
+
+    if (level && (!predictedSales || predictedSales <= 0)) {
+      issues.push(`${level.label}预测销量未配置`);
+    }
+
+    if (config.discountRate <= 0) {
+      issues.push("统一折扣未配置");
     }
   }
 
   const estimatedRevenue =
-    !isExcluded && issues.length === 0 && productRule && levelRule && project.styleCount
-      ? Math.round(project.styleCount * productRule.baseRevenuePerStyle * levelRule.multiplier)
+    !isExcluded && issues.length === 0 && project.styleCount && retailPriceValue && predictedSales
+      ? Math.round(project.styleCount * retailPriceValue * config.discountRate * predictedSales)
       : null;
   const plannedLaunchDate = toDateString(project.plannedLaunchDate);
 
@@ -170,19 +240,35 @@ function toFinanceProjectEstimate(project: {
     ipName: project.ipName,
     productType: project.productType,
     productLine: project.productLine,
-    styleCount: project.styleCount,
+    specificationCount: project.styleCount,
     retailPrice: project.retailPrice,
+    retailPriceValue,
     projectLevel: project.projectLevel,
+    levelKey: level?.key ?? null,
+    levelLabel: level?.label ?? null,
+    predictedSales: predictedSales && predictedSales > 0 ? predictedSales : null,
+    discountRate: config.discountRate,
     status: project.status,
     plannedLaunchDate,
     plannedLaunchMonth: plannedLaunchDate.slice(0, 7),
-    productRuleLabel: productRule?.label ?? null,
-    baseRevenuePerStyle: productRule?.baseRevenuePerStyle ?? null,
-    levelRuleLabel: levelRule?.label ?? null,
-    levelMultiplier: levelRule?.multiplier ?? null,
+    plannedLaunchYear: Number(plannedLaunchDate.slice(0, 4)),
     estimatedRevenue,
+    estimatedRevenueWan: estimatedRevenue === null ? null : toWan(estimatedRevenue),
+    formulaText:
+      estimatedRevenue === null || !project.styleCount || !retailPriceValue || !predictedSales
+        ? null
+        : `${project.styleCount} × ${retailPriceValue} × ${config.discountRate} × ${predictedSales}`,
     issues: isExcluded ? ["项目已取消，暂不计入"] : issues,
     isExcluded,
+  };
+}
+
+function toFinanceConfigData(config: { id: string; discountRate: number; salesByLevel: unknown; updatedAt: Date }): FinanceConfigData {
+  return {
+    id: config.id,
+    discountRate: normalizeFinanceDiscount(config.discountRate),
+    salesByLevel: normalizeFinanceSalesByLevel(config.salesByLevel),
+    updatedAt: config.updatedAt.toISOString(),
   };
 }
 
@@ -201,6 +287,7 @@ function buildBuckets(
       projectCount: 0,
       estimatedProjectCount: 0,
       totalEstimatedRevenue: 0,
+      totalEstimatedRevenueWan: 0,
     };
 
     existing.projectCount += 1;
@@ -208,12 +295,26 @@ function buildBuckets(
     if (project.estimatedRevenue !== null) {
       existing.estimatedProjectCount += 1;
       existing.totalEstimatedRevenue += project.estimatedRevenue;
+      existing.totalEstimatedRevenueWan = toWan(existing.totalEstimatedRevenue);
     }
 
     bucketMap.set(key, existing);
   }
 
   return [...bucketMap.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function resolveSelectedYear(year: number | null | undefined, availableYears: number[]) {
+  if (availableYears.length === 0) {
+    return null;
+  }
+
+  if (year && availableYears.includes(year)) {
+    return year;
+  }
+
+  const currentYear = new Date().getFullYear();
+  return availableYears.includes(currentYear) ? currentYear : availableYears[0];
 }
 
 function toDateString(date: Date) {
@@ -226,4 +327,8 @@ function toDateString(date: Date) {
 function formatMonthLabel(month: string) {
   const [year, monthNumber] = month.split("-");
   return `${year.slice(2)}年${Number(monthNumber)}月`;
+}
+
+function toWan(value: number) {
+  return Math.round((value / 10000) * 100) / 100;
 }
