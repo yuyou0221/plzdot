@@ -292,6 +292,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
       }
       setTone(result.ok ? "info" : "warning");
       setMessage(result.message);
+      router.refresh();
     } catch {
       setTone("error");
       setMessage("项目主数据导入失败，请稍后再试。");
