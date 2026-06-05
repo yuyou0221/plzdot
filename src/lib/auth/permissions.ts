@@ -78,6 +78,10 @@ export function canAccessUserData(user: Pick<AuthUser, "permissionLevel" | "role
   return user.permissionLevel === 0 || isHumanResourcesUser(user);
 }
 
+export function canAccessFinance(user: Pick<AuthUser, "authRole">) {
+  return user.authRole === "admin";
+}
+
 export function canSeeSensitiveUserData(user: Pick<AuthUser, "permissionLevel">) {
   return user.permissionLevel === 0;
 }
