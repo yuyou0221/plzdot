@@ -170,6 +170,18 @@ model Project {
   @@index([status])
 }
 
+model FinanceEstimationConfig {
+  id              String   @id @default(uuid())
+  name            String   @unique @default("default")
+  discountRate    Float    @default(1)
+  salesByLevel    Json
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
 model TaskRule {
   id                     String   @id @default(uuid())
   taskNo                 Int

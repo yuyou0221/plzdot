@@ -5,14 +5,16 @@ import { getFinanceEstimationData } from "@/lib/finance/finance-estimation-repos
 
 export const dynamic = "force-dynamic";
 
-export default async function FinancePage() {
+export default async function FinancePage({ searchParams }: { searchParams: Promise<{ year?: string }> }) {
   const currentUser = await requireCurrentUser("/finance");
 
   if (!canAccessFinance(currentUser)) {
     return <FinanceAccessDeniedPage currentUser={currentUser} />;
   }
 
-  const data = await getFinanceEstimationData().catch((error) => {
+  const params = await searchParams;
+  const year = params.year ? Number(params.year) : null;
+  const data = await getFinanceEstimationData({ year: Number.isFinite(year) ? year : null }).catch((error) => {
     console.error("Failed to load finance estimation data.", error);
     return null;
   });
