@@ -367,7 +367,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
           <button
             type="button"
             onClick={applyImport}
-            disabled={!canApply || isApplying || isLoading || isAnalyzing}
+            disabled={!canImport || isApplying || isLoading || isAnalyzing}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
           >
             <Database size={14} />
