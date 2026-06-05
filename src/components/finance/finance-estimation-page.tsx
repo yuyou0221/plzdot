@@ -41,7 +41,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                 <p className="text-sm font-semibold text-rose-600">财务测算</p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">年度项目营收测算</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                  读取项目主数据，按规格、零售价、统一折扣和项目等级预测销量计算营收。页面金额统一按万元展示。
+                  读取项目主数据，按规格、零售价、统一折扣和项目等级预测销量计算营收。营收年度优先按项目编号前两位归属，并按子公司拆分统计。
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -58,7 +58,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                 icon={<CircleDollarSign size={18} />}
                 label={data.selectedYear ? `${data.selectedYear} 年预计营收` : "预计总营收"}
                 value={formatWan(data.summary.totalEstimatedRevenueWan)}
-                helper={`${data.summary.estimatedProjectCount} 个项目已测算`}
+                helper={`${data.summary.estimatedProjectCount} 个项目已测算，按项目编号归年`}
               />
               <MetricCard
                 icon={<ReceiptText size={18} />}
@@ -87,7 +87,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-black text-slate-950">年度汇总</h3>
-                    <p className="mt-1 text-sm text-slate-500">按计划上线年份列出每年预计营收。</p>
+                    <p className="mt-1 text-sm text-slate-500">按项目编号前两位列出每年预计营收。</p>
                   </div>
                 </div>
                 <BucketList buckets={data.yearBuckets} />
@@ -96,8 +96,18 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div>
+                    <h3 className="text-lg font-black text-slate-950">年度子公司汇总</h3>
+                    <p className="mt-1 text-sm text-slate-500">按营收年度和子公司拆分预计营收。</p>
+                  </div>
+                </div>
+                <BucketList buckets={data.subsidiaryYearBuckets} />
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
                     <h3 className="text-lg font-black text-slate-950">月份汇总</h3>
-                    <p className="mt-1 text-sm text-slate-500">当前年度按上线月份聚合营收。</p>
+                    <p className="mt-1 text-sm text-slate-500">当前营收年度内，按上线月份聚合营收。</p>
                   </div>
                 </div>
                 <BucketList buckets={data.monthBuckets} />
@@ -106,6 +116,11 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
 
             <div className="grid gap-5">
               <FinanceConfigPanel config={data.config} levelDefinitions={data.levelDefinitions} />
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-lg font-black text-slate-950">当前年度子公司</h3>
+                <p className="mt-1 text-sm text-slate-500">当前营收年度按上海、厦门等子公司聚合。</p>
+                <BucketList buckets={data.subsidiaryBuckets} />
+              </section>
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-lg font-black text-slate-950">等级汇总</h3>
                 <p className="mt-1 text-sm text-slate-500">按项目等级聚合当前年度营收。</p>
@@ -257,16 +272,18 @@ function ProjectEstimateTable({ projects }: { projects: FinanceProjectEstimate[]
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-black text-slate-950">项目营收明细</h3>
-          <p className="mt-1 text-sm text-slate-500">按年度列出每个项目营收，金额单位为万元。</p>
+          <p className="mt-1 text-sm text-slate-500">按营收年度列出每个项目，金额单位为万元。</p>
         </div>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{projects.length} 个项目</span>
       </div>
 
       <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[1260px] text-left text-sm">
+        <table className="min-w-[1480px] text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
               <th className="px-3 py-3">上线月</th>
+              <th className="px-3 py-3">营收年度</th>
+              <th className="px-3 py-3">子公司</th>
               <th className="px-3 py-3">项目</th>
               <th className="px-3 py-3">版权 / IP</th>
               <th className="px-3 py-3">规格</th>
@@ -282,6 +299,11 @@ function ProjectEstimateTable({ projects }: { projects: FinanceProjectEstimate[]
             {projects.map((project) => (
               <tr key={project.projectId} className="border-b border-slate-100 align-top last:border-0">
                 <td className="px-3 py-3 font-medium text-slate-700">{formatMonth(project.plannedLaunchMonth)}</td>
+                <td className="px-3 py-3 text-slate-600">
+                  <div className="font-semibold text-slate-900">{project.revenueYear} 年</div>
+                  <div className="mt-1 text-xs text-slate-500">{formatRevenueYearSource(project.revenueYearSource)}</div>
+                </td>
+                <td className="px-3 py-3 text-slate-600">{project.subsidiary?.trim() || "未填写子公司"}</td>
                 <td className="px-3 py-3">
                   <div className="font-semibold text-slate-950">{project.projectName}</div>
                   <div className="mt-1 text-xs text-slate-500">{project.projectCode || "未编号"}</div>
@@ -331,4 +353,8 @@ function formatPercent(value: number) {
 function formatMonth(month: string) {
   const [year, monthNumber] = month.split("-");
   return `${year.slice(2)}年${Number(monthNumber)}月`;
+}
+
+function formatRevenueYearSource(source: FinanceProjectEstimate["revenueYearSource"]) {
+  return source === "projectCode" ? "按项目编号" : "按上线日期兜底";
 }
