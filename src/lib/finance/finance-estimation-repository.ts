@@ -19,6 +19,7 @@ export type FinanceProjectEstimate = {
   projectName: string;
   licensorName: string | null;
   ipName: string | null;
+  subsidiary: string | null;
   productType: string | null;
   productLine: string | null;
   specificationCount: number | null;
@@ -33,6 +34,8 @@ export type FinanceProjectEstimate = {
   plannedLaunchDate: string;
   plannedLaunchMonth: string;
   plannedLaunchYear: number;
+  revenueYear: number;
+  revenueYearSource: "projectCode" | "plannedLaunchDate";
   estimatedRevenue: number | null;
   estimatedRevenueWan: number | null;
   formulaText: string | null;
@@ -70,6 +73,8 @@ export type FinanceEstimationData = {
   };
   projects: FinanceProjectEstimate[];
   yearBuckets: FinanceBucket[];
+  subsidiaryYearBuckets: FinanceBucket[];
+  subsidiaryBuckets: FinanceBucket[];
   monthBuckets: FinanceBucket[];
   levelBuckets: FinanceBucket[];
   levelDefinitions: typeof financeLevelDefinitions;
@@ -86,6 +91,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
         projectName: true,
         licensorName: true,
         ipName: true,
+        subsidiary: true,
         productType: true,
         productLine: true,
         styleCount: true,
@@ -98,10 +104,10 @@ export async function getFinanceEstimationData(options: { year?: number | null }
   ]);
 
   const allEstimates = projects.map((project) => toFinanceProjectEstimate(project, config));
-  const availableYears = [...new Set(allEstimates.map((project) => project.plannedLaunchYear))].sort((left, right) => left - right);
+  const availableYears = [...new Set(allEstimates.map((project) => project.revenueYear))].sort((left, right) => left - right);
   const selectedYear = resolveSelectedYear(options.year, availableYears);
   const selectedEstimates =
-    selectedYear === null ? allEstimates : allEstimates.filter((project) => project.plannedLaunchYear === selectedYear);
+    selectedYear === null ? allEstimates : allEstimates.filter((project) => project.revenueYear === selectedYear);
   const activeEstimates = selectedEstimates.filter((project) => !project.isExcluded);
   const estimatedProjects = activeEstimates.filter((project) => project.estimatedRevenue !== null);
   const blockedProjects = activeEstimates.filter((project) => project.estimatedRevenue === null);
@@ -116,6 +122,8 @@ export async function getFinanceEstimationData(options: { year?: number | null }
     availableYears,
     assumptions: [
       "测算公式：规格（款式数）× 零售价 × 统一折扣 × 项目等级预测销量。",
+      "营收年度优先取项目编号前两位：26xx 计入 2026 年，27xx 计入 2027 年。",
+      "年度营收按子公司拆分统计，未填写子公司的项目单独列为“未填写子公司”。",
       "折扣和各等级预测销量由管理员在财务测算页维护。",
       "缺少规格、零售价、项目等级或预测销量时，不做猜测，列入待配置。",
       "状态为取消的项目暂不计入预计营收。",
@@ -134,7 +142,17 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       averageEstimatedRevenueWan: toWan(averageEstimatedRevenue),
     },
     projects: selectedEstimates,
-    yearBuckets: buildBuckets(allEstimates.filter((project) => !project.isExcluded), (project) => String(project.plannedLaunchYear), (project) => `${project.plannedLaunchYear} 年`),
+    yearBuckets: buildBuckets(allEstimates.filter((project) => !project.isExcluded), (project) => String(project.revenueYear), (project) => `${project.revenueYear} 年`),
+    subsidiaryYearBuckets: buildBuckets(
+      allEstimates.filter((project) => !project.isExcluded),
+      (project) => `${project.revenueYear}:${normalizedSubsidiary(project.subsidiary)}`,
+      (project) => `${project.revenueYear} 年 · ${normalizedSubsidiary(project.subsidiary)}`,
+    ),
+    subsidiaryBuckets: buildBuckets(
+      activeEstimates,
+      (project) => normalizedSubsidiary(project.subsidiary),
+      (project) => normalizedSubsidiary(project.subsidiary),
+    ),
     monthBuckets: buildBuckets(activeEstimates, (project) => project.plannedLaunchMonth, (project) => formatMonthLabel(project.plannedLaunchMonth)),
     levelBuckets: buildBuckets(
       activeEstimates.filter((project) => project.levelLabel),
@@ -188,6 +206,7 @@ function toFinanceProjectEstimate(
     projectName: string;
     licensorName: string | null;
     ipName: string | null;
+    subsidiary: string | null;
     productType: string | null;
     productLine: string | null;
     styleCount: number | null;
@@ -231,6 +250,7 @@ function toFinanceProjectEstimate(
       ? Math.round(project.styleCount * retailPriceValue * config.discountRate * predictedSales)
       : null;
   const plannedLaunchDate = toDateString(project.plannedLaunchDate);
+  const revenueYearResult = revenueYearFromProjectCode(project.projectCode, plannedLaunchDate);
 
   return {
     projectId: project.id,
@@ -238,6 +258,7 @@ function toFinanceProjectEstimate(
     projectName: project.projectName,
     licensorName: project.licensorName,
     ipName: project.ipName,
+    subsidiary: project.subsidiary,
     productType: project.productType,
     productLine: project.productLine,
     specificationCount: project.styleCount,
@@ -252,6 +273,8 @@ function toFinanceProjectEstimate(
     plannedLaunchDate,
     plannedLaunchMonth: plannedLaunchDate.slice(0, 7),
     plannedLaunchYear: Number(plannedLaunchDate.slice(0, 4)),
+    revenueYear: revenueYearResult.year,
+    revenueYearSource: revenueYearResult.source,
     estimatedRevenue,
     estimatedRevenueWan: estimatedRevenue === null ? null : toWan(estimatedRevenue),
     formulaText:
@@ -261,6 +284,25 @@ function toFinanceProjectEstimate(
     issues: isExcluded ? ["项目已取消，暂不计入"] : issues,
     isExcluded,
   };
+}
+
+function revenueYearFromProjectCode(projectCode: string | null | undefined, plannedLaunchDate: string) {
+  const normalizedCode = (projectCode ?? "").trim();
+  const match = normalizedCode.match(/^(\d{2})/);
+
+  if (match) {
+    const shortYear = Number(match[1]);
+    if (Number.isFinite(shortYear)) {
+      return { year: 2000 + shortYear, source: "projectCode" as const };
+    }
+  }
+
+  return { year: Number(plannedLaunchDate.slice(0, 4)), source: "plannedLaunchDate" as const };
+}
+
+function normalizedSubsidiary(value: string | null | undefined) {
+  const text = (value ?? "").trim();
+  return text.length > 0 ? text : "未填写子公司";
 }
 
 function toFinanceConfigData(config: { id: string; discountRate: number; salesByLevel: unknown; updatedAt: Date }): FinanceConfigData {
