@@ -257,7 +257,11 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
     }
     if (!canApply) {
       setTone("warning");
-      setMessage("当前预览存在未校验、冲突或错误，暂不能确认导入。");
+      const nextFilter = firstBlockingFilter(preview);
+      if (nextFilter) {
+        setRowFilter(nextFilter);
+      }
+      setMessage(buildImportBlockerMessage(preview));
       return;
     }
 
@@ -683,4 +687,39 @@ function shanghaiToday() {
   const get = (type: string) => parts.find((part) => part.type === type)?.value;
 
   return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function firstBlockingFilter(preview: ProjectImportPreview): RowFilter | null {
+  if (preview.summary.invalidRows > 0 || preview.summary.errorCount > 0) {
+    return "invalid";
+  }
+  if (preview.summary.conflictRows > 0) {
+    return "conflict";
+  }
+  if (preview.summary.unverifiedRows > 0) {
+    return "unverified";
+  }
+
+  return null;
+}
+
+function buildImportBlockerMessage(preview: ProjectImportPreview) {
+  const blockers: string[] = [];
+
+  if (preview.summary.invalidRows > 0) {
+    blockers.push(`不可导入 ${preview.summary.invalidRows} 行`);
+  }
+  if (preview.summary.conflictRows > 0) {
+    blockers.push(`匹配冲突 ${preview.summary.conflictRows} 行`);
+  }
+  if (preview.summary.unverifiedRows > 0) {
+    blockers.push(`未校验 ${preview.summary.unverifiedRows} 行`);
+  }
+  if (preview.summary.errorCount > 0) {
+    blockers.push(`错误 ${preview.summary.errorCount} 条`);
+  }
+
+  return blockers.length > 0
+    ? `当前预览暂不能确认导入：${blockers.join("，")}。已自动筛选问题行，请查看表格「提示」列并修正 Excel 后重新生成预览。`
+    : "当前预览暂不能确认导入。请查看预览表格的提示列，修正 Excel 后重新生成预览。";
 }
