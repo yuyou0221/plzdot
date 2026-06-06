@@ -510,14 +510,15 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
 
   return Array.from(grouped.values())
     .map((group): ProjectCard | null => {
+      const milestoneRows = milestoneRowsForCard(group.rows, group.milestone);
       const plannedDate = maxDate(
-        group.rows.map((row) => row.plannedFinishDate ?? row.expectedFinishDate ?? row.forecastFinishDate),
+        milestoneRows.map((row) => row.plannedFinishDate ?? row.expectedFinishDate ?? row.forecastFinishDate),
       );
       const plannedMonth = plannedDate ? formatMonthLabel(dateToMonthPoint(plannedDate)) : null;
-      const riskLevel = groupRiskLevel(group.rows);
-      const completedDate = riskLevel === "done" ? completedMilestoneDate(group.rows) : null;
+      const riskLevel = groupRiskLevel(milestoneRows);
+      const completedDate = riskLevel === "done" ? completedMilestoneDate(milestoneRows) : null;
       const completedMonth = completedDate ? formatMonthLabel(dateToMonthPoint(completedDate)) : null;
-      const forecastMonth = completedMonth ?? maxDateMonth(group.rows.map(displayDateForForecastView));
+      const forecastMonth = completedMonth ?? maxDateMonth(milestoneRows.map(displayDateForForecastView));
       const month = plannedMonth ?? forecastMonth;
 
       if (!month) {
@@ -553,6 +554,14 @@ function normalizeMilestone(value: string, taskNo: number): Milestone | null {
   }
 
   return milestoneByTaskNo(taskNo);
+}
+
+function milestoneRowsForCard(rows: TaskResultRow[], milestone: Milestone) {
+  if (milestone !== "红蜡里程碑") {
+    return rows;
+  }
+
+  return rows.filter((row) => row.taskNo !== 18);
 }
 
 function groupRiskLevel(rows: TaskResultRow[]): RiskLevel {
