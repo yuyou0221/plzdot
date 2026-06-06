@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { ModelingContractError, reopenApprovedModelingStyle } from "@/lib/modeling-product-guide-contract";
+import { consumeModelingWritebackDraftAndRecalculate } from "@/lib/schedule-recalculation";
 
 export const runtime = "nodejs";
 
@@ -19,12 +20,16 @@ export async function POST(request: Request) {
   try {
     const result = await reopenApprovedModelingStyle(payload, auth.user);
     const { writebackDraft, ...publicResult } = result;
+    const scheduleSync = await consumeModelingWritebackDraftAndRecalculate(writebackDraft, {
+      createdBy: auth.user.id,
+    });
 
     return NextResponse.json({
       ok: true,
       message: `已通过款式已重开：${result.styleName}。`,
       ...publicResult,
       projectScheduleReadiness: writebackDraft,
+      scheduleSync,
     });
   } catch (error) {
     if (error instanceof ModelingContractError) {
