@@ -49,7 +49,7 @@ type ProjectTaskFactEventType =
   | "task_resumed"
   | "task_note_updated";
 
-type ProjectTaskFactEventSourceModule = "product-guide" | "manual-excel";
+type ProjectTaskFactEventSourceModule = "product-guide" | "manual-excel" | "modeling-schedule";
 
 export type ProjectTaskFactEvent = {
   eventId: string;
@@ -118,8 +118,8 @@ export function parseProjectTaskFactEvent(value: unknown): ProjectTaskFactEvent 
   }
 
   const sourceModule = requiredString(value.sourceModule, "sourceModule");
-  if (sourceModule !== "product-guide" && sourceModule !== "manual-excel") {
-    throw new TaskFactEventValidationError("任务事实事件 sourceModule 必须是 product-guide 或 manual-excel。");
+  if (sourceModule !== "product-guide" && sourceModule !== "manual-excel" && sourceModule !== "modeling-schedule") {
+    throw new TaskFactEventValidationError("任务事实事件 sourceModule 必须是 product-guide、manual-excel 或 modeling-schedule。");
   }
 
   const taskNo = positiveInteger(value.taskNo, "taskNo");

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { ModelingTaskUpdateError, submitModelingWork } from "@/lib/modeling-schedule-mutation";
 import { getModelingScheduleData } from "@/lib/modeling-schedule-repository";
+import { consumeModelingWritebackDraftAndRecalculate } from "@/lib/schedule-recalculation";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const data = await getModelingScheduleData();
     const task = data.tasks.find((item) => item.id === id);
     const projectSummary = data.projectSummaries.find((project) => project.projectId === result.projectId);
+    const scheduleSync = await consumeModelingWritebackDraftAndRecalculate(result.writebackDraft, {
+      createdBy: auth.user.id,
+    });
 
     return NextResponse.json({
       ok: true,
@@ -32,6 +36,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       reviewRequest: result.reviewRequest,
       productGuideEvent: result.productGuideEvent,
       projectScheduleReadiness: result.writebackDraft,
+      scheduleSync,
     });
   } catch (error) {
     if (error instanceof ModelingTaskUpdateError) {

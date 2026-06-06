@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/db/prisma";
 import { isDemoDataAllowed } from "@/lib/runtime-flags";
-import { isKnownMilestone, milestoneByTaskNo } from "@/lib/schedule-domain";
+import {
+  evaluateScheduleMilestoneRiskLevel,
+  isCompletedScheduleMilestoneTask,
+  isKnownMilestone,
+  milestoneByTaskNo,
+} from "@/lib/schedule-domain";
 import { getLatestOfficialScheduleRun } from "@/lib/schedule-engine/official-runs";
 import { excludeScheduleSimulationProjectsWhere } from "@/lib/schedule-simulation";
 import {
@@ -551,24 +556,11 @@ function normalizeMilestone(value: string, taskNo: number): Milestone | null {
 }
 
 function groupRiskLevel(rows: TaskResultRow[]): RiskLevel {
-  if (rows.length > 0 && rows.every(isCompletedTask)) {
-    return rows.some((row) => toRiskLevel(row.riskLevel) === "doneLate") ? "doneLate" : "done";
-  }
-
-  return rows.filter((row) => !isCompletedTask(row)).reduce<RiskLevel>((level, row) => {
-    return worseRiskLevel(level, toRiskLevel(row.riskLevel));
-  }, "normal");
-}
-
-function isCompletedTask(row: TaskResultRow) {
-  return [row.displayStatus, row.taskActionType].some((value) => {
-    if (!value) return false;
-    return value.includes("已完成") || value.includes("已通过");
-  });
+  return evaluateScheduleMilestoneRiskLevel(rows, (row) => toRiskLevel(row.riskLevel));
 }
 
 function displayDateForForecastView(row: TaskResultRow) {
-  if (isCompletedTask(row)) {
+  if (isCompletedScheduleMilestoneTask(row)) {
     return completionDateForRow(row) ?? row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate;
   }
 
@@ -682,18 +674,6 @@ function toRiskLevel(value: string | null | undefined): RiskLevel {
 
 function isProjectCard(card: ProjectCard | null): card is ProjectCard {
   return card !== null;
-}
-
-function worseRiskLevel(a: RiskLevel, b: RiskLevel) {
-  const weight: Record<RiskLevel, number> = {
-    done: 0,
-    doneLate: 0,
-    normal: 1,
-    risk: 2,
-    delay: 3,
-  };
-
-  return weight[b] > weight[a] ? b : a;
 }
 
 function isFinishedRiskLevel(riskLevel: RiskLevel) {

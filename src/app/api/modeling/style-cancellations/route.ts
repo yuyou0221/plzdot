@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
 import { cancelModelingStyle, ModelingContractError } from "@/lib/modeling-product-guide-contract";
+import { consumeModelingWritebackDraftAndRecalculate } from "@/lib/schedule-recalculation";
 
 export const runtime = "nodejs";
 
@@ -19,12 +20,16 @@ export async function POST(request: Request) {
   try {
     const result = await cancelModelingStyle(payload, auth.user);
     const { writebackDraft, ...publicResult } = result;
+    const scheduleSync = await consumeModelingWritebackDraftAndRecalculate(writebackDraft, {
+      createdBy: auth.user.id,
+    });
 
     return NextResponse.json({
       ok: true,
       message: `款式已取消：${result.styleName}。`,
       ...publicResult,
       projectScheduleReadiness: writebackDraft,
+      scheduleSync,
     });
   } catch (error) {
     if (error instanceof ModelingContractError) {
