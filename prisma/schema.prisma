@@ -187,6 +187,7 @@ model FinanceProjectFact {
   projectId                String   @unique
   actualDevelopmentCost    Float?
   actualProductionUnitCost Float?
+  actualRevenue            Float?
   totalOrderQuantity       Int?
   actualSales              Int?
   channelSampleQuantity    Int?

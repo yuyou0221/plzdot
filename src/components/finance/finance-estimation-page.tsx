@@ -51,14 +51,14 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold text-rose-600">财务测算</p>
-                <h2 className="mt-1 text-2xl font-black text-slate-950">年度项目营收与实际结果测算</h2>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">年度项目营收与当前盈亏测算</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
                   读取项目主数据，按规格、零售价、统一折扣和项目等级预测销量计算理论营收；同时维护项目级实际开发成本、实际单件生产成本、订单、销量、渠道样品和展示盒数据，形成更接近真实经营结果的项目测算。
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                 <div className="font-semibold text-slate-900">核心公式</div>
-                <div className="mt-1">实际结果 = 实际营收 - 开发成本 - 样品成本 - 展示盒成本 - 库存成本</div>
+                <div className="mt-1">当前盈亏 = 实际营收 - 开发成本 - 样品成本 - 展示盒成本 - 库存成本 - 已售生产成本</div>
                 <div className="mt-1 text-xs">规则版本：{data.ruleVersion}</div>
               </div>
             </div>
@@ -97,7 +97,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                 icon={<CircleDollarSign size={18} />}
                 label="实际营收"
                 value={formatWan(data.summary.totalActualRevenueWan)}
-                helper={`${data.summary.actualCalculatedProjectCount} 个项目可计算实际结果`}
+                helper={`${data.summary.actualCalculatedProjectCount} 个项目可计算当前盈亏`}
               />
               <MetricCard
                 icon={<TrendingDown size={18} />}
@@ -107,13 +107,18 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
               />
               <MetricCard
                 icon={<PackageOpen size={18} />}
-                label="样品 + 展示盒 + 库存成本"
-                value={formatWan(data.summary.totalChannelSampleCostWan + data.summary.totalDisplayBoxCostWan + data.summary.totalInventoryCostWan)}
-                helper={`样品 ${formatWan(data.summary.totalChannelSampleCostWan)}，展示盒 ${formatWan(data.summary.totalDisplayBoxCostWan)}，库存 ${formatWan(data.summary.totalInventoryCostWan)}`}
+                label="生产 + 样品 + 展示盒 + 库存成本"
+                value={formatWan(
+                  data.summary.totalActualSalesProductionCostWan +
+                    data.summary.totalChannelSampleCostWan +
+                    data.summary.totalDisplayBoxCostWan +
+                    data.summary.totalInventoryCostWan,
+                )}
+                helper={`已售 ${formatWan(data.summary.totalActualSalesProductionCostWan)}，样品 ${formatWan(data.summary.totalChannelSampleCostWan)}，展示盒 ${formatWan(data.summary.totalDisplayBoxCostWan)}，库存 ${formatWan(data.summary.totalInventoryCostWan)}`}
               />
               <MetricCard
                 icon={<Boxes size={18} />}
-                label="实际测算结果"
+                label="当前盈亏"
                 value={formatWan(data.summary.totalActualResultWan)}
                 helper={`${data.summary.negativeInventoryProjectCount} 个项目库存为负`}
               />

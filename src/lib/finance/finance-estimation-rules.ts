@@ -1,4 +1,4 @@
-export const financeRuleVersion = "finance-actuals-v3-20260611";
+export const financeRuleVersion = "finance-actuals-v4-20260611";
 
 export type FinanceLevelKey = "S" | "A" | "B" | "C";
 

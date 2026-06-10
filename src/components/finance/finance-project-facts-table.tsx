@@ -48,7 +48,7 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
               <th className="px-3 py-3 text-right">实际营收</th>
               <th className="px-3 py-3 text-right">实际开发成本</th>
               <th className="px-3 py-3 text-right">库存</th>
-              <th className="px-3 py-3 text-right">实际测算结果</th>
+              <th className="px-3 py-3 text-right">当前盈亏</th>
               <th className="px-3 py-3">状态</th>
               <th className="px-3 py-3">操作</th>
             </tr>
