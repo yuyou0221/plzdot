@@ -227,6 +227,8 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <PreviewRow label="理想销量" value={formatInteger(preview.idealSalesQuantity)} />
             <PreviewRow label="理论测算销量" value={formatInteger(preview.theoreticalSalesQuantity)} />
             <PreviewRow label="理论开发成本" value={formatWan(project.theoreticalDevelopmentCostWan)} />
+            <PreviewRow label="理论盈亏扣除开发成本" value={formatWan(toWanOrNull(preview.theoreticalProfitDevelopmentCost))} />
+            <PreviewRow label="理论盈亏开发成本来源" value={formatProfitDevelopmentCostSource(preview.theoreticalProfitDevelopmentCostSource)} />
             <PreviewRow label="理论生产单件成本" value={formatYuan(project.theoreticalProductionUnitCost)} />
             <PreviewRow label="实际测算用单件成本" value={formatYuan(preview.productionUnitCostForActual)} />
             <PreviewRow label="单件成本来源" value={formatProductionUnitCostSource(preview.productionUnitCostSource)} />
@@ -256,7 +258,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <p>渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本</p>
             <p>已售生产成本 = 实际销量 × 实际测算用单件生产成本</p>
             <p>总库存 = 总订单 - 实际销量 - 渠道样品量</p>
-            <p>理论盈亏 = 理论测算营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 理论测算销量的生产成本</p>
+            <p>理论盈亏 = 理论测算营收 - 开发成本 - 样品成本 - 展示盒成本 - 理论测算销量的生产成本；开发成本优先取实际录入，未录入时用理论开发成本。</p>
             <p>浮动盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 已售生产成本</p>
             <p>当前盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本 - 已售生产成本</p>
           </div>
@@ -325,6 +327,7 @@ function PreviewRow({ label, value, tone = "default" }: { label: string; value: 
 
 function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) {
   const actualDevelopmentCost = parseDraftNumber(draft.actualDevelopmentCost);
+  const actualDevelopmentCostInput = parseOptionalDraftNumber(draft.actualDevelopmentCost);
   const actualProductionUnitCost = parseOptionalDraftNumber(draft.actualProductionUnitCost);
   const actualRevenueInput = parseOptionalDraftNumber(draft.actualRevenue);
   const totalOrderQuantity = parseDraftNumber(draft.totalOrderQuantity);
@@ -364,10 +367,16 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
     productionUnitCostForActual === null || theoreticalSalesQuantity === null
       ? null
       : roundMoney(theoreticalSalesQuantity * productionUnitCostForActual);
+  const theoreticalProfitDevelopmentCost = actualDevelopmentCostInput ?? project.theoreticalDevelopmentCost;
+  const theoreticalProfitDevelopmentCostSource: FinanceProjectEstimate["theoreticalProfitDevelopmentCostSource"] =
+    actualDevelopmentCostInput !== null ? "actual" : project.theoreticalDevelopmentCost !== null ? "theoretical" : "missing";
   const theoreticalProfit =
-    theoreticalProfitRevenue === null || channelSampleCost === null || theoreticalProfitProductionCost === null
+    theoreticalProfitRevenue === null ||
+    theoreticalProfitDevelopmentCost === null ||
+    channelSampleCost === null ||
+    theoreticalProfitProductionCost === null
       ? null
-      : roundMoney(theoreticalProfitRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
+      : roundMoney(theoreticalProfitRevenue - theoreticalProfitDevelopmentCost - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
   const floatingProfit =
     actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
@@ -388,6 +397,8 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
     idealSalesQuantity,
     theoreticalSalesQuantity,
     theoreticalProfitRevenue,
+    theoreticalProfitDevelopmentCost,
+    theoreticalProfitDevelopmentCostSource,
     theoreticalProfitProductionCost,
     theoreticalProfit,
     channelSampleCost,
@@ -457,6 +468,18 @@ function formatProductionUnitCostSource(value: "actual" | "theoretical" | "missi
 
   if (value === "theoretical") {
     return "理论兜底";
+  }
+
+  return "待补";
+}
+
+function formatProfitDevelopmentCostSource(value: "actual" | "theoretical" | "missing") {
+  if (value === "actual") {
+    return "实际录入";
+  }
+
+  if (value === "theoretical") {
+    return "理论开发成本兜底";
   }
 
   return "待补";
