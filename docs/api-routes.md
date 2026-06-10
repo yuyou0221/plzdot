@@ -338,6 +338,54 @@ project-main：项目主数据 Excel，合并补充模式。
 5. 任务规则v4 为只读规则快照，导入时只用于任务名称匹配，不允许通过 Excel 改核心排期逻辑。
 ```
 
+## 财务测算 API
+
+当前路由：
+
+```text
+PATCH /api/finance/config
+PATCH /api/finance/projects/:projectId/facts
+```
+
+当前行为：
+
+```text
+1. 仅 admin 可写。
+2. PATCH /api/finance/config 保存统一折扣和各项目等级预测销量。
+3. PATCH /api/finance/projects/:projectId/facts 保存项目级财务事实，每个项目最多一条记录。
+4. 项目级财务事实包含：实际开发成本、总订单数量、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
+5. 库存不允许手填，由系统计算：总库存 = 总订单数量 - 实际销量 - 渠道样品量。
+6. 财务事实只用于财务测算，不回写项目排期、产品组工作指引或建模排期。
+```
+
+`PATCH /api/finance/projects/:projectId/facts` 请求示例：
+
+```json
+{
+  "actualDevelopmentCost": 120000,
+  "totalOrderQuantity": 30000,
+  "actualSales": 18000,
+  "channelSampleQuantity": 120,
+  "displayBoxQuantity": 300,
+  "displayBoxUnitPrice": 9.5,
+  "notes": "第一批订单已录入"
+}
+```
+
+财务测算固定公式：
+
+```text
+理论开发成本 = 零售价 × 10000 / 6
+理论生产单件成本 = 零售价 × 32.5%
+理论营收 = 规格 × 零售价 × 折扣 × 项目等级预测销量
+实际营收 = 零售价 × 折扣 × 实际销量
+渠道样品成本 = 渠道样品量 × 理论生产单件成本
+展示盒成本 = 展示盒数量 × 展示盒单价
+库存成本 = 总库存 × 理论生产单件成本
+实际测算结果 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本
+开发成本差异 = 实际开发成本 - 理论开发成本
+```
+
 ## 排期内核调用边界
 
 项目排期 API 不直接调用 legacy 排期脚本。当前统一入口：
