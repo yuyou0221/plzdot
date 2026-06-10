@@ -358,6 +358,14 @@ PATCH /api/finance/projects/:projectId/facts
 6. 财务事实只用于财务测算，不回写项目排期、产品组工作指引或建模排期。
 ```
 
+页面入口：
+
+```text
+1. /finance 是年度财务测算总览页，展示年度、子公司、等级汇总和项目级关键结果。
+2. /finance/projects/:projectId 是单项目财务编辑页，用于录入实际开发成本、总订单、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
+3. 单项目编辑页会实时预览总库存、实际营收、样品成本、展示盒成本、库存成本、实际测算结果和开发成本差异。
+```
+
 `PATCH /api/finance/projects/:projectId/facts` 请求示例：
 
 ```json

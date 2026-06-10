@@ -269,6 +269,52 @@ export async function getFinanceEstimationData(options: { year?: number | null }
   };
 }
 
+export async function getFinanceProjectEstimate(projectId: string): Promise<FinanceProjectEstimate | null> {
+  const normalizedProjectId = projectId.trim();
+
+  if (!normalizedProjectId) {
+    return null;
+  }
+
+  const [config, project, fact] = await Promise.all([
+    getOrCreateFinanceConfig(),
+    prisma.project.findUnique({
+      where: { id: normalizedProjectId },
+      select: {
+        id: true,
+        projectCode: true,
+        projectName: true,
+        licensorName: true,
+        ipName: true,
+        subsidiary: true,
+        productType: true,
+        productLine: true,
+        styleCount: true,
+        retailPrice: true,
+        projectLevel: true,
+        plannedLaunchDate: true,
+        status: true,
+      },
+    }),
+    prisma.financeProjectFact.findUnique({
+      where: { projectId: normalizedProjectId },
+      select: {
+        projectId: true,
+        actualDevelopmentCost: true,
+        totalOrderQuantity: true,
+        actualSales: true,
+        channelSampleQuantity: true,
+        displayBoxQuantity: true,
+        displayBoxUnitPrice: true,
+        notes: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+
+  return project ? toFinanceProjectEstimate(project, config, fact) : null;
+}
+
 export async function updateFinanceEstimationConfig(input: { discountRate: unknown; salesByLevel: unknown; updatedByUserId?: string | null }) {
   const discountRate = normalizeFinanceDiscount(input.discountRate);
   const salesByLevel = normalizeFinanceSalesByLevel(input.salesByLevel);
