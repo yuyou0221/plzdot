@@ -11,6 +11,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ proje
 
   const payload = (await request.json().catch(() => null)) as {
     actualDevelopmentCost?: unknown;
+    actualProductionUnitCost?: unknown;
     totalOrderQuantity?: unknown;
     actualSales?: unknown;
     channelSampleQuantity?: unknown;
@@ -29,6 +30,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ proje
     const fact = await updateFinanceProjectFact({
       projectId,
       actualDevelopmentCost: payload.actualDevelopmentCost,
+      actualProductionUnitCost: payload.actualProductionUnitCost,
       totalOrderQuantity: payload.totalOrderQuantity,
       actualSales: payload.actualSales,
       channelSampleQuantity: payload.channelSampleQuantity,

@@ -183,18 +183,19 @@ model FinanceEstimationConfig {
 }
 
 model FinanceProjectFact {
-  id                    String   @id @default(uuid())
-  projectId             String   @unique
-  actualDevelopmentCost Float?
-  totalOrderQuantity    Int?
-  actualSales           Int?
-  channelSampleQuantity Int?
-  displayBoxQuantity    Int?
-  displayBoxUnitPrice   Float?
-  notes                 String?
-  updatedByUserId       String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                       String   @id @default(uuid())
+  projectId                String   @unique
+  actualDevelopmentCost    Float?
+  actualProductionUnitCost Float?
+  totalOrderQuantity       Int?
+  actualSales              Int?
+  channelSampleQuantity    Int?
+  displayBoxQuantity       Int?
+  displayBoxUnitPrice      Float?
+  notes                    String?
+  updatedByUserId          String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   @@index([updatedAt])
   @@index([updatedByUserId])
