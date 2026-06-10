@@ -36,7 +36,7 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
       ) : null}
 
       <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[1520px] text-left text-sm">
+        <table className="min-w-[1640px] text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
               <th className="px-3 py-3">项目</th>
@@ -48,6 +48,7 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
               <th className="px-3 py-3 text-right">实际营收</th>
               <th className="px-3 py-3 text-right">实际开发成本</th>
               <th className="px-3 py-3 text-right">库存</th>
+              <th className="px-3 py-3 text-right">理论盈亏</th>
               <th className="px-3 py-3 text-right">浮动盈亏</th>
               <th className="px-3 py-3 text-right">当前盈亏</th>
               <th className="px-3 py-3">状态</th>
@@ -83,6 +84,9 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
                 <td className="px-3 py-3 text-right text-slate-700">{formatYuan(project.actualFact.actualDevelopmentCost)}</td>
                 <td className={project.hasNegativeInventory ? "px-3 py-3 text-right font-black text-red-600" : "px-3 py-3 text-right font-semibold text-slate-800"}>
                   {numberFormatter.format(project.totalInventory)}
+                </td>
+                <td className={project.theoreticalProfit !== null && project.theoreticalProfit < 0 ? "px-3 py-3 text-right font-black text-red-600" : "px-3 py-3 text-right font-black text-slate-950"}>
+                  {formatWan(project.theoreticalProfitWan)}
                 </td>
                 <td className={project.floatingProfit !== null && project.floatingProfit < 0 ? "px-3 py-3 text-right font-black text-red-600" : "px-3 py-3 text-right font-black text-slate-950"}>
                   {formatWan(project.floatingProfitWan)}
