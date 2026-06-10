@@ -18,6 +18,7 @@ const productionCostRate = 0.325;
 export type FinanceProjectFactData = {
   actualDevelopmentCost: number | null;
   actualProductionUnitCost: number | null;
+  actualRevenue: number | null;
   totalOrderQuantity: number | null;
   actualSales: number | null;
   channelSampleQuantity: number | null;
@@ -61,8 +62,12 @@ export type FinanceProjectEstimate = {
   actualFact: FinanceProjectFactData;
   actualRevenue: number | null;
   actualRevenueWan: number | null;
+  actualRevenueFormula: number | null;
+  actualRevenueSource: "actual" | "formula" | "missing";
   channelSampleCost: number | null;
   channelSampleCostWan: number | null;
+  actualSalesProductionCost: number | null;
+  actualSalesProductionCostWan: number | null;
   displayBoxCost: number;
   displayBoxCostWan: number;
   totalInventory: number;
@@ -115,6 +120,8 @@ export type FinanceEstimationData = {
     totalActualDevelopmentCostWan: number;
     totalChannelSampleCost: number;
     totalChannelSampleCostWan: number;
+    totalActualSalesProductionCost: number;
+    totalActualSalesProductionCostWan: number;
     totalDisplayBoxCost: number;
     totalDisplayBoxCostWan: number;
     totalInventoryCost: number;
@@ -151,6 +158,7 @@ type FinanceFactRecord = {
   projectId: string;
   actualDevelopmentCost: number | null;
   actualProductionUnitCost: number | null;
+  actualRevenue: number | null;
   totalOrderQuantity: number | null;
   actualSales: number | null;
   channelSampleQuantity: number | null;
@@ -193,6 +201,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
         projectId: true,
         actualDevelopmentCost: true,
         actualProductionUnitCost: true,
+        actualRevenue: true,
         totalOrderQuantity: true,
         actualSales: true,
         channelSampleQuantity: true,
@@ -226,15 +235,15 @@ export async function getFinanceEstimationData(options: { year?: number | null }
     availableYears,
     assumptions: [
       "理论营收 = 规格（款式数）× 零售价 × 统一折扣 × 项目等级预测销量。",
-      "理论开发成本 = 零售价 × 10000 / 6。",
+      "理论开发成本 = 零售价 × 10000 × 规格（款式数） / 6。",
       "理论生产单件成本 = 零售价 × 32.5%。",
       "实际单件生产成本可以按项目录入；录入后，渠道样品成本和库存成本优先使用实际单件生产成本。",
       "如果实际单件生产成本未录入，渠道样品成本和库存成本暂按理论生产单件成本计算。",
-      "实际营收 = 零售价 × 统一折扣 × 实际销量。",
+      "实际营收可以按项目录入；未录入时，暂按零售价 × 统一折扣 × 实际销量计算。",
       "渠道样品成本 = 渠道展示样品数量 × 实际测算用单件生产成本。",
       "展示盒成本 = 展示盒数量 × 展示盒单价。",
       "总库存 = 总订单数量 - 实际销量 - 渠道展示样品数量，库存成本 = 总库存 × 实际测算用单件生产成本。",
-      "实际测算结果 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本。",
+      "当前盈亏 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本 - 实际销量的生产成本。",
       "未录入的数量和金额字段按 0 参与实际测算，但会在项目行提示未录入。",
       "营收年度优先按项目编号前两位归属，例如 26xxx 计入 2026 年，27xxx 计入 2027 年。",
       "金额汇总按万元展示；编辑录入金额时使用元。",
@@ -310,6 +319,7 @@ export async function getFinanceProjectEstimate(projectId: string): Promise<Fina
         projectId: true,
         actualDevelopmentCost: true,
         actualProductionUnitCost: true,
+        actualRevenue: true,
         totalOrderQuantity: true,
         actualSales: true,
         channelSampleQuantity: true,
@@ -350,6 +360,7 @@ export async function updateFinanceProjectFact(input: {
   projectId: string;
   actualDevelopmentCost: unknown;
   actualProductionUnitCost: unknown;
+  actualRevenue: unknown;
   totalOrderQuantity: unknown;
   actualSales: unknown;
   channelSampleQuantity: unknown;
@@ -379,6 +390,7 @@ export async function updateFinanceProjectFact(input: {
       projectId,
       actualDevelopmentCost: normalizeOptionalMoney(input.actualDevelopmentCost, "实际开发成本"),
       actualProductionUnitCost: normalizeOptionalMoney(input.actualProductionUnitCost, "实际单件生产成本"),
+      actualRevenue: normalizeOptionalMoney(input.actualRevenue, "实际营收"),
       totalOrderQuantity: normalizeOptionalQuantity(input.totalOrderQuantity, "总订单数量"),
       actualSales: normalizeOptionalQuantity(input.actualSales, "实际销量"),
       channelSampleQuantity: normalizeOptionalQuantity(input.channelSampleQuantity, "渠道样品量"),
@@ -390,6 +402,7 @@ export async function updateFinanceProjectFact(input: {
     update: {
       actualDevelopmentCost: normalizeOptionalMoney(input.actualDevelopmentCost, "实际开发成本"),
       actualProductionUnitCost: normalizeOptionalMoney(input.actualProductionUnitCost, "实际单件生产成本"),
+      actualRevenue: normalizeOptionalMoney(input.actualRevenue, "实际营收"),
       totalOrderQuantity: normalizeOptionalQuantity(input.totalOrderQuantity, "总订单数量"),
       actualSales: normalizeOptionalQuantity(input.actualSales, "实际销量"),
       channelSampleQuantity: normalizeOptionalQuantity(input.channelSampleQuantity, "渠道样品量"),
@@ -432,7 +445,6 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
 
     if (!retailPriceValue) {
       issues.push("缺少有效零售价");
-      actualIssues.push("缺少有效零售价，实际营收暂不能计算");
     }
 
     if (!level) {
@@ -464,7 +476,9 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
   const channelSampleQuantityForCalc = actualFact.channelSampleQuantity ?? 0;
   const displayBoxQuantityForCalc = actualFact.displayBoxQuantity ?? 0;
   const displayBoxUnitPriceForCalc = actualFact.displayBoxUnitPrice ?? 0;
-  const theoreticalDevelopmentCost = retailPriceValue === null ? null : roundMoney((retailPriceValue * 10000) / 6);
+  const styleCountForCost = project.styleCount && project.styleCount > 0 ? project.styleCount : null;
+  const theoreticalDevelopmentCost =
+    retailPriceValue === null || styleCountForCost === null ? null : roundMoney((retailPriceValue * 10000 * styleCountForCost) / 6);
   const theoreticalProductionUnitCost = retailPriceValue === null ? null : roundMoney(retailPriceValue * productionCostRate);
   const productionUnitCostForActual = actualFact.actualProductionUnitCost ?? theoreticalProductionUnitCost;
   const productionUnitCostSource =
@@ -473,16 +487,27 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     actualFact.actualProductionUnitCost !== null && theoreticalProductionUnitCost !== null
       ? roundMoney(actualFact.actualProductionUnitCost - theoreticalProductionUnitCost)
       : null;
-  const actualRevenue = retailPriceValue === null ? null : roundMoney(retailPriceValue * config.discountRate * actualSalesForCalc);
+  const actualRevenueFormula = retailPriceValue === null ? null : roundMoney(retailPriceValue * config.discountRate * actualSalesForCalc);
+  const actualRevenue = actualFact.actualRevenue ?? actualRevenueFormula;
+  const actualRevenueSource = actualFact.actualRevenue !== null ? "actual" : actualRevenueFormula !== null ? "formula" : "missing";
   const channelSampleCost =
     productionUnitCostForActual === null ? null : roundMoney(channelSampleQuantityForCalc * productionUnitCostForActual);
+  const actualSalesProductionCost =
+    productionUnitCostForActual === null ? null : roundMoney(actualSalesForCalc * productionUnitCostForActual);
   const displayBoxCost = roundMoney(displayBoxQuantityForCalc * displayBoxUnitPriceForCalc);
   const totalInventory = totalOrderQuantityForCalc - actualSalesForCalc - channelSampleQuantityForCalc;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
   const actualResult =
-    actualRevenue === null || channelSampleCost === null || inventoryCost === null
+    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null || inventoryCost === null
       ? null
-      : roundMoney(actualRevenue - actualDevelopmentCostForCalc - channelSampleCost - displayBoxCost - inventoryCost);
+      : roundMoney(
+          actualRevenue -
+            actualDevelopmentCostForCalc -
+            channelSampleCost -
+            displayBoxCost -
+            inventoryCost -
+            actualSalesProductionCost,
+        );
   const developmentCostVariance =
     theoreticalDevelopmentCost === null ? null : roundMoney(actualDevelopmentCostForCalc - theoreticalDevelopmentCost);
   const hasNegativeInventory = totalInventory < 0;
@@ -497,6 +522,14 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
 
   if (productionUnitCostForActual === null) {
     actualIssues.push("实际单件生产成本未录入，且无法推导理论生产单件成本");
+  }
+
+  if (actualFact.actualRevenue === null && actualRevenueFormula !== null) {
+    actualIssues.push("实际营收未录入，暂按零售价 × 折扣 × 实际销量计算");
+  }
+
+  if (actualRevenue === null) {
+    actualIssues.push("实际营收未录入，且无法按零售价公式兜底");
   }
 
   return {
@@ -533,8 +566,12 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     actualFact,
     actualRevenue,
     actualRevenueWan: actualRevenue === null ? null : toWan(actualRevenue),
+    actualRevenueFormula,
+    actualRevenueSource,
     channelSampleCost,
     channelSampleCostWan: channelSampleCost === null ? null : toWan(channelSampleCost),
+    actualSalesProductionCost,
+    actualSalesProductionCostWan: actualSalesProductionCost === null ? null : toWan(actualSalesProductionCost),
     displayBoxCost,
     displayBoxCostWan: toWan(displayBoxCost),
     totalInventory,
@@ -549,9 +586,9 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
         ? null
         : `${project.styleCount} × ${retailPriceValue} × ${config.discountRate} × ${predictedSales}`,
     actualFormulaText:
-      actualResult === null || retailPriceValue === null
+      actualResult === null
         ? null
-        : `实际营收 ${actualRevenue} - 开发 ${actualDevelopmentCostForCalc} - 样品 ${channelSampleCost} - 展示盒 ${displayBoxCost} - 库存 ${inventoryCost}`,
+        : `实际营收 ${actualRevenue} - 开发 ${actualDevelopmentCostForCalc} - 样品 ${channelSampleCost} - 展示盒 ${displayBoxCost} - 库存 ${inventoryCost} - 已售生产 ${actualSalesProductionCost}`,
     issues: isExcluded ? ["项目已取消，暂不计入汇总"] : issues,
     actualIssues: isExcluded ? ["项目已取消，实际测算暂不计入汇总"] : actualIssues,
     hasNegativeInventory,
@@ -567,6 +604,8 @@ function buildActualSummary(projects: FinanceProjectEstimate[]) {
     totalActualDevelopmentCostWan: toWan(projects.reduce((total, project) => total + (project.actualFact.actualDevelopmentCost ?? 0), 0)),
     totalChannelSampleCost: sumNullable(projects, (project) => project.channelSampleCost),
     totalChannelSampleCostWan: toWan(sumNullable(projects, (project) => project.channelSampleCost)),
+    totalActualSalesProductionCost: sumNullable(projects, (project) => project.actualSalesProductionCost),
+    totalActualSalesProductionCostWan: toWan(sumNullable(projects, (project) => project.actualSalesProductionCost)),
     totalDisplayBoxCost: projects.reduce((total, project) => total + project.displayBoxCost, 0),
     totalDisplayBoxCostWan: toWan(projects.reduce((total, project) => total + project.displayBoxCost, 0)),
     totalInventoryCost: sumNullable(projects, (project) => project.inventoryCost),
@@ -601,6 +640,7 @@ function toFinanceProjectFactData(fact: FinanceFactRecord | null | undefined): F
   return {
     actualDevelopmentCost: fact?.actualDevelopmentCost ?? null,
     actualProductionUnitCost: fact?.actualProductionUnitCost ?? null,
+    actualRevenue: fact?.actualRevenue ?? null,
     totalOrderQuantity: fact?.totalOrderQuantity ?? null,
     actualSales: fact?.actualSales ?? null,
     channelSampleQuantity: fact?.channelSampleQuantity ?? null,

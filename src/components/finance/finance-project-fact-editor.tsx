@@ -13,6 +13,7 @@ type FinanceProjectFactEditorProps = {
 type FinanceFactDraft = {
   actualDevelopmentCost: string;
   actualProductionUnitCost: string;
+  actualRevenue: string;
   totalOrderQuantity: string;
   actualSales: string;
   channelSampleQuantity: string;
@@ -34,6 +35,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
   const [draft, setDraft] = useState<FinanceFactDraft>(() => ({
     actualDevelopmentCost: toInputValue(project.actualFact.actualDevelopmentCost),
     actualProductionUnitCost: toInputValue(project.actualFact.actualProductionUnitCost),
+    actualRevenue: toInputValue(project.actualFact.actualRevenue),
     totalOrderQuantity: toInputValue(project.actualFact.totalOrderQuantity),
     actualSales: toInputValue(project.actualFact.actualSales),
     channelSampleQuantity: toInputValue(project.actualFact.channelSampleQuantity),
@@ -59,6 +61,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
       body: JSON.stringify({
         actualDevelopmentCost: emptyToNull(draft.actualDevelopmentCost),
         actualProductionUnitCost: emptyToNull(draft.actualProductionUnitCost),
+        actualRevenue: emptyToNull(draft.actualRevenue),
         totalOrderQuantity: emptyToNull(draft.totalOrderQuantity),
         actualSales: emptyToNull(draft.actualSales),
         channelSampleQuantity: emptyToNull(draft.channelSampleQuantity),
@@ -120,6 +123,14 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             value={draft.actualProductionUnitCost}
             onChange={(value) => updateDraft("actualProductionUnitCost", value)}
             placeholder="例如 12.5"
+            inputMode="decimal"
+          />
+          <InputField
+            label="实际营收"
+            helper="单位：元。不填时暂按零售价 × 折扣 × 实际销量计算。"
+            value={draft.actualRevenue}
+            onChange={(value) => updateDraft("actualRevenue", value)}
+            placeholder="例如 320000"
             inputMode="decimal"
           />
           <InputField
@@ -219,11 +230,13 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <PreviewRow label="单件成本来源" value={formatProductionUnitCostSource(preview.productionUnitCostSource)} />
             <PreviewRow label="单件成本差异" value={formatYuan(preview.productionUnitCostVariance)} tone={preview.productionUnitCostVariance !== null && preview.productionUnitCostVariance > 0 ? "warning" : "default"} />
             <PreviewRow label="实际营收" value={formatWan(toWanOrNull(preview.actualRevenue))} />
+            <PreviewRow label="实际营收来源" value={formatActualRevenueSource(preview.actualRevenueSource)} />
             <PreviewRow label="渠道样品成本" value={formatWan(toWanOrNull(preview.channelSampleCost))} />
+            <PreviewRow label="已售生产成本" value={formatWan(toWanOrNull(preview.actualSalesProductionCost))} />
             <PreviewRow label="展示盒成本" value={formatWan(toWan(preview.displayBoxCost))} />
             <PreviewRow label="总库存" value={formatInteger(preview.totalInventory)} tone={preview.hasNegativeInventory ? "danger" : "default"} />
             <PreviewRow label="库存成本" value={formatWan(toWanOrNull(preview.inventoryCost))} />
-            <PreviewRow label="实际测算结果" value={formatWan(toWanOrNull(preview.actualResult))} tone={preview.actualResult !== null && preview.actualResult < 0 ? "danger" : "strong"} />
+            <PreviewRow label="当前盈亏" value={formatWan(toWanOrNull(preview.actualResult))} tone={preview.actualResult !== null && preview.actualResult < 0 ? "danger" : "strong"} />
             <PreviewRow label="开发成本差异" value={formatWan(toWanOrNull(preview.developmentCostVariance))} tone={preview.developmentCostVariance !== null && preview.developmentCostVariance > 0 ? "warning" : "default"} />
           </div>
         </section>
@@ -231,13 +244,14 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-lg font-black text-slate-950">计算口径</h3>
           <div className="mt-3 grid gap-2 text-sm leading-6 text-slate-600">
-            <p>理论开发成本 = 零售价 × 10000 / 6</p>
+            <p>理论开发成本 = 零售价 × 10000 × 规格 / 6</p>
             <p>理论生产单件成本 = 零售价 × 32.5%</p>
             <p>实际测算用单件生产成本优先取实际录入；未录入时用理论生产单件成本。</p>
-            <p>实际营收 = 零售价 × 折扣 × 实际销量</p>
+            <p>实际营收优先取实际录入；未录入时用零售价 × 折扣 × 实际销量。</p>
             <p>渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本</p>
+            <p>已售生产成本 = 实际销量 × 实际测算用单件生产成本</p>
             <p>总库存 = 总订单 - 实际销量 - 渠道样品量</p>
-            <p>实际结果 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本</p>
+            <p>当前盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本 - 已售生产成本</p>
           </div>
         </section>
       </aside>
@@ -305,6 +319,7 @@ function PreviewRow({ label, value, tone = "default" }: { label: string; value: 
 function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) {
   const actualDevelopmentCost = parseDraftNumber(draft.actualDevelopmentCost);
   const actualProductionUnitCost = parseOptionalDraftNumber(draft.actualProductionUnitCost);
+  const actualRevenueInput = parseOptionalDraftNumber(draft.actualRevenue);
   const totalOrderQuantity = parseDraftNumber(draft.totalOrderQuantity);
   const actualSales = parseDraftNumber(draft.actualSales);
   const channelSampleQuantity = parseDraftNumber(draft.channelSampleQuantity);
@@ -317,25 +332,32 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
     actualProductionUnitCost !== null && project.theoreticalProductionUnitCost !== null
       ? roundMoney(actualProductionUnitCost - project.theoreticalProductionUnitCost)
       : null;
-  const actualRevenue = project.retailPriceValue === null ? null : roundMoney(project.retailPriceValue * project.discountRate * actualSales);
+  const actualRevenueFormula = project.retailPriceValue === null ? null : roundMoney(project.retailPriceValue * project.discountRate * actualSales);
+  const actualRevenue = actualRevenueInput ?? actualRevenueFormula;
+  const actualRevenueSource: FinanceProjectEstimate["actualRevenueSource"] =
+    actualRevenueInput !== null ? "actual" : actualRevenueFormula !== null ? "formula" : "missing";
   const channelSampleCost =
     productionUnitCostForActual === null ? null : roundMoney(channelSampleQuantity * productionUnitCostForActual);
+  const actualSalesProductionCost =
+    productionUnitCostForActual === null ? null : roundMoney(actualSales * productionUnitCostForActual);
   const displayBoxCost = roundMoney(displayBoxQuantity * displayBoxUnitPrice);
   const totalInventory = totalOrderQuantity - actualSales - channelSampleQuantity;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
   const actualResult =
-    actualRevenue === null || channelSampleCost === null || inventoryCost === null
+    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null || inventoryCost === null
       ? null
-      : roundMoney(actualRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - inventoryCost);
+      : roundMoney(actualRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - inventoryCost - actualSalesProductionCost);
   const developmentCostVariance =
     project.theoreticalDevelopmentCost === null ? null : roundMoney(actualDevelopmentCost - project.theoreticalDevelopmentCost);
 
   return {
     actualRevenue,
+    actualRevenueSource,
     productionUnitCostForActual,
     productionUnitCostSource,
     productionUnitCostVariance,
     channelSampleCost,
+    actualSalesProductionCost,
     displayBoxCost,
     totalInventory,
     inventoryCost,
@@ -400,6 +422,18 @@ function formatProductionUnitCostSource(value: "actual" | "theoretical" | "missi
 
   if (value === "theoretical") {
     return "理论兜底";
+  }
+
+  return "待补";
+}
+
+function formatActualRevenueSource(value: "actual" | "formula" | "missing") {
+  if (value === "actual") {
+    return "实际录入";
+  }
+
+  if (value === "formula") {
+    return "公式兜底";
   }
 
   return "待补";
