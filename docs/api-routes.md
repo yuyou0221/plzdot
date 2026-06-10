@@ -353,7 +353,7 @@ PATCH /api/finance/projects/:projectId/facts
 1. 仅 admin 可写。
 2. PATCH /api/finance/config 保存统一折扣和各项目等级预测销量。
 3. PATCH /api/finance/projects/:projectId/facts 保存项目级财务事实，每个项目最多一条记录。
-4. 项目级财务事实包含：实际开发成本、总订单数量、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
+4. 项目级财务事实包含：实际开发成本、实际单件生产成本、总订单数量、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
 5. 库存不允许手填，由系统计算：总库存 = 总订单数量 - 实际销量 - 渠道样品量。
 6. 财务事实只用于财务测算，不回写项目排期、产品组工作指引或建模排期。
 ```
@@ -362,8 +362,8 @@ PATCH /api/finance/projects/:projectId/facts
 
 ```text
 1. /finance 是年度财务测算总览页，展示年度、子公司、等级汇总和项目级关键结果。
-2. /finance/projects/:projectId 是单项目财务编辑页，用于录入实际开发成本、总订单、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
-3. 单项目编辑页会实时预览总库存、实际营收、样品成本、展示盒成本、库存成本、实际测算结果和开发成本差异。
+2. /finance/projects/:projectId 是单项目财务编辑页，用于录入实际开发成本、实际单件生产成本、总订单、实际销量、渠道样品量、展示盒数量、展示盒单价和备注。
+3. 单项目编辑页会实时预览总库存、实际营收、单件成本来源、样品成本、展示盒成本、库存成本、实际测算结果和开发成本差异。
 ```
 
 `PATCH /api/finance/projects/:projectId/facts` 请求示例：
@@ -371,6 +371,7 @@ PATCH /api/finance/projects/:projectId/facts
 ```json
 {
   "actualDevelopmentCost": 120000,
+  "actualProductionUnitCost": 12.5,
   "totalOrderQuantity": 30000,
   "actualSales": 18000,
   "channelSampleQuantity": 120,
@@ -385,11 +386,12 @@ PATCH /api/finance/projects/:projectId/facts
 ```text
 理论开发成本 = 零售价 × 10000 / 6
 理论生产单件成本 = 零售价 × 32.5%
+实际测算用单件生产成本 = 实际单件生产成本；未录入时使用理论生产单件成本
 理论营收 = 规格 × 零售价 × 折扣 × 项目等级预测销量
 实际营收 = 零售价 × 折扣 × 实际销量
-渠道样品成本 = 渠道样品量 × 理论生产单件成本
+渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本
 展示盒成本 = 展示盒数量 × 展示盒单价
-库存成本 = 总库存 × 理论生产单件成本
+库存成本 = 总库存 × 实际测算用单件生产成本
 实际测算结果 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本
 开发成本差异 = 实际开发成本 - 理论开发成本
 ```

@@ -36,13 +36,14 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
       ) : null}
 
       <div className="mt-4 overflow-x-auto">
-        <table className="min-w-[1320px] text-left text-sm">
+        <table className="min-w-[1420px] text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
               <th className="px-3 py-3">项目</th>
               <th className="px-3 py-3">营收年度</th>
               <th className="px-3 py-3">子公司</th>
               <th className="px-3 py-3">规格 / 零售价</th>
+              <th className="px-3 py-3 text-right">单件生产成本</th>
               <th className="px-3 py-3 text-right">理论营收</th>
               <th className="px-3 py-3 text-right">实际营收</th>
               <th className="px-3 py-3 text-right">实际开发成本</th>
@@ -71,6 +72,10 @@ export function FinanceProjectFactsTable({ projects }: FinanceProjectFactsTableP
                   <div>{project.productType || project.productLine || "待补规格"}</div>
                   <div className="mt-1 text-xs text-slate-500">{project.specificationCount ? `${project.specificationCount} 款` : "待补规格"}</div>
                   <div className="mt-1 text-xs text-slate-500">{project.retailPriceValue ? `¥${numberFormatter.format(project.retailPriceValue)}` : project.retailPrice || "待补零售价"}</div>
+                </td>
+                <td className="px-3 py-3 text-right text-slate-700">
+                  <div className="font-semibold text-slate-900">{formatYuan(project.productionUnitCostForActual)}</div>
+                  <div className="mt-1 text-xs text-slate-500">{formatProductionUnitCostSource(project.productionUnitCostSource)}</div>
                 </td>
                 <td className="px-3 py-3 text-right font-black text-slate-950">{formatWan(project.estimatedRevenueWan)}</td>
                 <td className="px-3 py-3 text-right text-slate-700">{formatWan(project.actualRevenueWan)}</td>
@@ -123,4 +128,16 @@ function formatWan(value: number | null) {
 function formatMonth(month: string) {
   const [year, monthNumber] = month.split("-");
   return `${year.slice(2)}年${Number(monthNumber)}月`;
+}
+
+function formatProductionUnitCostSource(value: "actual" | "theoretical" | "missing") {
+  if (value === "actual") {
+    return "实际录入";
+  }
+
+  if (value === "theoretical") {
+    return "理论兜底";
+  }
+
+  return "待补";
 }

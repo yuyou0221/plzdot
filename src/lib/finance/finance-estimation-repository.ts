@@ -17,6 +17,7 @@ const productionCostRate = 0.325;
 
 export type FinanceProjectFactData = {
   actualDevelopmentCost: number | null;
+  actualProductionUnitCost: number | null;
   totalOrderQuantity: number | null;
   actualSales: number | null;
   channelSampleQuantity: number | null;
@@ -54,6 +55,9 @@ export type FinanceProjectEstimate = {
   theoreticalDevelopmentCost: number | null;
   theoreticalDevelopmentCostWan: number | null;
   theoreticalProductionUnitCost: number | null;
+  productionUnitCostForActual: number | null;
+  productionUnitCostSource: "actual" | "theoretical" | "missing";
+  productionUnitCostVariance: number | null;
   actualFact: FinanceProjectFactData;
   actualRevenue: number | null;
   actualRevenueWan: number | null;
@@ -146,6 +150,7 @@ type ProjectRecord = {
 type FinanceFactRecord = {
   projectId: string;
   actualDevelopmentCost: number | null;
+  actualProductionUnitCost: number | null;
   totalOrderQuantity: number | null;
   actualSales: number | null;
   channelSampleQuantity: number | null;
@@ -187,6 +192,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       select: {
         projectId: true,
         actualDevelopmentCost: true,
+        actualProductionUnitCost: true,
         totalOrderQuantity: true,
         actualSales: true,
         channelSampleQuantity: true,
@@ -222,10 +228,12 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       "理论营收 = 规格（款式数）× 零售价 × 统一折扣 × 项目等级预测销量。",
       "理论开发成本 = 零售价 × 10000 / 6。",
       "理论生产单件成本 = 零售价 × 32.5%。",
+      "实际单件生产成本可以按项目录入；录入后，渠道样品成本和库存成本优先使用实际单件生产成本。",
+      "如果实际单件生产成本未录入，渠道样品成本和库存成本暂按理论生产单件成本计算。",
       "实际营收 = 零售价 × 统一折扣 × 实际销量。",
-      "渠道样品成本 = 渠道展示样品数量 × 理论生产单件成本。",
+      "渠道样品成本 = 渠道展示样品数量 × 实际测算用单件生产成本。",
       "展示盒成本 = 展示盒数量 × 展示盒单价。",
-      "总库存 = 总订单数量 - 实际销量 - 渠道展示样品数量，库存成本 = 总库存 × 理论生产单件成本。",
+      "总库存 = 总订单数量 - 实际销量 - 渠道展示样品数量，库存成本 = 总库存 × 实际测算用单件生产成本。",
       "实际测算结果 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本。",
       "未录入的数量和金额字段按 0 参与实际测算，但会在项目行提示未录入。",
       "营收年度优先按项目编号前两位归属，例如 26xxx 计入 2026 年，27xxx 计入 2027 年。",
@@ -301,6 +309,7 @@ export async function getFinanceProjectEstimate(projectId: string): Promise<Fina
       select: {
         projectId: true,
         actualDevelopmentCost: true,
+        actualProductionUnitCost: true,
         totalOrderQuantity: true,
         actualSales: true,
         channelSampleQuantity: true,
@@ -340,6 +349,7 @@ export async function updateFinanceEstimationConfig(input: { discountRate: unkno
 export async function updateFinanceProjectFact(input: {
   projectId: string;
   actualDevelopmentCost: unknown;
+  actualProductionUnitCost: unknown;
   totalOrderQuantity: unknown;
   actualSales: unknown;
   channelSampleQuantity: unknown;
@@ -368,6 +378,7 @@ export async function updateFinanceProjectFact(input: {
     create: {
       projectId,
       actualDevelopmentCost: normalizeOptionalMoney(input.actualDevelopmentCost, "实际开发成本"),
+      actualProductionUnitCost: normalizeOptionalMoney(input.actualProductionUnitCost, "实际单件生产成本"),
       totalOrderQuantity: normalizeOptionalQuantity(input.totalOrderQuantity, "总订单数量"),
       actualSales: normalizeOptionalQuantity(input.actualSales, "实际销量"),
       channelSampleQuantity: normalizeOptionalQuantity(input.channelSampleQuantity, "渠道样品量"),
@@ -378,6 +389,7 @@ export async function updateFinanceProjectFact(input: {
     },
     update: {
       actualDevelopmentCost: normalizeOptionalMoney(input.actualDevelopmentCost, "实际开发成本"),
+      actualProductionUnitCost: normalizeOptionalMoney(input.actualProductionUnitCost, "实际单件生产成本"),
       totalOrderQuantity: normalizeOptionalQuantity(input.totalOrderQuantity, "总订单数量"),
       actualSales: normalizeOptionalQuantity(input.actualSales, "实际销量"),
       channelSampleQuantity: normalizeOptionalQuantity(input.channelSampleQuantity, "渠道样品量"),
@@ -420,7 +432,7 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
 
     if (!retailPriceValue) {
       issues.push("缺少有效零售价");
-      actualIssues.push("缺少有效零售价，实际营收和生产成本暂不能计算");
+      actualIssues.push("缺少有效零售价，实际营收暂不能计算");
     }
 
     if (!level) {
@@ -454,12 +466,19 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
   const displayBoxUnitPriceForCalc = actualFact.displayBoxUnitPrice ?? 0;
   const theoreticalDevelopmentCost = retailPriceValue === null ? null : roundMoney((retailPriceValue * 10000) / 6);
   const theoreticalProductionUnitCost = retailPriceValue === null ? null : roundMoney(retailPriceValue * productionCostRate);
+  const productionUnitCostForActual = actualFact.actualProductionUnitCost ?? theoreticalProductionUnitCost;
+  const productionUnitCostSource =
+    actualFact.actualProductionUnitCost !== null ? "actual" : theoreticalProductionUnitCost !== null ? "theoretical" : "missing";
+  const productionUnitCostVariance =
+    actualFact.actualProductionUnitCost !== null && theoreticalProductionUnitCost !== null
+      ? roundMoney(actualFact.actualProductionUnitCost - theoreticalProductionUnitCost)
+      : null;
   const actualRevenue = retailPriceValue === null ? null : roundMoney(retailPriceValue * config.discountRate * actualSalesForCalc);
   const channelSampleCost =
-    theoreticalProductionUnitCost === null ? null : roundMoney(channelSampleQuantityForCalc * theoreticalProductionUnitCost);
+    productionUnitCostForActual === null ? null : roundMoney(channelSampleQuantityForCalc * productionUnitCostForActual);
   const displayBoxCost = roundMoney(displayBoxQuantityForCalc * displayBoxUnitPriceForCalc);
   const totalInventory = totalOrderQuantityForCalc - actualSalesForCalc - channelSampleQuantityForCalc;
-  const inventoryCost = theoreticalProductionUnitCost === null ? null : roundMoney(totalInventory * theoreticalProductionUnitCost);
+  const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
   const actualResult =
     actualRevenue === null || channelSampleCost === null || inventoryCost === null
       ? null
@@ -470,6 +489,14 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
 
   if (hasNegativeInventory) {
     actualIssues.push("总库存为负，请检查总订单、实际销量和渠道样品量");
+  }
+
+  if (actualFact.actualProductionUnitCost === null && theoreticalProductionUnitCost !== null) {
+    actualIssues.push("实际单件生产成本未录入，暂按理论生产单件成本计算");
+  }
+
+  if (productionUnitCostForActual === null) {
+    actualIssues.push("实际单件生产成本未录入，且无法推导理论生产单件成本");
   }
 
   return {
@@ -500,6 +527,9 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     theoreticalDevelopmentCost,
     theoreticalDevelopmentCostWan: theoreticalDevelopmentCost === null ? null : toWan(theoreticalDevelopmentCost),
     theoreticalProductionUnitCost,
+    productionUnitCostForActual,
+    productionUnitCostSource,
+    productionUnitCostVariance,
     actualFact,
     actualRevenue,
     actualRevenueWan: actualRevenue === null ? null : toWan(actualRevenue),
@@ -570,6 +600,7 @@ function addMissingActualInputIssues(actualFact: FinanceProjectFactData, issues:
 function toFinanceProjectFactData(fact: FinanceFactRecord | null | undefined): FinanceProjectFactData {
   return {
     actualDevelopmentCost: fact?.actualDevelopmentCost ?? null,
+    actualProductionUnitCost: fact?.actualProductionUnitCost ?? null,
     totalOrderQuantity: fact?.totalOrderQuantity ?? null,
     actualSales: fact?.actualSales ?? null,
     channelSampleQuantity: fact?.channelSampleQuantity ?? null,

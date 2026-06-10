@@ -12,6 +12,7 @@ type FinanceProjectFactEditorProps = {
 
 type FinanceFactDraft = {
   actualDevelopmentCost: string;
+  actualProductionUnitCost: string;
   totalOrderQuantity: string;
   actualSales: string;
   channelSampleQuantity: string;
@@ -32,6 +33,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
   const [isPending, startTransition] = useTransition();
   const [draft, setDraft] = useState<FinanceFactDraft>(() => ({
     actualDevelopmentCost: toInputValue(project.actualFact.actualDevelopmentCost),
+    actualProductionUnitCost: toInputValue(project.actualFact.actualProductionUnitCost),
     totalOrderQuantity: toInputValue(project.actualFact.totalOrderQuantity),
     actualSales: toInputValue(project.actualFact.actualSales),
     channelSampleQuantity: toInputValue(project.actualFact.channelSampleQuantity),
@@ -56,6 +58,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         actualDevelopmentCost: emptyToNull(draft.actualDevelopmentCost),
+        actualProductionUnitCost: emptyToNull(draft.actualProductionUnitCost),
         totalOrderQuantity: emptyToNull(draft.totalOrderQuantity),
         actualSales: emptyToNull(draft.actualSales),
         channelSampleQuantity: emptyToNull(draft.channelSampleQuantity),
@@ -109,6 +112,14 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             value={draft.actualDevelopmentCost}
             onChange={(value) => updateDraft("actualDevelopmentCost", value)}
             placeholder="例如 120000"
+            inputMode="decimal"
+          />
+          <InputField
+            label="实际单件生产成本"
+            helper="单位：元。用于计算渠道样品成本和库存成本；不填时暂按理论生产单件成本计算。"
+            value={draft.actualProductionUnitCost}
+            onChange={(value) => updateDraft("actualProductionUnitCost", value)}
+            placeholder="例如 12.5"
             inputMode="decimal"
           />
           <InputField
@@ -204,6 +215,9 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <PreviewRow label="理论营收" value={formatWan(project.estimatedRevenueWan)} />
             <PreviewRow label="理论开发成本" value={formatWan(project.theoreticalDevelopmentCostWan)} />
             <PreviewRow label="理论生产单件成本" value={formatYuan(project.theoreticalProductionUnitCost)} />
+            <PreviewRow label="实际测算用单件成本" value={formatYuan(preview.productionUnitCostForActual)} />
+            <PreviewRow label="单件成本来源" value={formatProductionUnitCostSource(preview.productionUnitCostSource)} />
+            <PreviewRow label="单件成本差异" value={formatYuan(preview.productionUnitCostVariance)} tone={preview.productionUnitCostVariance !== null && preview.productionUnitCostVariance > 0 ? "warning" : "default"} />
             <PreviewRow label="实际营收" value={formatWan(toWanOrNull(preview.actualRevenue))} />
             <PreviewRow label="渠道样品成本" value={formatWan(toWanOrNull(preview.channelSampleCost))} />
             <PreviewRow label="展示盒成本" value={formatWan(toWan(preview.displayBoxCost))} />
@@ -219,7 +233,9 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
           <div className="mt-3 grid gap-2 text-sm leading-6 text-slate-600">
             <p>理论开发成本 = 零售价 × 10000 / 6</p>
             <p>理论生产单件成本 = 零售价 × 32.5%</p>
+            <p>实际测算用单件生产成本优先取实际录入；未录入时用理论生产单件成本。</p>
             <p>实际营收 = 零售价 × 折扣 × 实际销量</p>
+            <p>渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本</p>
             <p>总库存 = 总订单 - 实际销量 - 渠道样品量</p>
             <p>实际结果 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本</p>
           </div>
@@ -288,17 +304,25 @@ function PreviewRow({ label, value, tone = "default" }: { label: string; value: 
 
 function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) {
   const actualDevelopmentCost = parseDraftNumber(draft.actualDevelopmentCost);
+  const actualProductionUnitCost = parseOptionalDraftNumber(draft.actualProductionUnitCost);
   const totalOrderQuantity = parseDraftNumber(draft.totalOrderQuantity);
   const actualSales = parseDraftNumber(draft.actualSales);
   const channelSampleQuantity = parseDraftNumber(draft.channelSampleQuantity);
   const displayBoxQuantity = parseDraftNumber(draft.displayBoxQuantity);
   const displayBoxUnitPrice = parseDraftNumber(draft.displayBoxUnitPrice);
+  const productionUnitCostForActual = actualProductionUnitCost ?? project.theoreticalProductionUnitCost;
+  const productionUnitCostSource: FinanceProjectEstimate["productionUnitCostSource"] =
+    actualProductionUnitCost !== null ? "actual" : project.theoreticalProductionUnitCost !== null ? "theoretical" : "missing";
+  const productionUnitCostVariance =
+    actualProductionUnitCost !== null && project.theoreticalProductionUnitCost !== null
+      ? roundMoney(actualProductionUnitCost - project.theoreticalProductionUnitCost)
+      : null;
   const actualRevenue = project.retailPriceValue === null ? null : roundMoney(project.retailPriceValue * project.discountRate * actualSales);
   const channelSampleCost =
-    project.theoreticalProductionUnitCost === null ? null : roundMoney(channelSampleQuantity * project.theoreticalProductionUnitCost);
+    productionUnitCostForActual === null ? null : roundMoney(channelSampleQuantity * productionUnitCostForActual);
   const displayBoxCost = roundMoney(displayBoxQuantity * displayBoxUnitPrice);
   const totalInventory = totalOrderQuantity - actualSales - channelSampleQuantity;
-  const inventoryCost = project.theoreticalProductionUnitCost === null ? null : roundMoney(totalInventory * project.theoreticalProductionUnitCost);
+  const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
   const actualResult =
     actualRevenue === null || channelSampleCost === null || inventoryCost === null
       ? null
@@ -308,6 +332,9 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
 
   return {
     actualRevenue,
+    productionUnitCostForActual,
+    productionUnitCostSource,
+    productionUnitCostVariance,
     channelSampleCost,
     displayBoxCost,
     totalInventory,
@@ -321,6 +348,16 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
 function parseDraftNumber(value: string) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0;
+}
+
+function parseOptionalDraftNumber(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const numberValue = Number(trimmed);
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : 0;
 }
 
 function toInputValue(value: number | null) {
@@ -354,6 +391,18 @@ function formatInteger(value: number) {
 
 function formatNumber(value: number) {
   return decimalFormatter.format(value);
+}
+
+function formatProductionUnitCostSource(value: "actual" | "theoretical" | "missing") {
+  if (value === "actual") {
+    return "实际录入";
+  }
+
+  if (value === "theoretical") {
+    return "理论兜底";
+  }
+
+  return "待补";
 }
 
 function roundMoney(value: number) {

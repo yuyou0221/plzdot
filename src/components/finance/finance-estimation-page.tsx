@@ -53,7 +53,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                 <p className="text-sm font-semibold text-rose-600">财务测算</p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">年度项目营收与实际结果测算</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                  读取项目主数据，按规格、零售价、统一折扣和项目等级预测销量计算理论营收；同时维护项目级实际开发成本、订单、销量、渠道样品和展示盒数据，形成更接近真实经营结果的项目测算。
+                  读取项目主数据，按规格、零售价、统一折扣和项目等级预测销量计算理论营收；同时维护项目级实际开发成本、实际单件生产成本、订单、销量、渠道样品和展示盒数据，形成更接近真实经营结果的项目测算。
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
