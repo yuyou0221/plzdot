@@ -57,6 +57,9 @@ export type FinanceProjectEstimate = {
   theoreticalSalesQuantity: number | null;
   theoreticalProfitRevenue: number | null;
   theoreticalProfitRevenueWan: number | null;
+  theoreticalProfitDevelopmentCost: number | null;
+  theoreticalProfitDevelopmentCostWan: number | null;
+  theoreticalProfitDevelopmentCostSource: "actual" | "theoretical" | "missing";
   theoreticalProfitProductionCost: number | null;
   theoreticalProfitProductionCostWan: number | null;
   theoreticalProfit: number | null;
@@ -254,6 +257,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       "实际单件生产成本可以按项目录入；录入后，渠道样品成本和库存成本优先使用实际单件生产成本。",
       "如果实际单件生产成本未录入，渠道样品成本和库存成本暂按理论生产单件成本计算。",
       "实际营收可以按项目录入；未录入时，暂按零售价 × 统一折扣 × 实际销量计算。",
+      "理论盈亏按理想销量和实际销量取较高值，并扣除开发成本；开发成本优先取实际录入，未录入时使用理论开发成本。",
       "渠道样品成本 = 渠道展示样品数量 × 实际测算用单件生产成本。",
       "展示盒成本 = 展示盒数量 × 展示盒单价。",
       "总库存 = 总订单数量 - 实际销量 - 渠道展示样品数量，库存成本 = 总库存 × 实际测算用单件生产成本。",
@@ -524,10 +528,16 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     productionUnitCostForActual === null || theoreticalSalesQuantity === null
       ? null
       : roundMoney(theoreticalSalesQuantity * productionUnitCostForActual);
+  const theoreticalProfitDevelopmentCost = actualFact.actualDevelopmentCost ?? theoreticalDevelopmentCost;
+  const theoreticalProfitDevelopmentCostSource =
+    actualFact.actualDevelopmentCost !== null ? "actual" : theoreticalDevelopmentCost !== null ? "theoretical" : "missing";
   const theoreticalProfit =
-    theoreticalProfitRevenue === null || channelSampleCost === null || theoreticalProfitProductionCost === null
+    theoreticalProfitRevenue === null ||
+    theoreticalProfitDevelopmentCost === null ||
+    channelSampleCost === null ||
+    theoreticalProfitProductionCost === null
       ? null
-      : roundMoney(theoreticalProfitRevenue - actualDevelopmentCostForCalc - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
+      : roundMoney(theoreticalProfitRevenue - theoreticalProfitDevelopmentCost - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
   const floatingProfit =
     actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
@@ -589,6 +599,9 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     theoreticalSalesQuantity,
     theoreticalProfitRevenue,
     theoreticalProfitRevenueWan: theoreticalProfitRevenue === null ? null : toWan(theoreticalProfitRevenue),
+    theoreticalProfitDevelopmentCost,
+    theoreticalProfitDevelopmentCostWan: theoreticalProfitDevelopmentCost === null ? null : toWan(theoreticalProfitDevelopmentCost),
+    theoreticalProfitDevelopmentCostSource,
     theoreticalProfitProductionCost,
     theoreticalProfitProductionCostWan: theoreticalProfitProductionCost === null ? null : toWan(theoreticalProfitProductionCost),
     theoreticalProfit,
