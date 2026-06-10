@@ -236,6 +236,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <PreviewRow label="展示盒成本" value={formatWan(toWan(preview.displayBoxCost))} />
             <PreviewRow label="总库存" value={formatInteger(preview.totalInventory)} tone={preview.hasNegativeInventory ? "danger" : "default"} />
             <PreviewRow label="库存成本" value={formatWan(toWanOrNull(preview.inventoryCost))} />
+            <PreviewRow label="浮动盈亏" value={formatWan(toWanOrNull(preview.floatingProfit))} tone={preview.floatingProfit !== null && preview.floatingProfit < 0 ? "danger" : "strong"} />
             <PreviewRow label="当前盈亏" value={formatWan(toWanOrNull(preview.actualResult))} tone={preview.actualResult !== null && preview.actualResult < 0 ? "danger" : "strong"} />
             <PreviewRow label="开发成本差异" value={formatWan(toWanOrNull(preview.developmentCostVariance))} tone={preview.developmentCostVariance !== null && preview.developmentCostVariance > 0 ? "warning" : "default"} />
           </div>
@@ -251,6 +252,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <p>渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本</p>
             <p>已售生产成本 = 实际销量 × 实际测算用单件生产成本</p>
             <p>总库存 = 总订单 - 实际销量 - 渠道样品量</p>
+            <p>浮动盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 已售生产成本</p>
             <p>当前盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本 - 已售生产成本</p>
           </div>
         </section>
@@ -343,10 +345,14 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
   const displayBoxCost = roundMoney(displayBoxQuantity * displayBoxUnitPrice);
   const totalInventory = totalOrderQuantity - actualSales - channelSampleQuantity;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
-  const actualResult =
-    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null || inventoryCost === null
+  const floatingProfit =
+    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
-      : roundMoney(actualRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - inventoryCost - actualSalesProductionCost);
+      : roundMoney(actualRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - actualSalesProductionCost);
+  const actualResult =
+    floatingProfit === null || inventoryCost === null
+      ? null
+      : roundMoney(floatingProfit - inventoryCost);
   const developmentCostVariance =
     project.theoreticalDevelopmentCost === null ? null : roundMoney(actualDevelopmentCost - project.theoreticalDevelopmentCost);
 
@@ -361,6 +367,7 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
     displayBoxCost,
     totalInventory,
     inventoryCost,
+    floatingProfit,
     actualResult,
     developmentCostVariance,
     hasNegativeInventory: totalInventory < 0,

@@ -73,6 +73,8 @@ export type FinanceProjectEstimate = {
   totalInventory: number;
   inventoryCost: number | null;
   inventoryCostWan: number | null;
+  floatingProfit: number | null;
+  floatingProfitWan: number | null;
   actualResult: number | null;
   actualResultWan: number | null;
   developmentCostVariance: number | null;
@@ -126,6 +128,8 @@ export type FinanceEstimationData = {
     totalDisplayBoxCostWan: number;
     totalInventoryCost: number;
     totalInventoryCostWan: number;
+    totalFloatingProfit: number;
+    totalFloatingProfitWan: number;
     totalActualResult: number;
     totalActualResultWan: number;
   };
@@ -243,6 +247,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       "渠道样品成本 = 渠道展示样品数量 × 实际测算用单件生产成本。",
       "展示盒成本 = 展示盒数量 × 展示盒单价。",
       "总库存 = 总订单数量 - 实际销量 - 渠道展示样品数量，库存成本 = 总库存 × 实际测算用单件生产成本。",
+      "浮动盈亏 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 实际销量的生产成本。",
       "当前盈亏 = 实际营收 - 实际开发成本 - 渠道样品成本 - 展示盒成本 - 库存成本 - 实际销量的生产成本。",
       "未录入的数量和金额字段按 0 参与实际测算，但会在项目行提示未录入。",
       "营收年度优先按项目编号前两位归属，例如 26xxx 计入 2026 年，27xxx 计入 2027 年。",
@@ -497,17 +502,14 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
   const displayBoxCost = roundMoney(displayBoxQuantityForCalc * displayBoxUnitPriceForCalc);
   const totalInventory = totalOrderQuantityForCalc - actualSalesForCalc - channelSampleQuantityForCalc;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
-  const actualResult =
-    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null || inventoryCost === null
+  const floatingProfit =
+    actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
-      : roundMoney(
-          actualRevenue -
-            actualDevelopmentCostForCalc -
-            channelSampleCost -
-            displayBoxCost -
-            inventoryCost -
-            actualSalesProductionCost,
-        );
+      : roundMoney(actualRevenue - actualDevelopmentCostForCalc - channelSampleCost - displayBoxCost - actualSalesProductionCost);
+  const actualResult =
+    floatingProfit === null || inventoryCost === null
+      ? null
+      : roundMoney(floatingProfit - inventoryCost);
   const developmentCostVariance =
     theoreticalDevelopmentCost === null ? null : roundMoney(actualDevelopmentCostForCalc - theoreticalDevelopmentCost);
   const hasNegativeInventory = totalInventory < 0;
@@ -577,6 +579,8 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     totalInventory,
     inventoryCost,
     inventoryCostWan: inventoryCost === null ? null : toWan(inventoryCost),
+    floatingProfit,
+    floatingProfitWan: floatingProfit === null ? null : toWan(floatingProfit),
     actualResult,
     actualResultWan: actualResult === null ? null : toWan(actualResult),
     developmentCostVariance,
@@ -610,6 +614,8 @@ function buildActualSummary(projects: FinanceProjectEstimate[]) {
     totalDisplayBoxCostWan: toWan(projects.reduce((total, project) => total + project.displayBoxCost, 0)),
     totalInventoryCost: sumNullable(projects, (project) => project.inventoryCost),
     totalInventoryCostWan: toWan(sumNullable(projects, (project) => project.inventoryCost)),
+    totalFloatingProfit: sumNullable(projects, (project) => project.floatingProfit),
+    totalFloatingProfitWan: toWan(sumNullable(projects, (project) => project.floatingProfit)),
     totalActualResult: sumNullable(projects, (project) => project.actualResult),
     totalActualResultWan: toWan(sumNullable(projects, (project) => project.actualResult)),
   };
