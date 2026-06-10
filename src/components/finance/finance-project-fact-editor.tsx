@@ -224,6 +224,8 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
 
           <div className="mt-4 grid gap-3">
             <PreviewRow label="理论营收" value={formatWan(project.estimatedRevenueWan)} />
+            <PreviewRow label="理想销量" value={formatInteger(preview.idealSalesQuantity)} />
+            <PreviewRow label="理论测算销量" value={formatInteger(preview.theoreticalSalesQuantity)} />
             <PreviewRow label="理论开发成本" value={formatWan(project.theoreticalDevelopmentCostWan)} />
             <PreviewRow label="理论生产单件成本" value={formatYuan(project.theoreticalProductionUnitCost)} />
             <PreviewRow label="实际测算用单件成本" value={formatYuan(preview.productionUnitCostForActual)} />
@@ -236,6 +238,7 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <PreviewRow label="展示盒成本" value={formatWan(toWan(preview.displayBoxCost))} />
             <PreviewRow label="总库存" value={formatInteger(preview.totalInventory)} tone={preview.hasNegativeInventory ? "danger" : "default"} />
             <PreviewRow label="库存成本" value={formatWan(toWanOrNull(preview.inventoryCost))} />
+            <PreviewRow label="理论盈亏" value={formatWan(toWanOrNull(preview.theoreticalProfit))} tone={preview.theoreticalProfit !== null && preview.theoreticalProfit < 0 ? "danger" : "strong"} />
             <PreviewRow label="浮动盈亏" value={formatWan(toWanOrNull(preview.floatingProfit))} tone={preview.floatingProfit !== null && preview.floatingProfit < 0 ? "danger" : "strong"} />
             <PreviewRow label="当前盈亏" value={formatWan(toWanOrNull(preview.actualResult))} tone={preview.actualResult !== null && preview.actualResult < 0 ? "danger" : "strong"} />
             <PreviewRow label="开发成本差异" value={formatWan(toWanOrNull(preview.developmentCostVariance))} tone={preview.developmentCostVariance !== null && preview.developmentCostVariance > 0 ? "warning" : "default"} />
@@ -249,9 +252,11 @@ export function FinanceProjectFactEditor({ project }: FinanceProjectFactEditorPr
             <p>理论生产单件成本 = 零售价 × 32.5%</p>
             <p>实际测算用单件生产成本优先取实际录入；未录入时用理论生产单件成本。</p>
             <p>实际营收优先取实际录入；未录入时用零售价 × 折扣 × 实际销量。</p>
+            <p>理论测算销量 = 规格 × 项目等级预测销量，与实际销量取较高值。</p>
             <p>渠道样品成本 = 渠道样品量 × 实际测算用单件生产成本</p>
             <p>已售生产成本 = 实际销量 × 实际测算用单件生产成本</p>
             <p>总库存 = 总订单 - 实际销量 - 渠道样品量</p>
+            <p>理论盈亏 = 理论测算营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 理论测算销量的生产成本</p>
             <p>浮动盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 已售生产成本</p>
             <p>当前盈亏 = 实际营收 - 实际开发成本 - 样品成本 - 展示盒成本 - 库存成本 - 已售生产成本</p>
           </div>
@@ -345,6 +350,24 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
   const displayBoxCost = roundMoney(displayBoxQuantity * displayBoxUnitPrice);
   const totalInventory = totalOrderQuantity - actualSales - channelSampleQuantity;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
+  const idealSalesQuantity =
+    project.specificationCount !== null && project.specificationCount > 0 && project.predictedSales !== null && project.predictedSales > 0
+      ? project.specificationCount * project.predictedSales
+      : null;
+  const theoreticalSalesQuantity =
+    idealSalesQuantity === null && actualSales === 0 ? null : Math.max(idealSalesQuantity ?? 0, actualSales);
+  const theoreticalProfitRevenue =
+    project.retailPriceValue === null || theoreticalSalesQuantity === null
+      ? null
+      : roundMoney(project.retailPriceValue * project.discountRate * theoreticalSalesQuantity);
+  const theoreticalProfitProductionCost =
+    productionUnitCostForActual === null || theoreticalSalesQuantity === null
+      ? null
+      : roundMoney(theoreticalSalesQuantity * productionUnitCostForActual);
+  const theoreticalProfit =
+    theoreticalProfitRevenue === null || channelSampleCost === null || theoreticalProfitProductionCost === null
+      ? null
+      : roundMoney(theoreticalProfitRevenue - actualDevelopmentCost - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
   const floatingProfit =
     actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
@@ -362,6 +385,11 @@ function buildPreview(project: FinanceProjectEstimate, draft: FinanceFactDraft) 
     productionUnitCostForActual,
     productionUnitCostSource,
     productionUnitCostVariance,
+    idealSalesQuantity,
+    theoreticalSalesQuantity,
+    theoreticalProfitRevenue,
+    theoreticalProfitProductionCost,
+    theoreticalProfit,
     channelSampleCost,
     actualSalesProductionCost,
     displayBoxCost,
@@ -414,8 +442,8 @@ function formatWan(value: number | null) {
   return value === null ? "-" : `${decimalFormatter.format(value)} 万`;
 }
 
-function formatInteger(value: number) {
-  return integerFormatter.format(value);
+function formatInteger(value: number | null) {
+  return value === null ? "待补" : integerFormatter.format(value);
 }
 
 function formatNumber(value: number) {

@@ -53,6 +53,14 @@ export type FinanceProjectEstimate = {
   revenueYearSource: "projectCode" | "plannedLaunchDate";
   estimatedRevenue: number | null;
   estimatedRevenueWan: number | null;
+  idealSalesQuantity: number | null;
+  theoreticalSalesQuantity: number | null;
+  theoreticalProfitRevenue: number | null;
+  theoreticalProfitRevenueWan: number | null;
+  theoreticalProfitProductionCost: number | null;
+  theoreticalProfitProductionCostWan: number | null;
+  theoreticalProfit: number | null;
+  theoreticalProfitWan: number | null;
   theoreticalDevelopmentCost: number | null;
   theoreticalDevelopmentCostWan: number | null;
   theoreticalProductionUnitCost: number | null;
@@ -128,6 +136,8 @@ export type FinanceEstimationData = {
     totalDisplayBoxCostWan: number;
     totalInventoryCost: number;
     totalInventoryCostWan: number;
+    totalTheoreticalProfit: number;
+    totalTheoreticalProfitWan: number;
     totalFloatingProfit: number;
     totalFloatingProfitWan: number;
     totalActualResult: number;
@@ -502,6 +512,22 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
   const displayBoxCost = roundMoney(displayBoxQuantityForCalc * displayBoxUnitPriceForCalc);
   const totalInventory = totalOrderQuantityForCalc - actualSalesForCalc - channelSampleQuantityForCalc;
   const inventoryCost = productionUnitCostForActual === null ? null : roundMoney(totalInventory * productionUnitCostForActual);
+  const idealSalesQuantity =
+    project.styleCount && project.styleCount > 0 && predictedSales && predictedSales > 0 ? project.styleCount * predictedSales : null;
+  const theoreticalSalesQuantity =
+    idealSalesQuantity === null && actualFact.actualSales === null ? null : Math.max(idealSalesQuantity ?? 0, actualSalesForCalc);
+  const theoreticalProfitRevenue =
+    retailPriceValue === null || theoreticalSalesQuantity === null
+      ? null
+      : roundMoney(retailPriceValue * config.discountRate * theoreticalSalesQuantity);
+  const theoreticalProfitProductionCost =
+    productionUnitCostForActual === null || theoreticalSalesQuantity === null
+      ? null
+      : roundMoney(theoreticalSalesQuantity * productionUnitCostForActual);
+  const theoreticalProfit =
+    theoreticalProfitRevenue === null || channelSampleCost === null || theoreticalProfitProductionCost === null
+      ? null
+      : roundMoney(theoreticalProfitRevenue - actualDevelopmentCostForCalc - channelSampleCost - displayBoxCost - theoreticalProfitProductionCost);
   const floatingProfit =
     actualRevenue === null || channelSampleCost === null || actualSalesProductionCost === null
       ? null
@@ -559,6 +585,14 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
     revenueYearSource: revenueYearResult.source,
     estimatedRevenue,
     estimatedRevenueWan: estimatedRevenue === null ? null : toWan(estimatedRevenue),
+    idealSalesQuantity,
+    theoreticalSalesQuantity,
+    theoreticalProfitRevenue,
+    theoreticalProfitRevenueWan: theoreticalProfitRevenue === null ? null : toWan(theoreticalProfitRevenue),
+    theoreticalProfitProductionCost,
+    theoreticalProfitProductionCostWan: theoreticalProfitProductionCost === null ? null : toWan(theoreticalProfitProductionCost),
+    theoreticalProfit,
+    theoreticalProfitWan: theoreticalProfit === null ? null : toWan(theoreticalProfit),
     theoreticalDevelopmentCost,
     theoreticalDevelopmentCostWan: theoreticalDevelopmentCost === null ? null : toWan(theoreticalDevelopmentCost),
     theoreticalProductionUnitCost,
@@ -614,6 +648,8 @@ function buildActualSummary(projects: FinanceProjectEstimate[]) {
     totalDisplayBoxCostWan: toWan(projects.reduce((total, project) => total + project.displayBoxCost, 0)),
     totalInventoryCost: sumNullable(projects, (project) => project.inventoryCost),
     totalInventoryCostWan: toWan(sumNullable(projects, (project) => project.inventoryCost)),
+    totalTheoreticalProfit: sumNullable(projects, (project) => project.theoreticalProfit),
+    totalTheoreticalProfitWan: toWan(sumNullable(projects, (project) => project.theoreticalProfit)),
     totalFloatingProfit: sumNullable(projects, (project) => project.floatingProfit),
     totalFloatingProfitWan: toWan(sumNullable(projects, (project) => project.floatingProfit)),
     totalActualResult: sumNullable(projects, (project) => project.actualResult),

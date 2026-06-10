@@ -92,7 +92,7 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
               />
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-3 xl:grid-cols-5">
+            <div className="mt-3 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
               <MetricCard
                 icon={<CircleDollarSign size={18} />}
                 label="实际营收"
@@ -115,6 +115,12 @@ export function FinanceEstimationPage({ currentUser, data }: FinanceEstimationPa
                     data.summary.totalInventoryCostWan,
                 )}
                 helper={`已售 ${formatWan(data.summary.totalActualSalesProductionCostWan)}，样品 ${formatWan(data.summary.totalChannelSampleCostWan)}，展示盒 ${formatWan(data.summary.totalDisplayBoxCostWan)}，库存 ${formatWan(data.summary.totalInventoryCostWan)}`}
+              />
+              <MetricCard
+                icon={<BarChart3 size={18} />}
+                label="理论盈亏"
+                value={formatWan(data.summary.totalTheoreticalProfitWan)}
+                helper="理想销量和实际销量取较高值，不扣库存成本"
               />
               <MetricCard
                 icon={<Boxes size={18} />}
