@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
+import { isHighestPermissionLevel } from "@/lib/auth/permissions";
 import { applyModelingImport, ModelingImportValidationError } from "@/lib/imports/modeling-import";
 import {
   markImportPreviewTokenUsed,
@@ -11,6 +12,7 @@ import {
   type ManagedImportType,
 } from "@/lib/imports/preview-token";
 import { applyProjectMainImport, ProjectMainImportValidationError } from "@/lib/imports/project-main-import";
+import type { ProjectMainImportMode } from "@/lib/imports/project-main-preview";
 import { createOfficialScheduleRecalculation } from "@/lib/schedule-recalculation";
 
 export const runtime = "nodejs";
@@ -28,8 +30,12 @@ export async function POST(request: Request) {
     const previewId = optionalText(formData.get("previewId"));
     const previewFileHash = optionalText(formData.get("fileHash"));
 
-    if (importType !== "project-main" && importType !== "modeling") {
+    if (importType !== "project-main" && importType !== "project-main-full-refresh" && importType !== "modeling") {
       return NextResponse.json({ ok: false, message: "当前只支持项目主数据和建模款式导入。" }, { status: 400 });
+    }
+
+    if (importType === "project-main-full-refresh" && !isHighestPermissionLevel(auth.user)) {
+      return NextResponse.json({ ok: false, message: "全量更新项目只允许最高权限账号使用。" }, { status: 403 });
     }
 
     if (!(file instanceof File)) {
@@ -72,11 +78,12 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await applyProjectMainImport(workbookPath, file.name, auth.user.name);
+    const projectImportModeValue = projectImportMode(importType);
+    const result = await applyProjectMainImport(workbookPath, file.name, auth.user.name, { mode: projectImportModeValue });
     const recalculation = await createOfficialScheduleRecalculation({
       runName: `导入重算 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
       runType: "导入重算",
-      source: "project-main-import",
+      source: projectImportModeValue === "full-refresh" ? "project-main-full-refresh" : "project-main-import",
       sourceImportId: result.importId,
       createdBy: auth.user.id,
     });
@@ -88,11 +95,12 @@ export async function POST(request: Request) {
       result.plannedLaunchAdjustmentSummary.total > 0
         ? ` 计划上线调整 ${result.plannedLaunchAdjustmentSummary.total} 项，${result.plannedLaunchAdjustmentSummary.text}`
         : "";
+    const archivedProjectText = result.archivedProjects > 0 ? ` 移出规划 ${result.archivedProjects} 个旧项目。` : "";
     const recalculationText = recalculation.ok ? "已自动完成正式排期重算。" : recalculation.message;
 
     return NextResponse.json({
       ok: recalculation.ok,
-      message: `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。${recalculationText}${plannedLaunchAdjustmentText}${taskRuleWarningText}`,
+      message: `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。${archivedProjectText}${recalculationText}${plannedLaunchAdjustmentText}${taskRuleWarningText}`,
       result,
       recalculation,
     });
@@ -111,6 +119,10 @@ export async function POST(request: Request) {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   }
+}
+
+function projectImportMode(importType: string): ProjectMainImportMode {
+  return importType === "project-main-full-refresh" ? "full-refresh" : "merge";
 }
 
 function optionalText(value: unknown) {

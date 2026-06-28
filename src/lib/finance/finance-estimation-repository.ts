@@ -12,6 +12,7 @@ import {
   type FinanceConfigData,
   type FinanceLevelKey,
 } from "@/lib/finance/finance-estimation-rules";
+import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
 
 const productionCostRate = 0.325;
 
@@ -455,7 +456,7 @@ function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigD
   const predictedSales = level ? config.salesByLevel[level.key] : null;
   const issues: string[] = [];
   const actualIssues: string[] = [];
-  const isExcluded = project.status.includes("取消");
+  const isExcluded = project.status.includes("取消") || project.status.includes(removedFromScheduleStatus);
 
   if (!isExcluded) {
     if (!project.styleCount || project.styleCount <= 0) {

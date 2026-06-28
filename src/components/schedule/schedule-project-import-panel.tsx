@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Database, FileSpreadsheet, Info, RefreshCw, Search, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, FileSpreadsheet, Info, RefreshCw, Search, ShieldAlert, Upload } from "lucide-react";
 import clsx from "clsx";
 import type { AuthUser } from "@/lib/auth/permissions";
 
@@ -33,7 +33,8 @@ type ProjectPreviewRow = {
 };
 
 type ProjectImportPreview = {
-  importType: "project-main";
+  importType: "project-main" | "project-main-full-refresh";
+  importMode?: "merge" | "full-refresh";
   fileName: string;
   sheets: string[];
   parsed: {
@@ -51,6 +52,7 @@ type ProjectImportPreview = {
     errorCount: number;
     warningCount: number;
     requiresRecalculation: boolean;
+    staleProjectCount?: number;
   };
   globalIssues: PreviewIssue[];
   referenceChanges: {
@@ -65,6 +67,17 @@ type ProjectImportPreview = {
     level: "ok" | "warning" | "error";
     message: string;
   }>;
+  fullRefresh?: {
+    staleProjects: Array<{
+      projectId: string;
+      projectName: string;
+      projectCode: string;
+      licensorName: string;
+      ipName: string;
+      plannedLaunchDate: string;
+      status: string;
+    }>;
+  };
   rows: ProjectPreviewRow[];
 };
 
@@ -84,6 +97,7 @@ type ApplyResponse = {
     importId: string;
     createdProjects?: number;
     updatedProjects?: number;
+    archivedProjects?: number;
     importedTaskFacts?: number;
     taskRuleWarnings?: string[];
     plannedLaunchAdjustmentSummary?: {
@@ -150,10 +164,14 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
   const [search, setSearch] = useState("");
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
+  const [importMode, setImportMode] = useState<"merge" | "full-refresh">("merge");
 
   const canImport = currentUser.authRole === "admin" || currentUser.authRole === "manager";
+  const canFullRefresh = currentUser.permissionLevel === 0;
+  const activeImportType = importMode === "full-refresh" ? "project-main-full-refresh" : "project-main";
   const canApply =
     canImport &&
+    (importMode === "merge" || canFullRefresh) &&
     !!preview &&
     preview.summary.errorCount === 0 &&
     preview.summary.invalidRows === 0 &&
@@ -188,10 +206,25 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
     setRowFilter("all");
   }
 
+  function changeImportMode(nextMode: "merge" | "full-refresh") {
+    setImportMode(nextMode);
+    setPreview(null);
+    setPreviewToken(null);
+    setApplyResult(null);
+    setAnalyzeResult(null);
+    setMessage(null);
+    setRowFilter("all");
+  }
+
   async function generatePreview() {
     if (!canImport) {
       setTone("warning");
       setMessage("当前账号没有导入权限，请使用 admin 或 manager 账号。");
+      return;
+    }
+    if (importMode === "full-refresh" && !canFullRefresh) {
+      setTone("warning");
+      setMessage("全量更新项目只允许最高权限账号使用。");
       return;
     }
     if (!file) {
@@ -207,7 +240,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
     setAnalyzeResult(null);
 
     const formData = new FormData();
-    formData.set("importType", "project-main");
+    formData.set("importType", activeImportType);
     formData.set("file", file);
 
     try {
@@ -264,6 +297,12 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
       setMessage(buildImportBlockerMessage(preview));
       return;
     }
+    if (
+      importMode === "full-refresh" &&
+      !window.confirm(`确认全量更新项目？Excel 中不存在的 ${preview.summary.staleProjectCount ?? 0} 个项目将被移出项目排期。`)
+    ) {
+      return;
+    }
 
     setIsApplying(true);
     setTone("info");
@@ -272,7 +311,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
     setAnalyzeResult(null);
 
     const formData = new FormData();
-    formData.set("importType", "project-main");
+    formData.set("importType", activeImportType);
     formData.set("file", file);
     formData.set("previewId", previewToken.previewId);
     formData.set("fileHash", previewToken.fileHash);
@@ -362,7 +401,7 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
           <button
             type="button"
             onClick={generatePreview}
-            disabled={!canImport || isLoading || isApplying || isAnalyzing}
+            disabled={!canImport || (importMode === "full-refresh" && !canFullRefresh) || isLoading || isApplying || isAnalyzing}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Upload size={14} />
@@ -371,13 +410,50 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
           <button
             type="button"
             onClick={applyImport}
-            disabled={!canImport || isApplying || isLoading || isAnalyzing}
+            disabled={!canImport || (importMode === "full-refresh" && !canFullRefresh) || isApplying || isLoading || isAnalyzing}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
           >
             <Database size={14} />
-            {isApplying ? "导入中" : "确认导入"}
+            {isApplying ? "导入中" : importMode === "full-refresh" ? "确认全量更新" : "确认导入"}
           </button>
         </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => changeImportMode("merge")}
+          disabled={isLoading || isApplying || isAnalyzing}
+          className={clsx(
+            "rounded-lg border px-3 py-3 text-left text-sm transition",
+            importMode === "merge"
+              ? "border-slate-900 bg-white text-slate-900 shadow-sm"
+              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+          )}
+        >
+          <div className="font-semibold">合并更新项目</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">只新增或更新 Excel 中的项目，不处理 Excel 里没有的旧项目。</div>
+        </button>
+        <button
+          type="button"
+          onClick={() => changeImportMode("full-refresh")}
+          disabled={!canFullRefresh || isLoading || isApplying || isAnalyzing}
+          className={clsx(
+            "rounded-lg border px-3 py-3 text-left text-sm transition",
+            importMode === "full-refresh"
+              ? "border-red-300 bg-red-50 text-red-900 shadow-sm"
+              : "border-slate-200 bg-white text-slate-600 hover:border-red-200",
+            !canFullRefresh && "cursor-not-allowed opacity-60",
+          )}
+        >
+          <div className="flex items-center gap-2 font-semibold">
+            <ShieldAlert size={15} />
+            全量更新项目
+          </div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">
+            只有最高权限账号可用。确认后，Excel 中不存在的旧项目会被标记为“已移出规划”，并从正式项目排期中移除。
+          </div>
+        </button>
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
@@ -425,6 +501,9 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
             <SummaryTile label="总行数" value={preview.summary.totalRows} />
             <SummaryTile label="已匹配" value={preview.summary.matchedRows} tone="green" />
             <SummaryTile label="待新增" value={preview.summary.newRows} tone="blue" />
+            {preview.importMode === "full-refresh" ? (
+              <SummaryTile label="将移出规划" value={preview.summary.staleProjectCount ?? 0} tone="red" />
+            ) : null}
             <SummaryTile
               label="需确认"
               value={preview.summary.conflictRows + preview.summary.invalidRows + preview.summary.unverifiedRows}
@@ -444,11 +523,37 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
             </div>
           ) : null}
 
+          {preview.importMode === "full-refresh" ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+              <div className="font-semibold">全量更新将移出规划 {preview.summary.staleProjectCount ?? 0} 个旧项目</div>
+              <div className="mt-1 text-xs leading-5 text-red-800">
+                这些项目不会被物理删除，但会从正式项目排期、正式测算和项目看板中移出。请确认 Excel 是本次项目清单的完整版本。
+              </div>
+              {preview.fullRefresh?.staleProjects.length ? (
+                <div className="mt-2 max-h-28 overflow-auto rounded border border-red-100 bg-white/70 px-2 py-1 text-xs">
+                  {preview.fullRefresh.staleProjects.slice(0, 20).map((project) => (
+                    <div key={project.projectId} className="flex justify-between gap-3 border-b border-red-50 py-1 last:border-b-0">
+                      <span className="min-w-0 truncate">
+                        {project.projectCode ? `${project.projectCode} · ` : ""}
+                        {project.projectName}
+                      </span>
+                      <span className="shrink-0 text-red-700">{project.plannedLaunchDate}</span>
+                    </div>
+                  ))}
+                  {preview.fullRefresh.staleProjects.length > 20 ? (
+                    <div className="py-1 text-red-700">还有 {preview.fullRefresh.staleProjects.length - 20} 个项目未展示。</div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {applyResult ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <span>
                 已写入数据库：新增 {applyResult.createdProjects ?? 0} 个项目，更新 {applyResult.updatedProjects ?? 0} 个项目，写入{" "}
                 {applyResult.importedTaskFacts ?? 0} 条任务事实。
+                {applyResult.archivedProjects ? ` 移出规划 ${applyResult.archivedProjects} 个旧项目。` : ""}
                 {applyResult.plannedLaunchAdjustmentSummary?.total
                   ? ` 计划上线调整 ${applyResult.plannedLaunchAdjustmentSummary.total} 项，${applyResult.plannedLaunchAdjustmentSummary.text}`
                   : ""}

@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth/api";
+import { isHighestPermissionLevel } from "@/lib/auth/permissions";
 import { previewModelingImport } from "@/lib/imports/modeling-import";
 import { createImportPreviewToken, type ManagedImportType } from "@/lib/imports/preview-token";
-import { previewProjectMainImport } from "@/lib/imports/project-main-preview";
+import { previewProjectMainImport, type ProjectMainImportMode } from "@/lib/imports/project-main-preview";
 
 export const runtime = "nodejs";
 
@@ -19,8 +20,12 @@ export async function POST(request: Request) {
     const file = formData.get("file");
     const importType = optionalText(formData.get("importType")) ?? "project-main";
 
-    if (importType !== "project-main" && importType !== "modeling") {
+    if (importType !== "project-main" && importType !== "project-main-full-refresh" && importType !== "modeling") {
       return NextResponse.json({ ok: false, message: "当前只支持项目主数据和建模款式预览。" }, { status: 400 });
+    }
+
+    if (importType === "project-main-full-refresh" && !isHighestPermissionLevel(auth.user)) {
+      return NextResponse.json({ ok: false, message: "全量更新项目只允许最高权限账号使用。" }, { status: 403 });
     }
 
     if (!(file instanceof File)) {
@@ -42,7 +47,7 @@ export async function POST(request: Request) {
       const preview =
         importType === "modeling"
           ? await previewModelingImport(workbookPath, file.name)
-          : await previewProjectMainImport(workbookPath, file.name);
+          : await previewProjectMainImport(workbookPath, file.name, { mode: projectImportMode(importType) });
       const token = await createImportPreviewToken({
         importType: importType as ManagedImportType,
         fileName: file.name,
@@ -69,6 +74,10 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
+}
+
+function projectImportMode(importType: string): ProjectMainImportMode {
+  return importType === "project-main-full-refresh" ? "full-refresh" : "merge";
 }
 
 function optionalText(value: unknown) {
