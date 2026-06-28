@@ -12,7 +12,7 @@ import {
   type FinanceConfigData,
   type FinanceLevelKey,
 } from "@/lib/finance/finance-estimation-rules";
-import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
+import { excludeScheduleSimulationProjectsWhere, removedFromScheduleStatus } from "@/lib/schedule-simulation";
 
 const productionCostRate = 0.325;
 
@@ -197,6 +197,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
   const [config, projects, facts] = await Promise.all([
     getOrCreateFinanceConfig(),
     prisma.project.findMany({
+      where: financeProjectWhere(),
       orderBy: [{ plannedLaunchDate: "asc" }, { projectCode: "asc" }, { projectName: "asc" }],
       select: {
         id: true,
@@ -267,7 +268,7 @@ export async function getFinanceEstimationData(options: { year?: number | null }
       "未录入的数量和金额字段按 0 参与实际测算，但会在项目行提示未录入。",
       "营收年度优先按项目编号前两位归属，例如 26xxx 计入 2026 年，27xxx 计入 2027 年。",
       "金额汇总按万元展示；编辑录入金额时使用元。",
-      "状态为取消的项目暂不计入汇总。",
+      "状态为取消或已移出规划的项目不进入财务测算。",
     ],
     config,
     summary: {
@@ -315,8 +316,8 @@ export async function getFinanceProjectEstimate(projectId: string): Promise<Fina
 
   const [config, project, fact] = await Promise.all([
     getOrCreateFinanceConfig(),
-    prisma.project.findUnique({
-      where: { id: normalizedProjectId },
+    prisma.project.findFirst({
+      where: financeProjectWhere({ id: normalizedProjectId }),
       select: {
         id: true,
         projectCode: true,
@@ -395,13 +396,13 @@ export async function updateFinanceProjectFact(input: {
     throw new FinanceProjectFactInputError("项目 ID 不正确。");
   }
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
+  const project = await prisma.project.findFirst({
+    where: financeProjectWhere({ id: projectId }),
     select: { id: true },
   });
 
   if (!project) {
-    throw new FinanceProjectFactInputError("项目不存在，无法保存财务事实。");
+    throw new FinanceProjectFactInputError("项目不存在或已移出规划，无法保存财务事实。");
   }
 
   const fact = await prisma.financeProjectFact.upsert({
@@ -448,6 +449,12 @@ async function getOrCreateFinanceConfig(): Promise<FinanceConfigData> {
   });
 
   return toFinanceConfigData(config);
+}
+
+function financeProjectWhere(where: { id?: string } = {}) {
+  return {
+    AND: [where, excludeScheduleSimulationProjectsWhere()],
+  };
 }
 
 function toFinanceProjectEstimate(project: ProjectRecord, config: FinanceConfigData, fact: FinanceFactRecord | null): FinanceProjectEstimate {
