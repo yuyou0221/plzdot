@@ -5,6 +5,9 @@ import path from "node:path";
 import { prisma } from "@/lib/db/prisma";
 import { isProtectedRuntime } from "@/lib/runtime-flags";
 import { suggestedLaunchDateForMonthIndex } from "@/lib/schedule-domain/planned-launch-rules";
+import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
+
+export type ProjectMainImportMode = "merge" | "full-refresh";
 
 type ExtractedWorkbook = {
   workbook: string;
@@ -23,7 +26,10 @@ type ExistingProject = {
   productType: string | null;
   plannedLaunchDate: Date;
   projectTeamId: string | null;
+  currentStage: string | null;
   status: string;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 type PreviewIssue = {
@@ -65,8 +71,19 @@ type ProjectPreviewRow = {
   issues: PreviewIssue[];
 };
 
+type FullRefreshProjectPreview = {
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  licensorName: string;
+  ipName: string;
+  plannedLaunchDate: string;
+  status: string;
+};
+
 export type ProjectMainImportPreview = {
-  importType: "project-main";
+  importType: "project-main" | "project-main-full-refresh";
+  importMode: ProjectMainImportMode;
   importTypeLabel: string;
   fileName: string;
   sheets: string[];
@@ -86,6 +103,7 @@ export type ProjectMainImportPreview = {
     warningCount: number;
     infoCount: number;
     requiresRecalculation: boolean;
+    staleProjectCount: number;
   };
   globalIssues: PreviewIssue[];
   referenceChanges: {
@@ -100,6 +118,9 @@ export type ProjectMainImportPreview = {
     level: "ok" | "warning" | "error";
     message: string;
   }>;
+  fullRefresh?: {
+    staleProjects: FullRefreshProjectPreview[];
+  };
   rows: ProjectPreviewRow[];
 };
 
@@ -152,7 +173,12 @@ const CALCULATED_IMPORT_FIELDS = [
   "capacityOverload",
 ];
 
-export async function previewProjectMainImport(workbookPath: string, fileName: string): Promise<ProjectMainImportPreview> {
+export async function previewProjectMainImport(
+  workbookPath: string,
+  fileName: string,
+  options: { mode?: ProjectMainImportMode } = {},
+): Promise<ProjectMainImportPreview> {
+  const mode = options.mode ?? "merge";
   const workbook = await extractProjectWorkbook(workbookPath);
   const projectRecords = workbook.projects.filter(isProjectRecordCandidate);
   const existingProjectResult = await loadExistingProjects();
@@ -160,6 +186,7 @@ export async function previewProjectMainImport(workbookPath: string, fileName: s
   const existingRefs = buildExistingRefs(existingProjects);
   const duplicateIndexes = duplicateIdentityIndexes(projectRecords);
   const suggestedLaunchDateByIndex = buildSuggestedLaunchDateByIndex(projectRecords);
+  const matchedProjectIds = new Set<string>();
   const rows = projectRecords.map((record, index) =>
     previewProjectRow(
       record,
@@ -169,13 +196,16 @@ export async function previewProjectMainImport(workbookPath: string, fileName: s
       duplicateIndexes,
       existingProjectResult.canMatchExisting,
       suggestedLaunchDateByIndex,
+      { mode, matchedProjectIds },
     ),
   );
   const issueCounts = countIssues(rows);
+  const fullRefresh = mode === "full-refresh" ? buildFullRefreshPreview(existingProjects, rows) : undefined;
 
   return {
-    importType: "project-main",
-    importTypeLabel: "项目主数据导入",
+    importType: mode === "full-refresh" ? "project-main-full-refresh" : "project-main",
+    importMode: mode,
+    importTypeLabel: mode === "full-refresh" ? "项目主数据全量更新" : "项目主数据导入",
     fileName,
     sheets: workbook.sheets,
     parsed: {
@@ -194,10 +224,12 @@ export async function previewProjectMainImport(workbookPath: string, fileName: s
       warningCount: issueCounts.warning + existingProjectResult.globalIssues.filter((issue) => issue.severity === "warning").length,
       infoCount: issueCounts.info + existingProjectResult.globalIssues.filter((issue) => issue.severity === "info").length,
       requiresRecalculation: true,
+      staleProjectCount: fullRefresh?.staleProjects.length ?? 0,
     },
     globalIssues: existingProjectResult.globalIssues,
     referenceChanges: collectReferenceChanges(rows, existingRefs),
     monthBuckets: buildMonthBuckets(rows),
+    ...(fullRefresh ? { fullRefresh } : {}),
     rows,
   };
 }
@@ -255,7 +287,10 @@ async function loadExistingProjects(): Promise<{ projects: ExistingProject[]; ca
         productType: true,
         plannedLaunchDate: true,
         projectTeamId: true,
+        currentStage: true,
         status: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -277,6 +312,7 @@ function previewProjectRow(
   duplicateIndexes: Set<number>,
   canMatchExisting: boolean,
   suggestedLaunchDateByIndex: Map<number, string>,
+  options: { mode: ProjectMainImportMode; matchedProjectIds: Set<string> },
 ): ProjectPreviewRow {
   const projectId = stringFieldAny(record, PROJECT_ID_FIELDS);
   const projectName = stringFieldAny(record, PROJECT_NAME_FIELDS);
@@ -334,8 +370,12 @@ function previewProjectRow(
   }
 
   const match = canMatchExisting
-    ? matchProject({ projectId, projectName, licensorName, ipName }, existingProjects)
+    ? matchProject({ projectId, projectName, projectCode, licensorName, ipName }, existingProjects, options)
     : { status: "unverified" as const, matchBy: "数据库不可用，暂不能匹配现有项目", project: undefined };
+
+  if (match.status === "matched" && match.project) {
+    options.matchedProjectIds.add(match.project.id);
+  }
 
   if (match.status === "new" && !plannedLaunchDate) {
     issues.push({ severity: "error", message: "新增项目缺少计划上线日期，无法创建。" });
@@ -394,12 +434,19 @@ function previewProjectRow(
 }
 
 function matchProject(
-  candidate: { projectId: string; projectName: string; licensorName: string; ipName: string },
+  candidate: { projectId: string; projectName: string; projectCode: string; licensorName: string; ipName: string },
   existingProjects: ExistingProject[],
+  options: { mode: ProjectMainImportMode; matchedProjectIds: Set<string> },
 ): { status: "matched" | "new" | "conflict"; matchBy: string; project?: ExistingProject } {
   if (candidate.projectId) {
     const matches = existingProjects.filter((project) => normalizeKey(project.id) === normalizeKey(candidate.projectId));
-    if (matches.length === 1) return { status: "matched", matchBy: "项目ID", project: matches[0] };
+    if (matches.length === 1) {
+      if (options.matchedProjectIds.has(matches[0].id)) {
+        return { status: "conflict", matchBy: "项目ID在本次 Excel 中被重复匹配" };
+      }
+
+      return { status: "matched", matchBy: "项目ID", project: matches[0] };
+    }
     return { status: "conflict", matchBy: "项目ID未匹配到现有项目" };
   }
 
@@ -413,18 +460,105 @@ function matchProject(
       normalizeKey(project.ipName) === normalizeKey(candidate.ipName) &&
       normalizeKey(project.licensorName) === normalizeKey(candidate.licensorName),
   );
-  if (identityMatches.length === 1) return { status: "matched", matchBy: "项目名称 + IP + 版权方", project: identityMatches[0] };
-  if (identityMatches.length > 1) return { status: "conflict", matchBy: "项目名称 + IP + 版权方匹配到多个项目" };
+  if (identityMatches.length === 1) {
+    if (options.matchedProjectIds.has(identityMatches[0].id)) {
+      return { status: "conflict", matchBy: "项目身份在本次 Excel 中被重复匹配" };
+    }
+
+    return { status: "matched", matchBy: "项目名称 + IP + 版权方", project: identityMatches[0] };
+  }
+  if (identityMatches.length > 1) {
+    if (options.mode === "full-refresh") {
+      const project = chooseCanonicalProject(identityMatches, candidate, options.matchedProjectIds);
+      if (!project) {
+        return { status: "conflict", matchBy: "项目名称 + IP + 版权方匹配到多个项目，且都已被本次 Excel 使用" };
+      }
+
+      return { status: "matched", matchBy: "全量更新：保留一个重复项目，其余将移出规划", project };
+    }
+
+    return { status: "conflict", matchBy: "项目名称 + IP + 版权方匹配到多个项目" };
+  }
 
   if (isProtectedRuntime()) {
     return { status: "new", matchBy: "受保护环境不使用项目名称唯一匹配，需项目ID或项目名称 + IP + 版权方" };
   }
 
   const nameMatches = existingProjects.filter((project) => normalizeKey(project.projectName) === normalizeKey(candidate.projectName));
-  if (nameMatches.length === 1) return { status: "matched", matchBy: "项目名称唯一匹配", project: nameMatches[0] };
-  if (nameMatches.length > 1) return { status: "conflict", matchBy: "项目名称匹配到多个项目" };
+  if (nameMatches.length === 1) {
+    if (options.matchedProjectIds.has(nameMatches[0].id)) {
+      return { status: "conflict", matchBy: "项目名称在本次 Excel 中被重复匹配" };
+    }
+
+    return { status: "matched", matchBy: "项目名称唯一匹配", project: nameMatches[0] };
+  }
+  if (nameMatches.length > 1) {
+    if (options.mode === "full-refresh") {
+      const project = chooseCanonicalProject(nameMatches, candidate, options.matchedProjectIds);
+      if (!project) {
+        return { status: "conflict", matchBy: "项目名称匹配到多个项目，且都已被本次 Excel 使用" };
+      }
+
+      return { status: "matched", matchBy: "全量更新：按项目名称保留一个重复项目，其余将移出规划", project };
+    }
+
+    return { status: "conflict", matchBy: "项目名称匹配到多个项目" };
+  }
 
   return { status: "new", matchBy: "未匹配，将新增" };
+}
+
+function buildFullRefreshPreview(existingProjects: ExistingProject[], rows: ProjectPreviewRow[]) {
+  const keptProjectIds = new Set(rows.map((row) => row.matchedProjectId).filter(Boolean));
+  const staleProjects = existingProjects
+    .filter((project) => !keptProjectIds.has(project.id) && !isRemovedFromSchedule(project))
+    .map(toFullRefreshProjectPreview)
+    .sort((a, b) => a.plannedLaunchDate.localeCompare(b.plannedLaunchDate) || a.projectName.localeCompare(b.projectName, "zh-Hans-CN"));
+
+  return { staleProjects };
+}
+
+function toFullRefreshProjectPreview(project: ExistingProject): FullRefreshProjectPreview {
+  return {
+    projectId: project.id,
+    projectName: project.projectName,
+    projectCode: project.projectCode ?? "",
+    licensorName: project.licensorName ?? "",
+    ipName: project.ipName ?? "",
+    plannedLaunchDate: formatDate(project.plannedLaunchDate),
+    status: project.status,
+  };
+}
+
+function chooseCanonicalProject(
+  matches: ExistingProject[],
+  candidate: { projectCode: string },
+  matchedProjectIds: Set<string>,
+) {
+  const candidateCode = normalizeKey(candidate.projectCode);
+
+  return [...matches]
+    .filter((project) => !matchedProjectIds.has(project.id))
+    .sort((a, b) => {
+      const aCodeMatches = Boolean(candidateCode && normalizeKey(a.projectCode) === candidateCode);
+      const bCodeMatches = Boolean(candidateCode && normalizeKey(b.projectCode) === candidateCode);
+      if (aCodeMatches !== bCodeMatches) return aCodeMatches ? -1 : 1;
+
+      const aActive = !isRemovedFromSchedule(a);
+      const bActive = !isRemovedFromSchedule(b);
+      if (aActive !== bActive) return aActive ? -1 : 1;
+
+      const createdOrder = a.createdAt.getTime() - b.createdAt.getTime();
+      if (createdOrder !== 0) return createdOrder;
+
+      return a.id.localeCompare(b.id);
+    })[0];
+}
+
+function isRemovedFromSchedule(project: Pick<ExistingProject, "status" | "currentStage">) {
+  const text = `${project.status ?? ""} ${project.currentStage ?? ""}`;
+
+  return text.includes(removedFromScheduleStatus) || text.includes("移出规划");
 }
 
 function buildExistingRefs(existingProjects: ExistingProject[]) {

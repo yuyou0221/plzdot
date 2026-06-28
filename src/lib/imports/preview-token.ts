@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 
 const PREVIEW_TTL_MINUTES = 30;
 
-export type ManagedImportType = "project-main" | "modeling";
+export type ManagedImportType = "project-main" | "project-main-full-refresh" | "modeling";
 
 type PreviewMetadata = {
   importType: ManagedImportType;
@@ -15,7 +15,15 @@ type PreviewMetadata = {
 };
 
 export function previewRecordType(importType: ManagedImportType) {
-  return importType === "project-main" ? "项目主数据Excel预览" : "建模款式Excel预览";
+  if (importType === "project-main") {
+    return "项目主数据Excel预览";
+  }
+
+  if (importType === "project-main-full-refresh") {
+    return "项目主数据全量更新Excel预览";
+  }
+
+  return "建模款式Excel预览";
 }
 
 export async function createImportPreviewToken(input: {
@@ -107,7 +115,10 @@ function parsePreviewMetadata(value: unknown): PreviewMetadata | null {
   }
 
   const metadata = value as Record<string, unknown>;
-  const importType = metadata.importType === "project-main" || metadata.importType === "modeling" ? metadata.importType : null;
+  const importType =
+    metadata.importType === "project-main" || metadata.importType === "project-main-full-refresh" || metadata.importType === "modeling"
+      ? metadata.importType
+      : null;
   const fileHash = typeof metadata.fileHash === "string" ? metadata.fileHash : null;
   const expiresAt = typeof metadata.expiresAt === "string" ? metadata.expiresAt : null;
 

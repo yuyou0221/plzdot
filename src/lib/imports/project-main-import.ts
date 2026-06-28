@@ -3,8 +3,14 @@ import "server-only";
 import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { extractProjectWorkbook, previewProjectMainImport, type ProjectMainImportPreview } from "@/lib/imports/project-main-preview";
+import {
+  extractProjectWorkbook,
+  previewProjectMainImport,
+  type ProjectMainImportMode,
+  type ProjectMainImportPreview,
+} from "@/lib/imports/project-main-preview";
 import { isProtectedRuntime } from "@/lib/runtime-flags";
+import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
 import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 import {
@@ -27,6 +33,7 @@ export type ProjectMainImportApplyResult = {
   importId: string;
   createdProjects: number;
   updatedProjects: number;
+  archivedProjects: number;
   importedTaskFacts: number;
   skippedTaskFacts: number;
   failedTaskFacts: number;
@@ -46,22 +53,24 @@ export async function applyProjectMainImport(
   workbookPath: string,
   fileName: string,
   importedBy: string,
+  options: { mode?: ProjectMainImportMode } = {},
 ): Promise<ProjectMainImportApplyResult> {
-  const preview = await previewProjectMainImport(workbookPath, fileName);
+  const mode = options.mode ?? "merge";
+  const preview = await previewProjectMainImport(workbookPath, fileName, { mode });
   const workbook = await extractProjectWorkbook(workbookPath);
   assertPreviewCanBeApplied(preview);
 
   return prisma.$transaction(async (tx) => {
     const importRecord = await tx.dataImport.create({
       data: {
-        importType: "项目主数据导入",
+        importType: mode === "full-refresh" ? "项目主数据全量更新" : "项目主数据导入",
         sourceFileName: fileName,
         sourceFilePath: path.resolve(workbookPath),
         rowCount: preview.summary.totalRows,
         importStatus: "成功",
         importedBy,
         rawMetadata: {
-          mode: "merge",
+          mode,
           inputContract: {
             identity: "项目ID优先；无项目ID时使用项目名称 + 版权方 + IP",
             actualProgress: "实际进度录入表按 projectId / 项目名称 + taskNo / taskName 转成 ProjectTaskFactEvent",
@@ -77,6 +86,7 @@ export async function applyProjectMainImport(
 
     let createdProjects = 0;
     let updatedProjects = 0;
+    let archivedProjects = 0;
     const plannedLaunchAdjustments: PlannedLaunchAdjustmentRecord[] = [];
     for (const row of preview.rows) {
       if (row.matchStatus === "matched" && row.matchedProjectId) {
@@ -124,6 +134,11 @@ export async function applyProjectMainImport(
       }
     }
 
+    if (mode === "full-refresh") {
+      const staleProjectIds = preview.fullRefresh?.staleProjects.map((project) => project.projectId) ?? [];
+      archivedProjects = await archiveProjectsRemovedFromExcel(tx, staleProjectIds, importRecord.id);
+    }
+
     const taskRuleWarnings = await compareWorkbookTaskRules(tx, workbook.taskRules);
     const actualImport = await applyActualTaskFactsFromWorkbook(tx, workbook.actuals, workbook.taskRules, importedBy);
 
@@ -131,7 +146,7 @@ export async function applyProjectMainImport(
       where: { id: importRecord.id },
       data: {
         rawMetadata: {
-          mode: "merge",
+          mode,
           inputContract: {
             identity: "项目ID优先；无项目ID时使用项目名称 + 版权方 + IP",
             actualProgress: "实际进度录入表按 projectId / 项目名称 + taskNo / taskName 转成 ProjectTaskFactEvent",
@@ -144,6 +159,14 @@ export async function applyProjectMainImport(
           actualTaskFacts: actualImport,
           taskRuleWarnings,
           plannedLaunchAdjustments,
+          ...(mode === "full-refresh"
+            ? {
+                fullRefresh: {
+                  archivedProjects,
+                  staleProjects: preview.fullRefresh?.staleProjects ?? [],
+                },
+              }
+            : {}),
         },
       },
     });
@@ -153,6 +176,7 @@ export async function applyProjectMainImport(
       importId: importRecord.id,
       createdProjects,
       updatedProjects,
+      archivedProjects,
       importedTaskFacts: actualImport.imported,
       skippedTaskFacts: actualImport.skipped,
       failedTaskFacts: actualImport.failed,
@@ -186,6 +210,32 @@ function assertPreviewCanBeApplied(preview: ProjectMainImportPreview) {
   if (blockers.length > 0) {
     throw new ProjectMainImportValidationError(blockers.join(" "));
   }
+}
+
+async function archiveProjectsRemovedFromExcel(tx: Prisma.TransactionClient, projectIds: string[], importId: string) {
+  const uniqueProjectIds = Array.from(new Set(projectIds.filter(Boolean)));
+  if (uniqueProjectIds.length === 0) {
+    return 0;
+  }
+
+  await Promise.all([
+    tx.scheduleProjectResult.deleteMany({ where: { projectId: { in: uniqueProjectIds } } }),
+    tx.scheduleTaskResult.deleteMany({ where: { projectId: { in: uniqueProjectIds } } }),
+    tx.workTask.deleteMany({ where: { projectId: { in: uniqueProjectIds } } }),
+    tx.taskCard.deleteMany({ where: { projectId: { in: uniqueProjectIds } } }),
+    tx.alert.deleteMany({ where: { projectId: { in: uniqueProjectIds } } }),
+  ]);
+
+  const result = await tx.project.updateMany({
+    where: { id: { in: uniqueProjectIds } },
+    data: {
+      status: removedFromScheduleStatus,
+      currentStage: removedFromScheduleStatus,
+      sourceImportId: importId,
+    },
+  });
+
+  return result.count;
 }
 
 function projectCreateData(row: ProjectPreviewRow, importId: string) {
