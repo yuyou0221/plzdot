@@ -139,6 +139,12 @@ type ScheduleTaskExpectation = {
   currentDeadlineRiskDays?: number;
   floatDays?: number;
   isBlockingLaunch?: boolean;
+  isLaunchPath?: boolean;
+  inferredCompleted?: boolean;
+  inferredCompletionDate?: string | null;
+  missingPredecessorIds?: string | null;
+  nonSchedulingTask?: boolean;
+  displayOnlySideTask?: boolean;
   plannedBeforeLatest?: boolean;
   calculatedNotBeforeToday?: boolean;
 };
@@ -168,6 +174,14 @@ type DirectEngineRowExpectation = {
   remainingDays?: number | null;
   calculatedStartDate?: string;
   calculatedFinishDate?: string;
+  impactStatus?: string;
+  riskLevel?: string;
+  isBlockingLaunch?: boolean;
+  isLaunchPath?: boolean;
+  inferredCompleted?: boolean;
+  inferredCompletionDate?: string | null;
+  nonSchedulingTask?: boolean;
+  displayOnlySideTask?: boolean;
   calculatedNotBeforeToday?: boolean;
 };
 
@@ -654,6 +668,12 @@ async function assertScenario(runtime: ScenarioRuntime) {
         "currentDeadlineRiskDays",
         "floatDays",
         "isBlockingLaunch",
+        "isLaunchPath",
+        "inferredCompleted",
+        "inferredCompletionDate",
+        "missingPredecessorIds",
+        "nonSchedulingTask",
+        "displayOnlySideTask",
       ] as const) {
         const expected = scheduleTaskExpectation[key];
         if (expected !== undefined) {
@@ -757,6 +777,14 @@ function assertDirectEngineCases(scenario: Scenario) {
         "remainingDays",
         "calculatedStartDate",
         "calculatedFinishDate",
+        "impactStatus",
+        "riskLevel",
+        "isBlockingLaunch",
+        "isLaunchPath",
+        "inferredCompleted",
+        "inferredCompletionDate",
+        "nonSchedulingTask",
+        "displayOnlySideTask",
       ] as const) {
         const expected = expectedRow[key];
         if (expected !== undefined) {

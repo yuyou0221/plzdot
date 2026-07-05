@@ -25,8 +25,13 @@ export function milestoneByTaskNo(taskNo: number): ScheduleMilestone {
 }
 
 export const modelingMilestoneTaskNos = [7, 8, 9, 10] as const;
+export const displayOnlySideTaskNos = [8, 9] as const;
 
 export function isModelingMilestoneTaskNo(taskNo: number) {
   return taskNo >= 7 && taskNo <= 10;
+}
+
+export function isDisplayOnlySideTaskNo(taskNo: number) {
+  return displayOnlySideTaskNos.includes(taskNo as (typeof displayOnlySideTaskNos)[number]);
 }
 

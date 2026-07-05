@@ -43,6 +43,10 @@ export function isActiveScheduleMilestoneTask(row: ScheduleMilestoneTaskInput) {
   const raw = rawObject(row.rawResult);
   const enabled = firstBoolean(raw.taskEnabled, raw.enabled, raw.isEnabled, raw.isActive, raw.isApplicable);
 
+  if (firstBoolean(raw.nonSchedulingTask, raw.displayOnlySideTask) === true) {
+    return false;
+  }
+
   if (enabled === false) {
     return false;
   }
