@@ -672,71 +672,94 @@ function calculateFromPlannedWithActuals(tasks, plannedById, actualById, inferre
       && !inferred?.inferredCompleted
       && allPredecessorsDone
       && (predecessorIds.length > 0 || cmpDate(today, p.startDate) >= 0);
+    const warnings = [];
+    const startConstraints = (t.startAfter || [])
+      .map(dep => {
+        const depCalc = calc.get(Number(dep.id))?.forecastFinish;
+        return depCalc ? helpers.addDays(depCalc, dep.lagDays || 0) : '';
+      })
+      .filter(Boolean);
+    const finishConstraints = (t.finishAfter || [])
+      .map(dep => {
+        const depCalc = calc.get(Number(dep.id))?.forecastFinish;
+        return depCalc ? helpers.addDays(depCalc, dep.lagDays || 0) : '';
+      })
+      .filter(Boolean);
+    const startConstraintDate = helpers.maxDate(...startConstraints);
+    const finishConstraintDate = helpers.maxDate(...finishConstraints);
 
-    let start = p.startDate;
-    for (const dep of t.startAfter || []) {
-      const depCalc = calc.get(Number(dep.id))?.forecastFinish;
-      if (depCalc) start = helpers.maxDate(start, helpers.addDays(depCalc, dep.lagDays || 0));
-    }
-    if (shouldAutoStart && !(t.startAfter || []).length) {
-      const predecessorFinish = predecessorIds
-        .map(depId => calc.get(depId)?.forecastFinish)
-        .filter(Boolean)
-        .sort()
-        .at(-1);
-      if (predecessorFinish) start = helpers.maxDate(start, predecessorFinish);
-    }
-    if (!start) start = p.startDate;
-    if (a?.actualStartDate && !a?.actualFinishDate) {
-      start = helpers.maxDate(start, a.actualStartDate);
-    }
-    if (shouldAutoStart) {
-      start = helpers.maxDate(start, today);
-    }
-    let finish = helpers.finishFromStart(start, t.days);
-    for (const dep of t.finishAfter || []) {
-      const depCalc = calc.get(Number(dep.id))?.forecastFinish;
-      if (depCalc) finish = helpers.maxDate(finish, helpers.addDays(depCalc, dep.lagDays || 0));
-    }
+    let start = '';
+    let finish = '';
+    let basis = 'baseline';
+
     if (a?.actualFinishDate) {
-      if (a.actualStartDate) start = a.actualStartDate;
+      start = a.actualStartDate || p.startDate;
       finish = a.actualFinishDate;
-    }
-    if (!a?.actualFinishDate && inferred?.inferredCompleted) {
-      finish = inferred.inferredCompletionDate;
-      if (cmpDate(start, finish) > 0) start = cmpDate(p.startDate, finish) <= 0 ? p.startDate : finish;
-    }
-    if (!a?.actualFinishDate && a?.actualStartDate) {
-      finish = helpers.maxDate(finish, today);
-    }
-    if (!a?.actualFinishDate && Number.isFinite(a?.remainingDays)) {
-      finish = helpers.maxDate(finish, helpers.addDays(today, a.remainingDays));
-    }
-    if (!a?.actualFinishDate && a?.expectedFinishDate && cmpDate(a.expectedFinishDate, today) >= 0) {
-      finish = helpers.maxDate(finish, a.expectedFinishDate);
-    }
-    if (!a?.actualFinishDate && !inferred?.inferredCompleted && cmpDate(finish, today) < 0) {
-      if (!a?.actualStartDate && !Number.isFinite(a?.remainingDays)) {
-        start = helpers.maxDate(start, today);
-        finish = helpers.finishFromStart(start, t.days);
-      } else {
-        finish = today;
-        if (cmpDate(start, finish) > 0) start = finish;
+      basis = 'actual_finish';
+      if (a.actualStartDate && cmpDate(a.actualStartDate, a.actualFinishDate) > 0) {
+        warnings.push('actual_start_after_actual_finish');
       }
+      if (startConstraintDate && cmpDate(a.actualFinishDate, startConstraintDate) < 0) {
+        warnings.push('actual_finish_before_start_after_constraint');
+      }
+      if (finishConstraintDate && cmpDate(a.actualFinishDate, finishConstraintDate) < 0) {
+        warnings.push('actual_finish_before_finish_after_constraint');
+      }
+    } else if (inferred?.inferredCompleted) {
+      finish = inferred.inferredCompletionDate;
+      start = a?.actualStartDate || startConstraintDate || (cmpDate(p.startDate, finish) <= 0 ? p.startDate : finish);
+      if (cmpDate(start, finish) > 0) start = finish;
+      basis = 'downstream_inferred';
+    } else if (a?.actualStartDate) {
+      start = a.actualStartDate;
+      if (Number.isFinite(a.remainingDays)) {
+        finish = helpers.addDays(today, a.remainingDays);
+        basis = 'remaining_days';
+      } else if (a.expectedFinishDate && cmpDate(a.expectedFinishDate, today) >= 0) {
+        finish = a.expectedFinishDate;
+        basis = 'expected_finish';
+      } else {
+        finish = helpers.finishFromStart(start, t.days);
+        basis = a.expectedFinishDate && cmpDate(a.expectedFinishDate, today) < 0
+          ? 'expired_expected_actual_start_plus_duration'
+          : 'actual_start_plus_duration';
+      }
+      finish = helpers.maxDate(finish, start, finishConstraintDate);
+      if (cmpDate(finish, today) < 0) finish = today;
+      if (cmpDate(start, finish) > 0) start = finish;
+    } else {
+      if ((t.startAfter || []).length) {
+        start = startConstraintDate || p.startDate;
+        basis = startConstraintDate ? 'predecessor_calculated_pull_forward' : 'baseline';
+      } else {
+        start = p.startDate;
+        basis = 'baseline';
+      }
+      if (cmpDate(start, today) < 0) {
+        start = today;
+        basis = basis === 'predecessor_calculated_pull_forward'
+          ? 'predecessor_calculated_pull_forward_from_today'
+          : 'baseline_from_today';
+      }
+
+      if (Number.isFinite(a?.remainingDays)) {
+        finish = helpers.addDays(today, a.remainingDays);
+        basis = 'remaining_days';
+      } else if (a?.expectedFinishDate && cmpDate(a.expectedFinishDate, today) >= 0) {
+        finish = a.expectedFinishDate;
+        basis = 'expected_finish';
+      } else {
+        finish = helpers.finishFromStart(start, t.days);
+      }
+      finish = helpers.maxDate(finish, start, finishConstraintDate);
+      if (cmpDate(finish, today) < 0) finish = today;
     }
+
+    if (!finish) finish = helpers.finishFromStart(start || p.startDate, t.days);
+    if (!start) start = p.startDate;
+
     const forecastStart = start;
     const forecastFinish = finish;
-    const basis = a?.actualFinishDate
-      ? 'actual_finish'
-      : Number.isFinite(a?.remainingDays)
-        ? 'remaining_days'
-        : a?.actualStartDate
-          ? 'actual_start_plus_duration'
-          : inferred?.inferredCompleted
-            ? 'downstream_inferred'
-            : shouldAutoStart
-              ? 'predecessors_done_auto_start'
-              : 'baseline';
     let displayedStart = '';
     let displayedFinish = '';
     let displayedBasis = 'not_started';
@@ -760,6 +783,7 @@ function calculateFromPlannedWithActuals(tasks, plannedById, actualById, inferre
       forecastStart,
       forecastFinish,
       forecastBasis: basis,
+      calculationWarnings: warnings.join(','),
     });
   }
   applyDisplayOnlySideTaskDates(tasks, plannedById, actualById, inferredById, calc, helpers);
@@ -871,7 +895,8 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
   const calculationTasks = applyDetailPageTaskRule(planned.tasks);
   const inferredById = inferCompletionFromDownstream(calculationTasks, actualById);
   const calc = calculateFromPlannedWithActuals(calculationTasks, plannedById, actualById, inferredById, helpers, today);
-  const currentProjectedLaunchDate = helpers.maxDate(effectiveLaunchDate, calc.get(30)?.forecastFinish, calc.get(31)?.forecastFinish);
+  const earliestReadyDate = helpers.maxDate(calc.get(30)?.forecastFinish, calc.get(31)?.forecastFinish);
+  const currentProjectedLaunchDate = helpers.maxDate(effectiveLaunchDate, earliestReadyDate);
   const currentLatest = applyDetailPageSchedule(
     engine.fromTasks(detailPageAnchorMap(currentProjectedLaunchDate, helpers), params),
     currentProjectedLaunchDate,
@@ -952,6 +977,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       projectFeasibility: cmpDate(planned.productionMilestone, effectiveLaunchDate) > 0 ? 'planned_path_exceeds_launch' : 'planned_path_within_launch',
       plannedBufferDays,
       plannedScheduleBasis: 'project_start_forward',
+      earliestReadyDate,
       projectedLaunchDate: currentProjectedLaunchDate,
       taskId: id,
       taskName: t.name,
@@ -985,6 +1011,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       inferredCompletionDate: inferred.inferredCompletionDate || '',
       inferredCompletionFromTaskIds: inferred.inferredCompletionFromTaskIds || '',
       remainingDays: a.remainingDays ?? '',
+      calculationWarnings: c.calculationWarnings || '',
       taskStatus,
       actualStarted,
       autoStarted,
@@ -1023,6 +1050,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
         `currentLatest=${l.startDate}~${l.finishDate}`,
         `calculated=${c.forecastStart}~${forecastFinishForStatus}`,
         `forecast=${c.forecastStart}~${c.forecastFinish}`,
+        c.calculationWarnings ? `warnings=${c.calculationWarnings}` : '',
         project.assumptions.length ? `assumptions=${project.assumptions.join(';')}` : '',
         `actualProjectStart=${effectiveProjectStartDate}`,
         `plannedProjectStart=${planned.plannedProjectStartDate}`,
@@ -1047,6 +1075,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       plannedScheduleBasis: 'project_start_forward',
       projectFeasibility: cmpDate(planned.productionMilestone, effectiveLaunchDate) > 0 ? 'planned_path_exceeds_launch' : 'planned_path_within_launch',
       projectedLaunchDate: currentProjectedLaunchDate,
+      earliestReadyDate,
       launchDeltaDays: helpers.signedDays(effectiveLaunchDate, currentProjectedLaunchDate),
       duplicateActualTaskIds: duplicateTaskIds,
       summary: {
@@ -1092,6 +1121,7 @@ function main() {
     'projectId', 'projectName', 'projectStatus', 'plannedLaunchDate', 'projectedLaunchDate', 'launchDeltaDays',
     'taskId', 'taskName', 'durationDays', 'startAfterRules', 'finishAfterRules', 'taskStatus', 'autoStarted', 'missingActualPredecessorIds',
     'actualStartDate', 'actualFinishDate', 'inferredCompleted', 'inferredCompletionDate',
+    'calculationWarnings',
     'plannedStartDate', 'plannedFinishDate', 'forecastStartDate', 'forecastFinishDate',
     'originalLatestStartDate', 'originalLatestFinishDate', 'latestStartDate', 'latestFinishDate',
     'currentLatestStartDate', 'currentLatestFinishDate',

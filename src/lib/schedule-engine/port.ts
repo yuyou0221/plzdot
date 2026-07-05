@@ -7,6 +7,7 @@ export type ScheduleEngineProjectResult = {
   projectId: string;
   projectName: string;
   plannedLaunchDate: string;
+  earliestReadyDate?: string;
   projectedLaunchDate?: string;
   launchDeltaDays?: number;
   riskLevel?: string;
@@ -47,6 +48,7 @@ export type ScheduleEngineTaskResult = {
   actualStartDate?: string;
   actualFinishDate?: string;
   expectedFinishDate?: string;
+  calculationWarnings?: string;
   taskStatus?: string;
   delayDays?: number;
   floatDays?: number;

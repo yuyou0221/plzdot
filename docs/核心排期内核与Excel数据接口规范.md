@@ -68,7 +68,8 @@ Excel 或数据库输入进入内核后，正式输出必须保持以下日期�
 | `plannedStartDate` / `plannedFinishDate` | 管理计划日期 | 从 `projectStartDate` 正推 |
 | `latestStartDate` / `latestFinishDate` | 原始最晚安全日期 | 从 `plannedLaunchDate` / `effectiveLaunchDate` 倒推 |
 | `currentLatestStartDate` / `currentLatestFinishDate` | 动态最晚安全日期 | 从 `projectedLaunchDate` 倒推 |
-| `calculatedStartDate` / `calculatedFinishDate` | 当前预测日期 | 基于 planned 和实际进度事实保守传播 |
+| `calculatedStartDate` / `calculatedFinishDate` | 当前可达预测日期 | 基于 actualFinishDate、actualStartDate、expectedFinishDate、remainingDays 和前置 calculated 结果传播 |
+| `earliestReadyDate` | 当前最早可完成日期 | `max(#30 calculatedFinishDate, #31 calculatedFinishDate)` |
 | `actualStartDate` / `actualFinishDate` | 实际执行事实 | 产品组工作指引、Excel 实际进度或其他事实入口 |
 
 项目必须有 `projectStartDate` 才能生成 `planned`。如果缺少启动日期，正式测算应产生 warning/error，不允许用上线日期倒推或固定天数生成假计划。
@@ -95,9 +96,18 @@ Excel 或数据库输入进入内核后，正式输出必须保持以下日期�
 
 未完成任务的 `calculatedFinishDate` 不允许停在 `today` 之前。即使存在已经过期的 `expectedFinishDate`，也不能把它作为最终预测完成日：
 
-- 无 `actualStartDate` 且无 `remainingDays`：按 `today + 标准工期` 保守预测。
-- 有 `remainingDays`：按 `today + remainingDays` 保守预测。
-- 有 `actualStartDate` 但没有完成：至少推到 `today`。
+- 已完成任务：`actualFinishDate` 是硬事实，直接覆盖本任务 `calculatedFinishDate`，并用来继续传播下游；如果早于模型约束，只输出 warning，不推迟事实。
+- 进行中任务：`actualStartDate` 是硬事实，直接作为 `calculatedStartDate`，不再用 planned 兜底压住。
+- 有 `remainingDays`：按 `today + remainingDays` 预测本任务完成日，可以早于标准工期。
+- 有未来 `expectedFinishDate`：按该日期预测本任务完成日，可以早于标准工期。
+- 无 `actualStartDate`、无 `remainingDays`、无有效未来预计完成日：从前置 calculated 可达日期开始；如果该开始日已经早于 `today`，则按 `today + 标准工期` 预测。
+- `finishAfter` 是硬完成约束，未完成任务不能早于该约束完成。
+
+项目级日期口径：
+
+- `earliestReadyDate = max(#30 calculatedFinishDate, #31 calculatedFinishDate)`。
+- `projectedLaunchDate = max(effectiveLaunchDate, earliestReadyDate)`。
+- 当项目提前准备好但计划上线日更晚时，`earliestReadyDate` 可以早于 `projectedLaunchDate`。
 
 ## 模块使用规则
 
