@@ -97,10 +97,11 @@ export async function POST(request: Request) {
         : "";
     const archivedProjectText = result.archivedProjects > 0 ? ` 移出规划 ${result.archivedProjects} 个旧项目。` : "";
     const recalculationText = recalculation.ok ? "已自动完成正式排期重算。" : recalculation.message;
+    const actualTaskFactText = buildActualTaskFactText(result.actualTaskFacts);
 
     return NextResponse.json({
       ok: recalculation.ok,
-      message: `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，写入 ${result.importedTaskFacts} 条任务事实。${archivedProjectText}${recalculationText}${plannedLaunchAdjustmentText}${taskRuleWarningText}`,
+      message: `导入完成：新增 ${result.createdProjects} 个项目，更新 ${result.updatedProjects} 个项目，${actualTaskFactText}${archivedProjectText}${recalculationText}${plannedLaunchAdjustmentText}${taskRuleWarningText}`,
       result,
       recalculation,
     });
@@ -141,4 +142,34 @@ function sanitizeFileName(value: string) {
 
 function sha256(buffer: Buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function buildActualTaskFactText(summary: {
+  actualRowsTotal: number;
+  actualRowsMatched: number;
+  actualRowsSkipped: number;
+  actualFactsCreated: number;
+  actualFactsSkippedExisting: number;
+  actualProjectNameFallbackCount: number;
+  actualUnmatchedProjectSamples: Array<{ rowNumber: number; projectName: string; taskName: string; reason: string }>;
+  actualUnmatchedTaskSamples: Array<{ rowNumber: number; projectName: string; taskName: string; reason: string }>;
+}) {
+  const base = `实际进度表 ${summary.actualRowsTotal} 行，匹配 ${summary.actualRowsMatched} 行，写入 ${summary.actualFactsCreated} 条任务事实`;
+  const skipped = summary.actualFactsSkippedExisting > 0 ? `，跳过已存在 ${summary.actualFactsSkippedExisting} 条` : "";
+  const fallback =
+    summary.actualProjectNameFallbackCount > 0 ? `，其中 ${summary.actualProjectNameFallbackCount} 行使用项目名称精确匹配` : "";
+  const unmatchedProject = summary.actualUnmatchedProjectSamples[0];
+  const unmatchedTask = summary.actualUnmatchedTaskSamples[0];
+  const reason =
+    summary.actualRowsTotal > 0 && summary.actualFactsCreated === 0 && summary.actualFactsSkippedExisting === 0
+      ? `。未写入原因示例：${
+          unmatchedProject
+            ? `第 ${unmatchedProject.rowNumber} 行项目“${unmatchedProject.projectName || "-"}”未匹配：${unmatchedProject.reason}`
+            : unmatchedTask
+              ? `第 ${unmatchedTask.rowNumber} 行任务“${unmatchedTask.taskName || "-"}”未匹配：${unmatchedTask.reason}`
+              : `跳过 ${summary.actualRowsSkipped} 行，请查看预览提示`
+        }`
+      : "。";
+
+  return `${base}${skipped}${fallback}${reason}`;
 }

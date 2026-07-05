@@ -9,7 +9,6 @@ import {
   type ProjectMainImportMode,
   type ProjectMainImportPreview,
 } from "@/lib/imports/project-main-preview";
-import { isProtectedRuntime } from "@/lib/runtime-flags";
 import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
 import { ingestProjectTaskFactEventWithTx, parseProjectTaskFactEvent } from "@/lib/schedule-task-fact-events-core";
 import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
@@ -20,6 +19,32 @@ import {
 } from "@/lib/schedule-planning-adjustments";
 
 type ProjectPreviewRow = ProjectMainImportPreview["rows"][number];
+
+type ActualTaskFactSample = {
+  rowNumber: number;
+  projectName: string;
+  projectCode: string;
+  projectId: string;
+  taskName: string;
+  taskNo?: number | null;
+  reason: string;
+};
+
+type ActualTaskFactsApplySummary = {
+  actualRowsTotal: number;
+  actualRowsMatched: number;
+  actualRowsSkipped: number;
+  actualFactsCreated: number;
+  actualFactsUpdated: number;
+  actualFactsSkippedExisting: number;
+  actualProjectNameFallbackCount: number;
+  actualUnmatchedProjectSamples: ActualTaskFactSample[];
+  actualUnmatchedTaskSamples: ActualTaskFactSample[];
+  actualSkippedRowSamples: ActualTaskFactSample[];
+  imported: number;
+  skipped: number;
+  failed: number;
+};
 
 export class ProjectMainImportValidationError extends Error {
   constructor(message: string) {
@@ -37,6 +62,7 @@ export type ProjectMainImportApplyResult = {
   importedTaskFacts: number;
   skippedTaskFacts: number;
   failedTaskFacts: number;
+  actualTaskFacts: ActualTaskFactsApplySummary;
   taskRuleWarnings: string[];
   plannedLaunchAdjustmentSummary: {
     total: number;
@@ -180,6 +206,7 @@ export async function applyProjectMainImport(
       importedTaskFacts: actualImport.imported,
       skippedTaskFacts: actualImport.skipped,
       failedTaskFacts: actualImport.failed,
+      actualTaskFacts: actualImport,
       taskRuleWarnings,
       plannedLaunchAdjustmentSummary: {
         total: plannedLaunchAdjustments.length,
@@ -332,7 +359,17 @@ async function applyActualTaskFactsFromWorkbook(
   taskRules: Array<Record<string, unknown>>,
   importedBy: string,
 ) {
-  const result = {
+  const result: ActualTaskFactsApplySummary = {
+    actualRowsTotal: actuals.length,
+    actualRowsMatched: 0,
+    actualRowsSkipped: 0,
+    actualFactsCreated: 0,
+    actualFactsUpdated: 0,
+    actualFactsSkippedExisting: 0,
+    actualProjectNameFallbackCount: 0,
+    actualUnmatchedProjectSamples: [],
+    actualUnmatchedTaskSamples: [],
+    actualSkippedRowSamples: [],
     imported: 0,
     skipped: 0,
     failed: 0,
@@ -354,70 +391,259 @@ async function applyActualTaskFactsFromWorkbook(
   const projectByName = uniqueMap(projects, (project) => normalizeKey(project.projectName));
   const taskNoByName = await buildTaskNoByName(tx, taskRules);
 
-  for (const record of actuals) {
+  for (const [index, record] of actuals.entries()) {
+    const rowNumber = index + 2;
     const recordKey = stringFieldAny(record, ["recordKey", "记录Key"]);
-    const projectId = stringFieldAny(record, ["项目ID", "系统项目ID", "projectId"]);
-    const projectName = stringFieldAny(record, ["项目名称"]);
-    const projectCode = stringFieldAny(record, ["项目编号"]) || projectCodeFromRecordKey(recordKey);
-    const projectBySystemId = projectById.get(normalizeKey(projectId));
-    const project = isProtectedRuntime()
-      ? projectBySystemId
-      : projectBySystemId || projectByCode.get(normalizeKey(projectCode)) || projectByName.get(normalizeKey(projectName));
+    const projectId = stringFieldAny(record, ["项目ID", "系统项目ID", "系统 projectId", "projectId"]);
+    const projectName = stringFieldAny(record, ["项目名称", "projectName"]);
+    const recordKeyProjectCode = projectCodeFromRecordKey(recordKey);
+    const explicitProjectCode = stringFieldAny(record, ["业务项目编号", "项目编号", "项目编码", "projectCode"]);
+    const projectCode = recordKeyProjectCode || explicitProjectCode;
+    const projectMatch = resolveActualProject({
+      projectById,
+      projectByCode,
+      projectByName,
+      recordKeyProjectCode,
+      projectId,
+      explicitProjectCode,
+      projectName,
+    });
 
     const taskName = stringFieldAny(record, ["taskName", "任务名称"]);
     const taskNo =
-      numberFieldAny(record, ["taskNo", "taskId", "任务编号", "任务ID"]) ||
       taskNoFromRecordKey(recordKey) ||
+      numberFieldAny(record, ["taskNo", "taskId", "任务编号", "任务ID"]) ||
       taskNoByName.get(normalizeKey(taskName));
 
+    const taskStatus = stringFieldAny(record, ["taskStatus", "任务状态", "状态", "status"]);
     const actualStartDate = dateFromValue(fieldAny(record, ["实际开始日期", "actualStartDate"]));
     const actualFinishDate = dateFromValue(fieldAny(record, ["实际完成日期", "actualFinishDate"]));
     const expectedFinishDate = dateFromValue(fieldAny(record, ["推进中任务预期完成时间", "预计完成日期", "expectedFinishDate"]));
     const note = stringFieldAny(record, ["备注", "父记录", "note"]);
 
-    if (!project || !taskNo || taskNo < 1 || taskNo > 31 || (!actualStartDate && !actualFinishDate)) {
-      result.skipped += 1;
+    if (!projectMatch.project) {
+      result.actualRowsSkipped += 1;
+      pushSample(result.actualUnmatchedProjectSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId,
+        taskName,
+        taskNo,
+        reason: projectMatch.reason,
+      });
+      continue;
+    }
+    if (projectMatch.usedNameFallback) {
+      result.actualProjectNameFallbackCount += 1;
+    }
+
+    if (!taskNo || taskNo < 1 || taskNo > 31) {
+      result.actualRowsSkipped += 1;
+      pushSample(result.actualUnmatchedTaskSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId: projectMatch.project.id,
+        taskName,
+        taskNo,
+        reason: "未匹配到标准任务编号",
+      });
       continue;
     }
 
-    const eventType = actualFinishDate ? "task_completed" : "task_started";
-    const factDate = actualFinishDate || actualStartDate;
-    const event = parseProjectTaskFactEvent({
-      eventId: `manual-excel:task-fact:${project.id}:${taskNo}:${eventType}:${factDate}`,
-      eventType,
-      sourceModule: "manual-excel",
-      projectId: project.id,
+    if (!actualStartDate && !actualFinishDate && !expectedFinishDate) {
+      result.actualRowsSkipped += 1;
+      pushSample(result.actualSkippedRowSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId: projectMatch.project.id,
+        taskName,
+        taskNo,
+        reason: "没有实际开始、实际完成或预计完成日期",
+      });
+      continue;
+    }
+
+    result.actualRowsMatched += 1;
+
+    const events = buildActualFactEvents({
+      projectId: projectMatch.project.id,
       taskNo,
-      taskKey: `#${taskNo}`,
-      taskName: taskName || `#${taskNo}`,
-      occurredAt: occurredAtFromDate(actualFinishDate || actualStartDate),
-      operatorId: importedBy,
-      operatorName: importedBy,
-      payload:
-        eventType === "task_completed"
-          ? {
-              actualFinishDate,
-              ...(actualStartDate ? { actualStartDate } : {}),
-              status: "已完成",
-              note: note || `Excel 导入：${taskName || `#${taskNo}`} 已完成。`,
-            }
-          : {
-              actualStartDate,
-              ...(expectedFinishDate ? { expectedFinishDate } : {}),
-              status: "进行中",
-              note: note || `Excel 导入：${taskName || `#${taskNo}`} 已开始。`,
-            },
+      taskName,
+      importedBy,
+      actualStartDate,
+      actualFinishDate,
+      expectedFinishDate,
+      taskStatus,
+      note,
     });
 
-    const ingestResult = await ingestProjectTaskFactEventWithTx(tx, event);
-    if (ingestResult.ok || ingestResult.duplicate) {
-      result.imported += ingestResult.duplicate ? 0 : 1;
-    } else {
+    for (const eventInput of events) {
+      const event = parseProjectTaskFactEvent(eventInput);
+      const ingestResult = await ingestProjectTaskFactEventWithTx(tx, event);
+
+      if (ingestResult.duplicate) {
+        result.actualFactsSkippedExisting += 1;
+        continue;
+      }
+      if (ingestResult.ok) {
+        result.actualFactsCreated += 1;
+        result.actualFactsUpdated += 1;
+        continue;
+      }
+
       result.failed += 1;
+      pushSample(result.actualSkippedRowSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId: projectMatch.project.id,
+        taskName,
+        taskNo,
+        reason: ingestResult.message,
+      });
     }
   }
 
+  result.imported = result.actualFactsCreated;
+  result.skipped = result.actualRowsSkipped + result.actualFactsSkippedExisting;
+
   return result;
+}
+
+function resolveActualProject({
+  projectById,
+  projectByCode,
+  projectByName,
+  recordKeyProjectCode,
+  projectId,
+  explicitProjectCode,
+  projectName,
+}: {
+  projectById: Map<string, { id: string; projectCode: string | null; projectName: string }>;
+  projectByCode: Map<string, { id: string; projectCode: string | null; projectName: string }>;
+  projectByName: Map<string, { id: string; projectCode: string | null; projectName: string }>;
+  recordKeyProjectCode: string;
+  projectId: string;
+  explicitProjectCode: string;
+  projectName: string;
+}) {
+  const byRecordKey = projectByCode.get(normalizeKey(recordKeyProjectCode));
+  if (byRecordKey) {
+    return { project: byRecordKey, reason: "recordKey 业务编号匹配", usedNameFallback: false };
+  }
+
+  const byId = projectById.get(normalizeKey(projectId));
+  if (byId) {
+    return { project: byId, reason: "项目ID匹配", usedNameFallback: false };
+  }
+
+  const byCode = projectByCode.get(normalizeKey(explicitProjectCode));
+  if (byCode) {
+    return { project: byCode, reason: "业务项目编号匹配", usedNameFallback: false };
+  }
+
+  const byName = projectByName.get(normalizeKey(projectName));
+  if (byName) {
+    return { project: byName, reason: "项目名称精确唯一匹配", usedNameFallback: true };
+  }
+
+  return {
+    project: null,
+    reason: projectName ? "项目名称未匹配到唯一项目" : "缺少项目ID、业务编号和项目名称",
+    usedNameFallback: false,
+  };
+}
+
+function buildActualFactEvents({
+  projectId,
+  taskNo,
+  taskName,
+  importedBy,
+  actualStartDate,
+  actualFinishDate,
+  expectedFinishDate,
+  taskStatus,
+  note,
+}: {
+  projectId: string;
+  taskNo: number;
+  taskName: string;
+  importedBy: string;
+  actualStartDate: string;
+  actualFinishDate: string;
+  expectedFinishDate: string;
+  taskStatus: string;
+  note: string;
+}) {
+  const name = taskName || `#${taskNo}`;
+  const events: Array<Parameters<typeof parseProjectTaskFactEvent>[0]> = [];
+
+  if (actualStartDate) {
+    events.push({
+      eventId: `manual-excel:task-fact:${projectId}:${taskNo}:task_started:${actualStartDate}`,
+      eventType: "task_started",
+      sourceModule: "manual-excel",
+      projectId,
+      taskNo,
+      taskKey: `#${taskNo}`,
+      taskName: name,
+      occurredAt: occurredAtFromDate(actualStartDate),
+      operatorId: importedBy,
+      operatorName: importedBy,
+      payload: {
+        actualStartDate,
+        status: "进行中",
+        note: note || `Excel 导入：${name} 已开始。`,
+      },
+    });
+  }
+
+  if (expectedFinishDate) {
+    events.push({
+      eventId: `manual-excel:task-fact:${projectId}:${taskNo}:task_expected_finish_updated:${expectedFinishDate}`,
+      eventType: "task_expected_finish_updated",
+      sourceModule: "manual-excel",
+      projectId,
+      taskNo,
+      taskKey: `#${taskNo}`,
+      taskName: name,
+      occurredAt: occurredAtFromDate(expectedFinishDate),
+      operatorId: importedBy,
+      operatorName: importedBy,
+      payload: {
+        expectedFinishDate,
+        status: taskStatus || "进行中",
+        note: note || `Excel 导入：${name} 更新预计完成。`,
+      },
+    });
+  }
+
+  if (actualFinishDate) {
+    events.push({
+      eventId: `manual-excel:task-fact:${projectId}:${taskNo}:task_completed:${actualFinishDate}`,
+      eventType: "task_completed",
+      sourceModule: "manual-excel",
+      projectId,
+      taskNo,
+      taskKey: `#${taskNo}`,
+      taskName: name,
+      occurredAt: occurredAtFromDate(actualFinishDate),
+      operatorId: importedBy,
+      operatorName: importedBy,
+      payload: {
+        actualFinishDate,
+        ...(actualStartDate ? { actualStartDate } : {}),
+        ...(expectedFinishDate ? { expectedFinishDate } : {}),
+        status: "已完成",
+        note: note || `Excel 导入：${name} 已完成。`,
+      },
+    });
+  }
+
+  return events;
 }
 
 async function buildTaskNoByName(tx: Prisma.TransactionClient, workbookTaskRules: Array<Record<string, unknown>>) {
@@ -460,6 +686,14 @@ function uniqueMap<T>(items: T[], keyOf: (item: T) => string) {
   }
 
   return values;
+}
+
+function pushSample(samples: ActualTaskFactSample[], sample: ActualTaskFactSample) {
+  if (samples.length >= 10) {
+    return;
+  }
+
+  samples.push(sample);
 }
 
 function projectCodeFromRecordKey(recordKey: string) {

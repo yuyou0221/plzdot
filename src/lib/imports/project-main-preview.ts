@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { isProtectedRuntime } from "@/lib/runtime-flags";
 import { suggestedLaunchDateForMonthIndex } from "@/lib/schedule-domain/planned-launch-rules";
 import { removedFromScheduleStatus } from "@/lib/schedule-simulation";
+import { canonicalTaskRuleWhere } from "@/lib/schedule-task-rules";
 
 export type ProjectMainImportMode = "merge" | "full-refresh";
 
@@ -81,6 +82,26 @@ type FullRefreshProjectPreview = {
   status: string;
 };
 
+export type ActualTaskFactSample = {
+  rowNumber: number;
+  projectName: string;
+  projectCode: string;
+  projectId: string;
+  taskName: string;
+  taskNo?: number | null;
+  reason: string;
+};
+
+export type ActualTaskFactsPreview = {
+  actualRowsTotal: number;
+  actualRowsMatched: number;
+  actualRowsSkipped: number;
+  actualProjectNameFallbackCount: number;
+  actualUnmatchedProjectSamples: ActualTaskFactSample[];
+  actualUnmatchedTaskSamples: ActualTaskFactSample[];
+  actualSkippedRowSamples: ActualTaskFactSample[];
+};
+
 export type ProjectMainImportPreview = {
   importType: "project-main" | "project-main-full-refresh";
   importMode: ProjectMainImportMode;
@@ -121,6 +142,7 @@ export type ProjectMainImportPreview = {
   fullRefresh?: {
     staleProjects: FullRefreshProjectPreview[];
   };
+  actualTaskFactsPreview: ActualTaskFactsPreview;
   rows: ProjectPreviewRow[];
 };
 
@@ -201,6 +223,7 @@ export async function previewProjectMainImport(
   );
   const issueCounts = countIssues(rows);
   const fullRefresh = mode === "full-refresh" ? buildFullRefreshPreview(existingProjects, rows) : undefined;
+  const actualTaskFactsPreview = await previewActualTaskFacts(workbook.actuals, workbook.taskRules, existingProjects);
 
   return {
     importType: mode === "full-refresh" ? "project-main-full-refresh" : "project-main",
@@ -230,6 +253,7 @@ export async function previewProjectMainImport(
     referenceChanges: collectReferenceChanges(rows, existingRefs),
     monthBuckets: buildMonthBuckets(rows),
     ...(fullRefresh ? { fullRefresh } : {}),
+    actualTaskFactsPreview,
     rows,
   };
 }
@@ -518,6 +542,151 @@ function buildFullRefreshPreview(existingProjects: ExistingProject[], rows: Proj
   return { staleProjects };
 }
 
+async function previewActualTaskFacts(
+  actuals: Array<Record<string, unknown>>,
+  taskRules: Array<Record<string, unknown>>,
+  existingProjects: ExistingProject[],
+): Promise<ActualTaskFactsPreview> {
+  const result: ActualTaskFactsPreview = {
+    actualRowsTotal: actuals.length,
+    actualRowsMatched: 0,
+    actualRowsSkipped: 0,
+    actualProjectNameFallbackCount: 0,
+    actualUnmatchedProjectSamples: [],
+    actualUnmatchedTaskSamples: [],
+    actualSkippedRowSamples: [],
+  };
+
+  if (actuals.length === 0) {
+    return result;
+  }
+
+  const projectById = new Map(existingProjects.map((project) => [normalizeKey(project.id), project]));
+  const projectByCode = uniqueMap(existingProjects, (project) => normalizeKey(project.projectCode));
+  const projectByName = uniqueMap(existingProjects, (project) => normalizeKey(project.projectName));
+  const taskNoByName = await buildPreviewTaskNoByName(taskRules);
+
+  for (const [index, record] of actuals.entries()) {
+    const rowNumber = index + 2;
+    const recordKey = stringFieldAny(record, ["recordKey", "记录Key"]);
+    const projectId = stringFieldAny(record, ["项目ID", "系统项目ID", "系统 projectId", "projectId"]);
+    const projectName = stringFieldAny(record, ["项目名称", "projectName"]);
+    const recordKeyProjectCode = projectCodeFromRecordKey(recordKey);
+    const explicitProjectCode = stringFieldAny(record, ["业务项目编号", "项目编号", "项目编码", "projectCode"]);
+    const projectCode = recordKeyProjectCode || explicitProjectCode;
+    const taskName = stringFieldAny(record, ["taskName", "任务名称"]);
+    const taskNo =
+      taskNoFromRecordKey(recordKey) ||
+      numberFieldAny(record, ["taskNo", "taskId", "任务编号", "任务ID"]) ||
+      taskNoByName.get(normalizeKey(taskName));
+    const actualStartDate = dateFromValue(fieldAny(record, ["实际开始日期", "actualStartDate"]));
+    const actualFinishDate = dateFromValue(fieldAny(record, ["实际完成日期", "actualFinishDate"]));
+    const expectedFinishDate = dateFromValue(fieldAny(record, ["推进中任务预期完成时间", "预计完成日期", "expectedFinishDate"]));
+    const projectMatch = resolveActualProjectPreview({
+      projectById,
+      projectByCode,
+      projectByName,
+      recordKeyProjectCode,
+      projectId,
+      explicitProjectCode,
+      projectName,
+    });
+
+    if (!projectMatch.project) {
+      result.actualRowsSkipped += 1;
+      pushActualSample(result.actualUnmatchedProjectSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId,
+        taskName,
+        taskNo,
+        reason: projectMatch.reason,
+      });
+      continue;
+    }
+    if (projectMatch.usedNameFallback) {
+      result.actualProjectNameFallbackCount += 1;
+    }
+
+    if (!taskNo || taskNo < 1 || taskNo > 31) {
+      result.actualRowsSkipped += 1;
+      pushActualSample(result.actualUnmatchedTaskSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId: projectMatch.project.id,
+        taskName,
+        taskNo,
+        reason: "未匹配到标准任务编号",
+      });
+      continue;
+    }
+
+    if (!actualStartDate && !actualFinishDate && !expectedFinishDate) {
+      result.actualRowsSkipped += 1;
+      pushActualSample(result.actualSkippedRowSamples, {
+        rowNumber,
+        projectName,
+        projectCode,
+        projectId: projectMatch.project.id,
+        taskName,
+        taskNo,
+        reason: "没有实际开始、实际完成或预计完成日期",
+      });
+      continue;
+    }
+
+    result.actualRowsMatched += 1;
+  }
+
+  return result;
+}
+
+function resolveActualProjectPreview({
+  projectById,
+  projectByCode,
+  projectByName,
+  recordKeyProjectCode,
+  projectId,
+  explicitProjectCode,
+  projectName,
+}: {
+  projectById: Map<string, ExistingProject>;
+  projectByCode: Map<string, ExistingProject>;
+  projectByName: Map<string, ExistingProject>;
+  recordKeyProjectCode: string;
+  projectId: string;
+  explicitProjectCode: string;
+  projectName: string;
+}) {
+  const byRecordKey = projectByCode.get(normalizeKey(recordKeyProjectCode));
+  if (byRecordKey) {
+    return { project: byRecordKey, reason: "recordKey 业务编号匹配", usedNameFallback: false };
+  }
+
+  const byId = projectById.get(normalizeKey(projectId));
+  if (byId) {
+    return { project: byId, reason: "项目ID匹配", usedNameFallback: false };
+  }
+
+  const byCode = projectByCode.get(normalizeKey(explicitProjectCode));
+  if (byCode) {
+    return { project: byCode, reason: "业务项目编号匹配", usedNameFallback: false };
+  }
+
+  const byName = projectByName.get(normalizeKey(projectName));
+  if (byName) {
+    return { project: byName, reason: "项目名称精确唯一匹配", usedNameFallback: true };
+  }
+
+  return {
+    project: null,
+    reason: projectName ? "项目名称未匹配到唯一项目" : "缺少项目ID、业务编号和项目名称",
+    usedNameFallback: false,
+  };
+}
+
 function toFullRefreshProjectPreview(project: ExistingProject): FullRefreshProjectPreview {
   return {
     projectId: project.id,
@@ -553,6 +722,72 @@ function chooseCanonicalProject(
 
       return a.id.localeCompare(b.id);
     })[0];
+}
+
+async function buildPreviewTaskNoByName(taskRules: Array<Record<string, unknown>>) {
+  const taskNoByName = new Map<string, number>();
+
+  for (const record of taskRules) {
+    const taskNo = numberFieldAny(record, ["taskId", "taskNo", "任务编号", "任务ID"]);
+    const taskName = stringFieldAny(record, ["taskName", "任务名称"]);
+    if (taskNo && taskName) {
+      taskNoByName.set(normalizeKey(taskName), taskNo);
+    }
+  }
+
+  try {
+    const dbRules = await prisma.taskRule.findMany({
+      where: canonicalTaskRuleWhere(),
+      select: { taskNo: true, taskName: true },
+    });
+    for (const rule of dbRules) {
+      taskNoByName.set(normalizeKey(rule.taskName), rule.taskNo);
+    }
+  } catch {
+    // 预览阶段数据库规则不可读时，仍使用 Excel 内的任务规则判断。
+  }
+
+  return taskNoByName;
+}
+
+function uniqueMap<T>(items: T[], keyOf: (item: T) => string) {
+  const counts = new Map<string, number>();
+  const values = new Map<string, T>();
+
+  for (const item of items) {
+    const key = keyOf(item);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    values.set(key, item);
+  }
+
+  for (const [key, count] of counts.entries()) {
+    if (count > 1) {
+      values.delete(key);
+    }
+  }
+
+  return values;
+}
+
+function pushActualSample(samples: ActualTaskFactSample[], sample: ActualTaskFactSample) {
+  if (samples.length >= 10) {
+    return;
+  }
+
+  samples.push(sample);
+}
+
+function projectCodeFromRecordKey(recordKey: string) {
+  const match = recordKey.match(/^([^-]+)-\d+$/);
+  return match?.[1] ?? "";
+}
+
+function taskNoFromRecordKey(recordKey: string) {
+  const match = recordKey.match(/-(\d+)$/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isInteger(value) ? value : null;
 }
 
 function isRemovedFromSchedule(project: Pick<ExistingProject, "status" | "currentStage">) {

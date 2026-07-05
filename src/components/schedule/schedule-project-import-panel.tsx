@@ -32,6 +32,26 @@ type ProjectPreviewRow = {
   issues: PreviewIssue[];
 };
 
+type ActualTaskFactSample = {
+  rowNumber: number;
+  projectName: string;
+  projectCode: string;
+  projectId: string;
+  taskName: string;
+  taskNo?: number | null;
+  reason: string;
+};
+
+type ActualTaskFactsPreview = {
+  actualRowsTotal: number;
+  actualRowsMatched: number;
+  actualRowsSkipped: number;
+  actualProjectNameFallbackCount: number;
+  actualUnmatchedProjectSamples: ActualTaskFactSample[];
+  actualUnmatchedTaskSamples: ActualTaskFactSample[];
+  actualSkippedRowSamples: ActualTaskFactSample[];
+};
+
 type ProjectImportPreview = {
   importType: "project-main" | "project-main-full-refresh";
   importMode?: "merge" | "full-refresh";
@@ -78,6 +98,7 @@ type ProjectImportPreview = {
       status: string;
     }>;
   };
+  actualTaskFactsPreview?: ActualTaskFactsPreview;
   rows: ProjectPreviewRow[];
 };
 
@@ -99,6 +120,14 @@ type ApplyResponse = {
     updatedProjects?: number;
     archivedProjects?: number;
     importedTaskFacts?: number;
+    actualTaskFacts?: ActualTaskFactsPreview & {
+      actualFactsCreated: number;
+      actualFactsUpdated: number;
+      actualFactsSkippedExisting: number;
+      imported: number;
+      skipped: number;
+      failed: number;
+    };
     taskRuleWarnings?: string[];
     plannedLaunchAdjustmentSummary?: {
       total: number;
@@ -523,6 +552,8 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
             </div>
           ) : null}
 
+          {preview.actualTaskFactsPreview ? <ActualTaskFactsPreviewPanel summary={preview.actualTaskFactsPreview} /> : null}
+
           {preview.importMode === "full-refresh" ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
               <div className="font-semibold">全量更新将移出规划 {preview.summary.staleProjectCount ?? 0} 个旧项目</div>
@@ -586,6 +617,8 @@ export function ScheduleProjectImportPanel({ currentUser }: { currentUser: AuthU
               {applyResult.taskRuleWarnings.length > 5 ? <div>还有 {applyResult.taskRuleWarnings.length - 5} 条提醒。</div> : null}
             </div>
           ) : null}
+
+          {applyResult?.actualTaskFacts ? <ActualTaskFactsApplyPanel summary={applyResult.actualTaskFacts} /> : null}
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <div className="rounded-lg border border-slate-200 p-3">
@@ -762,6 +795,79 @@ function ReferenceBlock({ label, values }: { label: string; values: string[] }) 
         )}
         {values.length > 10 ? <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-slate-500">+{values.length - 10}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function ActualTaskFactsPreviewPanel({ summary }: { summary: ActualTaskFactsPreview }) {
+  const samples = [
+    ...summary.actualUnmatchedProjectSamples.map((sample) => ({ ...sample, kind: "项目未匹配" })),
+    ...summary.actualUnmatchedTaskSamples.map((sample) => ({ ...sample, kind: "任务未匹配" })),
+    ...summary.actualSkippedRowSamples.map((sample) => ({ ...sample, kind: "已跳过" })),
+  ].slice(0, 6);
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-semibold">实际进度任务事实预览</div>
+        <div className="text-xs text-blue-700">
+          共 {summary.actualRowsTotal} 行 / 可匹配 {summary.actualRowsMatched} 行 / 跳过 {summary.actualRowsSkipped} 行
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        <span className="rounded-full bg-white px-2 py-1">项目名称精确匹配 {summary.actualProjectNameFallbackCount} 行</span>
+        <span className="rounded-full bg-white px-2 py-1">未匹配项目 {summary.actualUnmatchedProjectSamples.length} 行示例</span>
+        <span className="rounded-full bg-white px-2 py-1">未匹配任务 {summary.actualUnmatchedTaskSamples.length} 行示例</span>
+      </div>
+      {samples.length > 0 ? (
+        <div className="mt-2 grid gap-1.5">
+          {samples.map((sample) => (
+            <div key={`${sample.kind}-${sample.rowNumber}-${sample.taskName}`} className="rounded-md bg-white/80 px-2 py-1 text-xs text-blue-800">
+              第 {sample.rowNumber} 行 {sample.kind}：{sample.projectName || sample.projectCode || sample.projectId || "-"} /{" "}
+              {sample.taskName || (sample.taskNo ? `#${sample.taskNo}` : "-")}，{sample.reason}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ActualTaskFactsApplyPanel({
+  summary,
+}: {
+  summary: ActualTaskFactsPreview & {
+    actualFactsCreated: number;
+    actualFactsUpdated: number;
+    actualFactsSkippedExisting: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+  };
+}) {
+  return (
+    <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+      <div className="font-semibold">实际进度任务事实写入结果</div>
+      <div className="mt-2 grid gap-2 md:grid-cols-4">
+        <SummaryPill label="匹配行" value={summary.actualRowsMatched} />
+        <SummaryPill label="新增事件" value={summary.actualFactsCreated} />
+        <SummaryPill label="已存在跳过" value={summary.actualFactsSkippedExisting} />
+        <SummaryPill label="失败" value={summary.failed} />
+      </div>
+      {summary.actualRowsSkipped > 0 ? (
+        <div className="mt-2 text-xs text-emerald-800">
+          已跳过 {summary.actualRowsSkipped} 行。请优先查看预览里的未匹配项目、未匹配任务和无可写日期提示。
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryPill({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-md bg-white px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-base font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
