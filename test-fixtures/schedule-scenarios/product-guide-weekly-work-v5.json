@@ -1,0 +1,150 @@
+{
+  "id": "product-guide-weekly-work-v5",
+  "name": "产品组本周工作指引分组口径",
+  "description": "验证产品组本周需完成、要推进、要开始只按 calculatedFinishDate / calculatedStartDate / 实际开始完成事实分组，风险只做标签。",
+  "today": "2026-07-06",
+  "projects": [
+    {
+      "ref": "weekly-dummy",
+      "projectCode": "SIM-WEEKLY-01",
+      "projectName": "产品组周任务分组模拟项目",
+      "licensorName": "模拟版权方",
+      "ipName": "模拟IP",
+      "productType": "盲盒",
+      "styleCount": 6,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-12-20",
+      "projectStartDate": "2026-05-01",
+      "status": "进行中"
+    }
+  ],
+  "productGuideWeeklyCases": [
+    {
+      "id": "due-this-week",
+      "task": {
+        "calculatedFinishDate": "2026-07-10"
+      },
+      "expect": {
+        "bucket": "due"
+      }
+    },
+    {
+      "id": "future-ddl-not-due",
+      "task": {
+        "calculatedFinishDate": "2026-12-16"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    },
+    {
+      "id": "future-ddl-high-risk-not-due",
+      "task": {
+        "calculatedFinishDate": "2026-12-16",
+        "latestFinishDate": "2026-07-10",
+        "riskLevel": "严重",
+        "impactStatus": "影响上线"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    },
+    {
+      "id": "overdue-unfinished",
+      "task": {
+        "calculatedFinishDate": "2026-07-01"
+      },
+      "expect": {
+        "bucket": "due"
+      }
+    },
+    {
+      "id": "in-progress-future-ddl",
+      "task": {
+        "actualStartDate": "2026-07-01",
+        "calculatedFinishDate": "2026-07-14"
+      },
+      "expect": {
+        "bucket": "progress"
+      }
+    },
+    {
+      "id": "in-progress-without-ddl",
+      "task": {
+        "actualStartDate": "2026-07-01"
+      },
+      "expect": {
+        "bucket": "progress"
+      }
+    },
+    {
+      "id": "start-this-week",
+      "task": {
+        "calculatedStartDate": "2026-07-08",
+        "calculatedFinishDate": "2026-07-30"
+      },
+      "expect": {
+        "bucket": "start"
+      }
+    },
+    {
+      "id": "completed-hidden",
+      "task": {
+        "actualFinishDate": "2026-07-05",
+        "calculatedFinishDate": "2026-07-10"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    },
+    {
+      "id": "completed-status-hidden",
+      "task": {
+        "statusLabel": "已完成",
+        "calculatedFinishDate": "2026-07-10"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    },
+    {
+      "id": "disabled-task-hidden",
+      "task": {
+        "taskEnabled": false,
+        "calculatedFinishDate": "2026-07-10"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    },
+    {
+      "id": "due-wins-over-start",
+      "task": {
+        "calculatedStartDate": "2026-07-08",
+        "calculatedFinishDate": "2026-07-10"
+      },
+      "expect": {
+        "bucket": "due"
+      }
+    },
+    {
+      "id": "sunday-due-is-this-week",
+      "task": {
+        "calculatedFinishDate": "2026-07-12"
+      },
+      "expect": {
+        "bucket": "due"
+      }
+    },
+    {
+      "id": "next-monday-not-this-week",
+      "task": {
+        "calculatedFinishDate": "2026-07-13"
+      },
+      "expect": {
+        "bucket": "none"
+      }
+    }
+  ]
+}

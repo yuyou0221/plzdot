@@ -25,6 +25,11 @@ import {
   type StyleListTaskRefs,
 } from "@/components/product-guide/style-list-modal";
 import { canAccessUserData, type AuthUser } from "@/lib/auth/permissions";
+import {
+  classifyProductGuideWeeklyTask,
+  currentProductGuideWeekWindow,
+  type ProductGuideWeeklyBucket,
+} from "@/lib/product-guide-weekly-work";
 import type {
   ProductGuideData,
   ProductGuideItem,
@@ -39,7 +44,7 @@ type GroupPageKey = "milestones" | "week-guide";
 type MilestoneBoardMode = "plan" | "forecast";
 
 type WeeklyGuideBucket = {
-  key: "due" | "progress" | "start" | "risk" | "licensor";
+  key: Exclude<ProductGuideWeeklyBucket, "none">;
   title: string;
   helper: string;
   emptyText: string;
@@ -1177,10 +1182,7 @@ function WeeklyGuidePage({
       {buckets.map((bucket) => (
         <section
           key={bucket.key}
-          className={clsx(
-            "rounded-lg border bg-white p-2 shadow-sm",
-            bucket.key === "risk" ? "border-amber-200" : bucket.key === "licensor" ? "border-violet-200" : "border-slate-200",
-          )}
+          className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm"
         >
           <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
             <div className="text-sm font-semibold text-slate-900">{bucket.title}</div>
@@ -1188,8 +1190,8 @@ function WeeklyGuidePage({
           <div className={clsx("mt-2 grid gap-2 px-2 text-[11px] font-medium text-slate-400", weeklyTaskGridClass)}>
             <span>项目</span>
             <span>任务</span>
-            <span>DDL</span>
-            <span>延期线</span>
+            <span>DDL / 预计完成</span>
+            <span>最晚安全日</span>
           </div>
           <div className="mt-2 grid gap-1.5">
             {bucket.items.length > 0 ? (
@@ -1372,6 +1374,11 @@ function DetailPanel({
         <MiniStat label="未更新" value={item.isStale ? `${item.staleDays} 天` : "正常"} />
         <MiniStat label="产品研发" value={item.productOwnerName} />
         <MiniStat label="产品美术" value={item.artOwnerName} />
+        <MiniStat label="建议开始" value={item.calculatedStartDate ?? "待测算"} />
+        <MiniStat label="DDL / 预计完成" value={taskDeadline(item)} />
+        <MiniStat label="最晚安全日" value={item.latestFinishDate ?? "待测算"} />
+        <MiniStat label="实际开始" value={item.actualStartDate ?? "未开始"} />
+        <MiniStat label="实际完成" value={item.actualFinishDate ?? "未完成"} />
       </div>
 
       <div className="mt-4">
@@ -2204,14 +2211,14 @@ function milestoneRiskLabel(value: ProductGuideMilestoneRiskLevel) {
 }
 
 function taskDeadline(item: ProductGuideItem) {
-  return item.dueDate ?? item.plannedFinishDate ?? "待补";
+  return item.calculatedFinishDate ?? item.dueDate ?? "待测算";
 }
 
 function delayTriggerText(item: ProductGuideItem) {
-  const triggerDate = item.plannedFinishDate ?? item.dueDate ?? item.forecastFinishDate;
+  const triggerDate = item.latestFinishDate;
 
   if (!triggerDate) {
-    return "延期线待补";
+    return "最晚安全日待补";
   }
 
   if (item.riskLevel === "delay") {
@@ -2233,7 +2240,21 @@ function sortMilestoneCards(a: ProductGuideMilestoneCard, b: ProductGuideMilesto
 }
 
 function buildWeeklyBuckets(items: ProductGuideItem[]): WeeklyGuideBucket[] {
+  const weekWindow = currentProductGuideWeekWindow();
   const sortedItems = [...items].sort(sortGuideItems);
+  const bucketedItems = new Map<ProductGuideWeeklyBucket, ProductGuideItem[]>([
+    ["due", []],
+    ["progress", []],
+    ["start", []],
+  ]);
+
+  for (const item of sortedItems) {
+    const bucket = classifyProductGuideWeeklyTask(item, weekWindow);
+
+    if (bucket !== "none") {
+      bucketedItems.get(bucket)?.push(item);
+    }
+  }
 
   return [
     {
@@ -2241,75 +2262,36 @@ function buildWeeklyBuckets(items: ProductGuideItem[]): WeeklyGuideBucket[] {
       title: "本周需完成",
       helper: "优先确认是否已完成，未完成就补预计完成时间。",
       emptyText: "本周暂无明确到期事项。",
-      items: sortedItems.filter((item) => item.dueBucket === "today" || item.dueBucket === "this-week"),
+      items: bucketedItems.get("due") ?? [],
     },
     {
       key: "progress",
-      title: "本周在推进",
-      helper: "跟进当前关键路径，保证负责人知道下一步。",
+      title: "本周要推进",
+      helper: "跟进已开始且 DDL 在本周之后的任务，保证负责人知道下一步。",
       emptyText: "当前筛选下暂无推进中的关键事项。",
-      items: sortedItems.filter(isInProgressItem),
+      items: bucketedItems.get("progress") ?? [],
     },
     {
       key: "start",
       title: "本周要开始",
       helper: "提前确认需求、素材、外包或反馈是否已经准备好。",
       emptyText: "当前筛选下暂无需要提前启动的事项。",
-      items: sortedItems.filter(isStartSoonItem),
-    },
-    {
-      key: "risk",
-      title: "风险任务",
-      helper: "先处理延期、阻塞和长时间未更新的任务。",
-      emptyText: "当前筛选下暂无风险任务。",
-      items: sortedItems.filter((item) => item.riskLevel === "risk" || item.riskLevel === "delay" || item.isStale || item.isBlocked),
-    },
-    {
-      key: "licensor",
-      title: "版权方反馈",
-      helper: "需要产品研发或产品美术推动外部反馈闭环。",
-      emptyText: "当前筛选下暂无等待版权方反馈事项。",
-      items: sortedItems.filter((item) => item.waitingLicensor || item.reasonTags.some((tag) => tag.includes("版权"))),
+      items: bucketedItems.get("start") ?? [],
     },
   ];
 }
 
-function isInProgressItem(item: ProductGuideItem) {
-  return (
-    item.statusLabel.includes("进行") ||
-    item.statusLabel.includes("排期") ||
-    item.source === "work-task" ||
-    item.source === "project-task" ||
-    item.requiresArtReview
-  );
-}
-
-function isStartSoonItem(item: ProductGuideItem) {
-  if (item.dueBucket !== "later") {
-    return false;
-  }
-
-  return item.riskLevel === "normal" || item.riskLevel === "watch" || item.reasonTags.some((tag) => tag.includes("关键路径"));
-}
-
 function sortGuideItems(a: ProductGuideItem, b: ProductGuideItem) {
-  const riskOrder = riskSortValue(b.riskLevel) - riskSortValue(a.riskLevel);
-  if (riskOrder !== 0) return riskOrder;
-
-  if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
-  if (a.isBlocked !== b.isBlocked) return a.isBlocked ? -1 : 1;
-
   const dueOrder = dueBucketSortValue(a.dueBucket) - dueBucketSortValue(b.dueBucket);
   if (dueOrder !== 0) return dueOrder;
 
-  const dateOrder = dateSortValue(a.dueDate ?? a.plannedFinishDate) - dateSortValue(b.dueDate ?? b.plannedFinishDate);
+  const dateOrder = dateSortValue(a.calculatedFinishDate ?? a.dueDate) - dateSortValue(b.calculatedFinishDate ?? b.dueDate);
   if (dateOrder !== 0) return dateOrder;
 
-  return a.projectName.localeCompare(b.projectName, "zh-CN");
-}
+  if (a.isBlocked !== b.isBlocked) return a.isBlocked ? -1 : 1;
+  if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
 
-function riskSortValue(value: ProductGuideRiskLevel) {
-  return value === "delay" ? 4 : value === "risk" ? 3 : value === "watch" ? 2 : 1;
+  return a.projectName.localeCompare(b.projectName, "zh-CN");
 }
 
 function dueBucketSortValue(value: ProductGuideItem["dueBucket"]) {
@@ -2434,7 +2416,7 @@ function defaultTaskActionForm(item?: ProductGuideItem): TaskActionForm {
     taskStatus: normalizeTaskStatus(item?.statusLabel),
     actualStartDate: todayString(),
     actualFinishDate: todayString(),
-    expectedFinishDate: item?.forecastFinishDate ?? item?.plannedFinishDate ?? todayString(),
+    expectedFinishDate: item?.calculatedFinishDate ?? item?.forecastFinishDate ?? todayString(),
     submittedAt: todayString(),
     reviewTarget: item?.waitingLicensor ? "版权方" : "版权方 / 审核方",
     modelingReviewResult: defaultModelingReviewResult(item),
