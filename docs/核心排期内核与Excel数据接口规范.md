@@ -1,6 +1,6 @@
 # 核心排期内核与 Excel 数据接口规范
 
-最后更新：2026-05-25
+最后更新：2026-07-05
 
 这份文档用于统一两个关键口径：
 
@@ -25,15 +25,17 @@ Excel 数据接口 = 前期批量更新数据的临时入口
 project-analysis-scripts-latest-2026-05-25.zip
 ```
 
-平台内当前对应文件：
+平台内当前正式内核文件：
 
 ```text
-legacy/schedule-engine/project-schedule-core.cjs
-legacy/schedule-engine/project-analysis-v5-excel.cjs
-legacy/schedule-engine/extract_project_excel.py
-legacy/schedule-engine/export_chinese_excel.py
-legacy/schedule-engine/generate-weekly-analysis.cjs
+src/lib/schedule-engine/core/project-schedule-core.js
+src/lib/schedule-engine/core/project-analysis-v5-excel.js
+src/lib/schedule-engine/project-analysis-v5-port.ts
+src/lib/schedule-engine/project-analysis-v5-input.ts
+src/lib/schedule-engine/service.ts
 ```
+
+`legacy/schedule-engine/*` 是历史脚本和参考资料，不是网页端正式调用入口。网页端正式链路必须走 `ScheduleEnginePort -> service.ts -> adapters.ts -> repository`。
 
 排期内核负责：
 
@@ -49,6 +51,46 @@ legacy/schedule-engine/generate-weekly-analysis.cjs
 - 预测完成日期。
 - 延期、风险、阻塞上线判断。
 - 周度 / 月度任务分析。
+
+## V5 日期字段接口
+
+Excel 或数据库输入进入内核后，正式输出必须保持以下日期语义：
+
+| 输出字段 | 含义 | 来源 |
+| --- | --- | --- |
+| `plannedStartDate` / `plannedFinishDate` | 管理计划日期 | 从 `projectStartDate` 正推 |
+| `latestStartDate` / `latestFinishDate` | 原始最晚安全日期 | 从 `plannedLaunchDate` / `effectiveLaunchDate` 倒推 |
+| `currentLatestStartDate` / `currentLatestFinishDate` | 动态最晚安全日期 | 从 `projectedLaunchDate` 倒推 |
+| `calculatedStartDate` / `calculatedFinishDate` | 当前预测日期 | 基于 planned 和实际进度事实保守传播 |
+| `actualStartDate` / `actualFinishDate` | 实际执行事实 | 产品组工作指引、Excel 实际进度或其他事实入口 |
+
+项目必须有 `projectStartDate` 才能生成 `planned`。如果缺少启动日期，正式测算应产生 warning/error，不允许用上线日期倒推或固定天数生成假计划。
+
+实际进度匹配优先级：
+
+1. `recordKey` 中的系统项目 ID + 任务编号。
+2. 显式 `projectId` / `systemProjectId` + 任务编号。
+3. 项目名称精确匹配只作为兼容 fallback，并必须进入 warning，不得静默作为唯一匹配口径。
+
+`taskName` 不是实际进度匹配的最低必要条件。只要能通过 `projectId + taskId/taskNo` 确认项目和任务，就必须保留该条 actual。缺少 `taskName` 时，应从 `任务规则v4` 回填任务名；只有项目和任务编号都无法确认时，才进入 unmatched actual。
+
+同项目同任务出现多条 actual 时，内核按 `updatedAt` / `rowUpdatedAt` / `createdAt` 判断新旧，并按关键字段取“最新非空事实”：
+
+- `actualStartDate`
+- `actualFinishDate`
+- `expectedFinishDate`
+- `remainingDays`
+- `taskStatus`
+
+这样可以避免旧 actualStartDate 误导排序，也避免新快照只更新 `remainingDays` 时把旧的真实开始 / 完成事实清空。
+
+`remainingDays` 空值、空字符串、未填写都表示“未填写”，不能按 0 天处理。只有明确传入数值 0 时，才表示剩余 0 天。
+
+未完成任务的 `calculatedFinishDate` 不允许停在 `today` 之前。即使存在已经过期的 `expectedFinishDate`，也不能把它作为最终预测完成日：
+
+- 无 `actualStartDate` 且无 `remainingDays`：按 `today + 标准工期` 保守预测。
+- 有 `remainingDays`：按 `today + remainingDays` 保守预测。
+- 有 `actualStartDate` 但没有完成：至少推到 `today`。
 
 ## 模块使用规则
 

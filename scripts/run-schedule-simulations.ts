@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { Prisma } from "@prisma/client";
 import type { ProjectTaskFactEvent } from "../src/lib/schedule-task-fact-events-core";
@@ -9,6 +10,7 @@ process.env.SCHEDULE_SIMULATION_RUNTIME = "1";
 
 const simulationPrefix = "schedule-simulation:";
 const defaultScenarioDir = path.resolve("test-fixtures", "schedule-scenarios");
+const coreEngineRequire = createRequire(path.resolve("scripts", "run-schedule-simulations.ts"));
 
 let prisma: typeof import("../src/lib/db/prisma").prisma;
 let milestoneByTaskNo: typeof import("../src/lib/schedule-domain").milestoneByTaskNo;
@@ -27,6 +29,7 @@ type Scenario = {
   taskRules?: ScenarioTaskRule[];
   projects: ScenarioProject[];
   events?: ScenarioEvent[];
+  directEngineCases?: DirectEngineCase[];
   expect?: ScenarioExpect;
 };
 
@@ -99,6 +102,7 @@ type ProjectExpectation = {
   taskCount?: number;
   taskNos?: number[];
   tasks?: TaskExpectation[];
+  scheduleTasks?: ScheduleTaskExpectation[];
   scheduleResult?: {
     exists?: boolean;
     riskLevel?: string;
@@ -113,6 +117,58 @@ type TaskExpectation = {
   expectedFinishDate?: string | null;
   isBlocked?: boolean;
   blockReason?: string | null;
+};
+
+type ScheduleTaskExpectation = {
+  taskNo: number;
+  plannedStartDate?: string;
+  plannedFinishDate?: string;
+  latestStartDate?: string;
+  latestFinishDate?: string;
+  currentLatestStartDate?: string;
+  currentLatestFinishDate?: string;
+  calculatedStartDate?: string;
+  calculatedFinishDate?: string;
+  actualStartDate?: string | null;
+  actualFinishDate?: string | null;
+  taskStatus?: string;
+  impactStatus?: string;
+  riskLevel?: string;
+  planDeltaDays?: number;
+  deadlineRiskDays?: number;
+  currentDeadlineRiskDays?: number;
+  floatDays?: number;
+  isBlockingLaunch?: boolean;
+  plannedBeforeLatest?: boolean;
+  calculatedNotBeforeToday?: boolean;
+};
+
+type DirectEngineCase = {
+  id: string;
+  description?: string;
+  today?: string;
+  extracted: {
+    workbook?: string;
+    projects: Array<Record<string, unknown>>;
+    actuals: Array<Record<string, unknown>>;
+    taskRules: Array<Record<string, unknown>>;
+  };
+  expect?: {
+    rows?: DirectEngineRowExpectation[];
+  };
+};
+
+type DirectEngineRowExpectation = {
+  projectId: string;
+  taskId: number;
+  taskName?: string;
+  actualStartDate?: string | null;
+  actualFinishDate?: string | null;
+  expectedFinishDate?: string | null;
+  remainingDays?: number | null;
+  calculatedStartDate?: string;
+  calculatedFinishDate?: string;
+  calculatedNotBeforeToday?: boolean;
 };
 
 type CliOptions = {
@@ -560,6 +616,78 @@ async function assertScenario(runtime: ScenarioRuntime) {
         );
       }
     }
+
+    for (const scheduleTaskExpectation of expectation.scheduleTasks ?? []) {
+      const result = await prisma.scheduleTaskResult.findFirst({
+        where: { scheduleRunId, projectId, taskNo: scheduleTaskExpectation.taskNo },
+        select: { rawResult: true },
+      });
+
+      if (!result?.rawResult || typeof result.rawResult !== "object") {
+        assertions.push({
+          ok: false,
+          label: `项目 ${expectation.ref} 测算任务 ${scheduleTaskExpectation.taskNo}`,
+          detail: "找不到测算任务 rawResult",
+        });
+        continue;
+      }
+
+      const raw = result.rawResult as Record<string, unknown>;
+      const rawValue = (key: keyof ScheduleTaskExpectation) => normalizeRawValue(raw[String(key)]);
+
+      for (const key of [
+        "plannedStartDate",
+        "plannedFinishDate",
+        "latestStartDate",
+        "latestFinishDate",
+        "currentLatestStartDate",
+        "currentLatestFinishDate",
+        "calculatedStartDate",
+        "calculatedFinishDate",
+        "actualStartDate",
+        "actualFinishDate",
+        "taskStatus",
+        "impactStatus",
+        "riskLevel",
+        "planDeltaDays",
+        "deadlineRiskDays",
+        "currentDeadlineRiskDays",
+        "floatDays",
+        "isBlockingLaunch",
+      ] as const) {
+        const expected = scheduleTaskExpectation[key];
+        if (expected !== undefined) {
+          assertions.push(
+            equalResult(
+              `项目 ${expectation.ref} 测算任务 ${scheduleTaskExpectation.taskNo} ${key}`,
+              rawValue(key),
+              expected,
+            ),
+          );
+        }
+      }
+
+      if (scheduleTaskExpectation.plannedBeforeLatest !== undefined) {
+        const plannedFinish = stringValue(raw.plannedFinishDate);
+        const latestFinish = stringValue(raw.latestFinishDate);
+        assertions.push({
+          ok: Boolean(plannedFinish && latestFinish) && plannedFinish < latestFinish === scheduleTaskExpectation.plannedBeforeLatest,
+          label: `项目 ${expectation.ref} 测算任务 ${scheduleTaskExpectation.taskNo} planned 早于 latest`,
+          detail: `plannedFinishDate=${plannedFinish || "空"} latestFinishDate=${latestFinish || "空"}`,
+        });
+      }
+
+      if (scheduleTaskExpectation.calculatedNotBeforeToday !== undefined) {
+        const calculatedFinish = stringValue(raw.calculatedFinishDate);
+        const ok = Boolean(calculatedFinish)
+          && (calculatedFinish >= scenario.today) === scheduleTaskExpectation.calculatedNotBeforeToday;
+        assertions.push({
+          ok,
+          label: `项目 ${expectation.ref} 测算任务 ${scheduleTaskExpectation.taskNo} calculated 不早于 today`,
+          detail: `today=${scenario.today} calculatedFinishDate=${calculatedFinish || "空"}`,
+        });
+      }
+    }
   }
 
   if (scenario.expect?.workbench) {
@@ -581,7 +709,92 @@ async function assertScenario(runtime: ScenarioRuntime) {
     }
   }
 
+  assertions.push(...assertDirectEngineCases(scenario));
+
   return assertions;
+}
+
+function assertDirectEngineCases(scenario: Scenario) {
+  const assertions: AssertionResult[] = [];
+  const analysis = coreEngineRequire("../src/lib/schedule-engine/core/project-analysis-v5-excel.js");
+  const coreEngine = coreEngineRequire("../src/lib/schedule-engine/core/project-schedule-core.js");
+  const helpers = analysis.makeDateHelpers(coreEngine);
+
+  for (const directCase of scenario.directEngineCases ?? []) {
+    const payload = analysis.analyzeExtracted(
+      directCase.extracted,
+      {
+        scenario: "A",
+        hasThreeView: false,
+        plannedBufferDays: 0,
+        project: "",
+        projectName: "",
+      },
+      coreEngine,
+      helpers,
+      directCase.today ?? scenario.today,
+    ) as { rows?: Array<Record<string, unknown>> };
+
+    for (const expectedRow of directCase.expect?.rows ?? []) {
+      const row = payload.rows?.find((candidate) => {
+        return String(candidate.projectId) === expectedRow.projectId && Number(candidate.taskId) === expectedRow.taskId;
+      });
+
+      if (!row) {
+        assertions.push({
+          ok: false,
+          label: `内核直测 ${directCase.id} 项目 ${expectedRow.projectId} 任务 ${expectedRow.taskId}`,
+          detail: "找不到测算行",
+        });
+        continue;
+      }
+
+      for (const key of [
+        "taskName",
+        "actualStartDate",
+        "actualFinishDate",
+        "expectedFinishDate",
+        "remainingDays",
+        "calculatedStartDate",
+        "calculatedFinishDate",
+      ] as const) {
+        const expected = expectedRow[key];
+        if (expected !== undefined) {
+          assertions.push(
+            equalResult(
+              `内核直测 ${directCase.id} 任务 ${expectedRow.taskId} ${key}`,
+              normalizeRawValue(row[key]),
+              expected,
+            ),
+          );
+        }
+      }
+
+      if (expectedRow.calculatedNotBeforeToday !== undefined) {
+        const calculatedFinish = stringValue(row.calculatedFinishDate);
+        const today = directCase.today ?? scenario.today;
+        const ok = Boolean(calculatedFinish) && (calculatedFinish >= today) === expectedRow.calculatedNotBeforeToday;
+        assertions.push({
+          ok,
+          label: `内核直测 ${directCase.id} 任务 ${expectedRow.taskId} calculated 不早于 today`,
+          detail: `today=${today} calculatedFinishDate=${calculatedFinish || "空"}`,
+        });
+      }
+    }
+  }
+
+  return assertions;
+}
+
+function normalizeRawValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return value ?? null;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 async function cleanupSimulationData() {

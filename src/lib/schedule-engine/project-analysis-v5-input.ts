@@ -33,8 +33,8 @@ export async function loadProjectAnalysisV5InputFromDatabase(
       "业务项目编号": project.projectCode ?? "",
       projectName: project.projectName,
       "项目名称": project.projectName,
-      projectStartDate: formatDate(project.projectStartDate ?? fallbackProjectStart(project.plannedLaunchDate)),
-      "启动日期": formatDate(project.projectStartDate ?? fallbackProjectStart(project.plannedLaunchDate)),
+      projectStartDate: project.projectStartDate ? formatDate(project.projectStartDate) : "",
+      "启动日期": project.projectStartDate ? formatDate(project.projectStartDate) : "",
       plannedLaunchDate: formatDate(project.plannedLaunchDate),
       "预估出货日期": formatDate(project.plannedLaunchDate),
       route: project.routeType ?? "",
@@ -58,6 +58,11 @@ export async function loadProjectAnalysisV5InputFromDatabase(
         return {
           projectName: project?.projectName ?? task.projectId,
           "项目名称": project?.projectName ?? task.projectId,
+          projectId: task.projectId,
+          "项目ID": task.projectId,
+          taskId: task.taskNo,
+          taskNo: task.taskNo,
+          "任务编号": task.taskNo,
           taskName: task.taskName,
           recordKey: `${task.projectId}-${task.taskNo}`,
           actualStartDate: task.actualStartDate ? formatDate(task.actualStartDate) : undefined,
@@ -67,6 +72,9 @@ export async function loadProjectAnalysisV5InputFromDatabase(
           expectedFinishDate: task.expectedFinishDate ? formatDate(task.expectedFinishDate) : undefined,
           "推进中任务预期完成时间": task.expectedFinishDate ? formatDate(task.expectedFinishDate) : undefined,
           taskStatus: task.status,
+          updatedAt: task.updatedAt.toISOString(),
+          createdAt: task.createdAt.toISOString(),
+          rowUpdatedAt: task.lastUpdatedAt ? task.lastUpdatedAt.toISOString() : task.updatedAt.toISOString(),
         };
       }),
     taskRules: taskRules.map((rule) => ({
@@ -74,12 +82,6 @@ export async function loadProjectAnalysisV5InputFromDatabase(
       taskName: rule.taskName,
     })),
   };
-}
-
-function fallbackProjectStart(plannedLaunchDate: Date) {
-  const date = new Date(plannedLaunchDate);
-  date.setDate(date.getDate() - 180);
-  return date;
 }
 
 function formatDate(date: Date) {
