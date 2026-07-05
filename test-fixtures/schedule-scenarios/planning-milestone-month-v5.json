@@ -1,0 +1,129 @@
+{
+  "id": "planning-milestone-month-v5",
+  "name": "规划里程碑月份归组口径",
+  "description": "验证规划里程碑看板月份只使用 latestFinishDate / plannedLaunchDate 倒推目标，实际完成、当前预测、plannedFinishDate 正推结果只影响状态，不移动规划月份。",
+  "today": "2026-07-05",
+  "taskRules": [
+    { "taskNo": 30, "taskName": "首批大货生产", "standardWorkdays": 40 },
+    { "taskNo": 31, "taskName": "详情页设计", "standardWorkdays": 1 }
+  ],
+  "projects": [
+    {
+      "ref": "done-late-production",
+      "projectCode": "SIM-PLAN-MONTH-01",
+      "projectName": "已完成晚于规划月份项目",
+      "licensorName": "模拟版权方",
+      "ipName": "模拟IP",
+      "productType": "盲盒",
+      "styleCount": 6,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-08-20",
+      "projectStartDate": "2026-03-01",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 30, "taskName": "首批大货生产" }
+      ]
+    },
+    {
+      "ref": "forecast-late-production",
+      "projectCode": "SIM-PLAN-MONTH-02",
+      "projectName": "未完成预测延期项目",
+      "licensorName": "模拟版权方",
+      "ipName": "模拟IP",
+      "productType": "盲盒",
+      "styleCount": 6,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-08-20",
+      "projectStartDate": "2026-07-01",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 30, "taskName": "首批大货生产" }
+      ]
+    },
+    {
+      "ref": "planned-forward-earlier",
+      "projectCode": "SIM-PLAN-MONTH-03",
+      "projectName": "正推计划早于目标项目",
+      "licensorName": "模拟版权方",
+      "ipName": "模拟IP",
+      "productType": "盲盒",
+      "styleCount": 6,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-08-20",
+      "projectStartDate": "2025-12-01",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 30, "taskName": "首批大货生产" }
+      ]
+    },
+    {
+      "ref": "flat-not-august",
+      "projectCode": "SIM-PLAN-MONTH-04",
+      "projectName": "平面不按正推月份归组项目",
+      "licensorName": "模拟版权方",
+      "ipName": "模拟IP",
+      "productType": "盲盒",
+      "styleCount": 6,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-11-20",
+      "projectStartDate": "2026-01-01",
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 31, "taskName": "详情页设计" }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "ref": "done-late-production-completed",
+      "projectRef": "done-late-production",
+      "eventType": "task_completed",
+      "taskNo": 30,
+      "taskKey": "#30",
+      "taskName": "首批大货生产",
+      "occurredAt": "2026-10-01T18:00:00+08:00",
+      "operatorId": "schedule-simulation:planning-month",
+      "operatorName": "模拟产品经理",
+      "payload": {
+        "actualStartDate": "2026-08-28",
+        "actualFinishDate": "2026-10-01",
+        "status": "已完成"
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 1,
+    "workbench": {
+      "includeSimulationProjects": true,
+      "projectCards": [
+        {
+          "ref": "done-late-production",
+          "milestone": "大货里程碑",
+          "plannedMonth": "26年8月",
+          "forecastMonth": "26年10月",
+          "riskLevel": "doneLate"
+        },
+        {
+          "ref": "forecast-late-production",
+          "milestone": "大货里程碑",
+          "plannedMonth": "26年8月",
+          "riskLevel": "delay"
+        },
+        {
+          "ref": "planned-forward-earlier",
+          "milestone": "大货里程碑",
+          "plannedMonth": "26年8月"
+        },
+        {
+          "ref": "flat-not-august",
+          "milestone": "平面里程碑",
+          "plannedMonth": "26年11月"
+        }
+      ]
+    }
+  }
+}

@@ -94,6 +94,8 @@ type ScenarioExpect = {
   workbench?: {
     calendarYears?: number[];
     minimumProjectCards?: number;
+    includeSimulationProjects?: boolean;
+    projectCards?: WorkbenchProjectCardExpectation[];
   };
 };
 
@@ -151,6 +153,14 @@ type ScheduleTaskExpectation = {
   displayOnlySideTask?: boolean;
   plannedBeforeLatest?: boolean;
   calculatedNotBeforeToday?: boolean;
+};
+
+type WorkbenchProjectCardExpectation = {
+  ref: string;
+  milestone: string;
+  plannedMonth?: string;
+  forecastMonth?: string;
+  riskLevel?: string;
 };
 
 type DirectEngineCase = {
@@ -723,7 +733,10 @@ async function assertScenario(runtime: ScenarioRuntime) {
   }
 
   if (scenario.expect?.workbench) {
-    const data = await getScheduleWorkbenchData();
+    const data = await getScheduleWorkbenchData({
+      includeSimulationProjects: scenario.expect.workbench.includeSimulationProjects,
+      scheduleRunId: scenario.expect.workbench.includeSimulationProjects ? scheduleRunId : undefined,
+    });
     const scenarioProjectIds = new Set(projectIdByRef.values());
     const scenarioCalendarProjects = data.calendarProjects.filter((project) => scenarioProjectIds.has(project.projectId));
     const scenarioCards = data.projectCards.filter((card) => scenarioProjectIds.has(card.projectId));
@@ -738,6 +751,47 @@ async function assertScenario(runtime: ScenarioRuntime) {
 
     if (typeof scenario.expect.workbench.minimumProjectCards === "number") {
       assertions.push(equalResult("正式里程碑看板模拟卡片数量", scenarioCards.length, 0));
+    }
+
+    for (const cardExpectation of scenario.expect.workbench.projectCards ?? []) {
+      const projectId = projectIdByRef.get(cardExpectation.ref);
+      const card = scenarioCards.find((candidate) => {
+        return candidate.projectId === projectId && candidate.milestone === cardExpectation.milestone;
+      });
+
+      assertions.push({
+        ok: Boolean(card),
+        label: `项目 ${cardExpectation.ref} 里程碑卡片 ${cardExpectation.milestone} 存在`,
+        detail: card ? undefined : `projectId=${projectId ?? "空"}`,
+      });
+
+      if (!card) {
+        continue;
+      }
+
+      if (cardExpectation.plannedMonth !== undefined) {
+        assertions.push(equalResult(
+          `项目 ${cardExpectation.ref} 里程碑 ${cardExpectation.milestone} 规划月份`,
+          card.plannedMonth ?? "",
+          cardExpectation.plannedMonth,
+        ));
+      }
+
+      if (cardExpectation.forecastMonth !== undefined) {
+        assertions.push(equalResult(
+          `项目 ${cardExpectation.ref} 里程碑 ${cardExpectation.milestone} 预测月份`,
+          card.forecastMonth ?? "",
+          cardExpectation.forecastMonth,
+        ));
+      }
+
+      if (cardExpectation.riskLevel !== undefined) {
+        assertions.push(equalResult(
+          `项目 ${cardExpectation.ref} 里程碑 ${cardExpectation.milestone} 状态`,
+          card.riskLevel,
+          cardExpectation.riskLevel,
+        ));
+      }
     }
   }
 

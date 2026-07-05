@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db/prisma";
 import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import {
-  evaluateScheduleMilestoneRiskLevel,
+  getPlanningMilestoneDueDate,
+  getPlanningMilestoneStatus,
   isCompletedScheduleMilestoneTask,
   isDisplayOnlySideTaskNo,
   isKnownMilestone,
@@ -104,6 +105,8 @@ type MonthPoint = {
 type ScheduleWorkbenchOptions = {
   includeTaskRows?: boolean;
   includeProjectDetails?: boolean;
+  includeSimulationProjects?: boolean;
+  scheduleRunId?: string;
 };
 
 export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions = {}): Promise<ScheduleWorkbenchData> {
@@ -111,13 +114,18 @@ export async function getScheduleWorkbenchData(options: ScheduleWorkbenchOptions
   const includeProjectDetails = options.includeProjectDetails ?? true;
 
   try {
+    const scheduleRunPromise = options.scheduleRunId
+      ? prisma.scheduleRun.findFirst({
+          where: { id: options.scheduleRunId, runStatus: "成功" },
+        })
+      : getLatestOfficialScheduleRun();
     const [projects, latestRun] = await Promise.all([
       prisma.project.findMany({
-        where: excludeScheduleSimulationProjectsWhere(),
+        where: options.includeSimulationProjects ? undefined : excludeScheduleSimulationProjectsWhere(),
         orderBy: { plannedLaunchDate: "asc" },
         take: 300,
       }),
-      getLatestOfficialScheduleRun(),
+      scheduleRunPromise,
     ]);
 
     if (projects.length === 0 || !latestRun) {
@@ -492,7 +500,7 @@ function addMonths(monthPoint: MonthPoint, offset: number): MonthPoint {
 }
 
 function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<string, ProjectRow>) {
-  const grouped = new Map<string, { projectId: string; name: string; milestone: Milestone; rows: TaskResultRow[] }>();
+  const grouped = new Map<string, { projectId: string; name: string; milestone: Milestone; rows: TaskResultRow[]; project: ProjectRow }>();
 
   for (const row of taskResults) {
     const project = projectById.get(row.projectId);
@@ -513,6 +521,7 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
         name: project.projectName,
         milestone,
         rows: [row],
+        project,
       });
     }
   }
@@ -520,12 +529,19 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
   return Array.from(grouped.values())
     .map((group): ProjectCard | null => {
       const milestoneRows = milestoneRowsForCard(group.rows, group.milestone);
-      const plannedDate = maxDate(
-        milestoneRows.map((row) => row.plannedFinishDate ?? row.expectedFinishDate ?? row.forecastFinishDate),
-      );
+      const planningRows = milestoneRows.map(planningMilestoneDateSource);
+      const plannedDate = getPlanningMilestoneDueDate({
+        rows: planningRows,
+        fallbackDate: group.project.plannedLaunchDate,
+      });
       const plannedMonth = plannedDate ? formatMonthLabel(dateToMonthPoint(plannedDate)) : null;
-      const riskLevel = groupRiskLevel(milestoneRows);
-      const completedDate = riskLevel === "done" ? completedMilestoneDate(milestoneRows) : null;
+      const completedDate = completedMilestoneDateForPlanning(milestoneRows);
+      const riskLevel = getPlanningMilestoneStatus({
+        dueDate: plannedDate,
+        completedDate,
+        calculatedFinishDate: maxDate(planningRows.map((row) => row.calculatedFinishDate)),
+        today: new Date(),
+      });
       const completedMonth = completedDate ? formatMonthLabel(dateToMonthPoint(completedDate)) : null;
       const forecastMonth = completedMonth ?? maxDateMonth(milestoneRows.map(displayDateForForecastView));
       const month = plannedMonth ?? forecastMonth;
@@ -577,8 +593,16 @@ function milestoneRowsForCard(rows: TaskResultRow[], milestone: Milestone) {
   return rows.filter((row) => row.taskNo !== 18);
 }
 
-function groupRiskLevel(rows: TaskResultRow[]): RiskLevel {
-  return evaluateScheduleMilestoneRiskLevel(rows, (row) => toRiskLevel(row.riskLevel));
+function planningMilestoneDateSource(row: TaskResultRow) {
+  const raw = rawTaskResult(row.rawResult);
+
+  return {
+    taskNo: row.taskNo,
+    latestFinishDate: dateFromRawValue(raw.latestFinishDate),
+    actualFinishDate: dateFromRawValue(raw.actualFinishDate),
+    inferredCompletionDate: dateFromRawValue(raw.inferredCompletionDate),
+    calculatedFinishDate: dateFromRawValue(raw.calculatedFinishDate) ?? row.forecastFinishDate,
+  };
 }
 
 function displayDateForForecastView(row: TaskResultRow) {
@@ -589,8 +613,17 @@ function displayDateForForecastView(row: TaskResultRow) {
   return row.forecastFinishDate ?? row.expectedFinishDate ?? row.plannedFinishDate;
 }
 
-function completedMilestoneDate(rows: TaskResultRow[]) {
-  return maxDate(rows.map(completionDateForRow));
+function completedMilestoneDateForPlanning(rows: TaskResultRow[]) {
+  if (rows.length === 0 || rows.some((row) => !isCompletedScheduleMilestoneTask(row))) {
+    return null;
+  }
+
+  return maxDate(
+    rows.map((row) => {
+      const raw = rawTaskResult(row.rawResult);
+      return dateFromRawValue(raw.actualFinishDate) ?? dateFromRawValue(raw.inferredCompletionDate);
+    }),
+  );
 }
 
 function completionDateForRow(row: TaskResultRow) {
