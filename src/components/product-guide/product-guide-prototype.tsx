@@ -19,6 +19,7 @@ import {
 import clsx from "clsx";
 import { AppSideNav } from "@/components/layout/app-side-nav";
 import type { AuthUser } from "@/lib/auth/permissions";
+import { classifyProductGuideWeeklyTask, currentProductGuideWeekWindow } from "@/lib/product-guide-weekly-work";
 import type { ProductGuideStyleSummary } from "@/lib/product-guide-types";
 import type { ProjectCard, ScheduleTaskRow, ScheduleWorkbenchData } from "@/lib/sample-schedule";
 
@@ -86,8 +87,11 @@ type PrototypeTask = {
   owner: string;
   plannedStart: string;
   forecastStart: string;
+  calculatedStart: string;
   plannedFinish: string;
   forecastFinish: string;
+  calculatedFinish: string;
+  latestFinish: string;
   expectedFinish: string;
   actualStart?: string;
   actualFinish?: string;
@@ -119,7 +123,7 @@ type PrototypeStyle = {
 };
 
 type GuideTask = {
-  bucket: "due" | "progress" | "start" | "risk" | "licensor";
+  bucket: "due" | "progress" | "start";
   projectId: string;
   taskNo: number;
   taskName: string;
@@ -317,10 +321,8 @@ const taskOperationConfig: Record<number, { taskName: string; operations: TaskOp
 
 const bucketMeta: Record<GuideTask["bucket"], { title: string; helper: string }> = {
   due: { title: "本周需完成", helper: "到期任务优先补录事实" },
-  progress: { title: "本周要推进", helper: "推进本周窗口内任务和前置卡点" },
+  progress: { title: "本周要推进", helper: "推进已开始且本周不要求完成的任务" },
   start: { title: "本周要开始", helper: "启动前确认上游资料" },
-  risk: { title: "风险任务", helper: "先确认卡点和预计完成时间" },
-  licensor: { title: "版权方反馈", helper: "记录送审和反馈边界" },
 };
 
 const riskClass: Record<RiskLevel, string> = {
@@ -1454,12 +1456,15 @@ function scheduleTaskToPrototypeTask(row: ScheduleTaskRow, owners: { productOwne
   const actualStart = textOrUndefined(row.actualStartDate);
   const actualFinish = textOrUndefined(row.actualFinishDate) ?? textOrUndefined(row.inferredCompletionDate);
   const plannedStart = textOrDash(row.plannedStartDate || row.originalLatestStartDate);
-  const forecastStart = textOrDash(row.progressForecastStartDate || row.calculatedStartDate || row.latestStartDate || row.plannedStartDate);
+  const calculatedStart = textOrDash(row.calculatedStartDate || row.progressForecastStartDate || row.latestStartDate || row.plannedStartDate);
   const plannedFinish = textOrDash(row.plannedFinishDate || row.currentDdlDate);
-  const forecastFinish = textOrDash(row.progressForecastFinishDate || row.calculatedFinishDate || row.expectedFinishDate || row.currentDdlDate);
-  const expectedFinish = textOrDash(row.expectedFinishDate || row.progressForecastFinishDate || row.calculatedFinishDate || row.currentDdlDate);
-  const ddl = textOrDash(row.currentDdlDate || row.latestFinishDate || row.plannedFinishDate);
-  const delayLine = textOrDash(row.latestFinishDate || row.originalLatestFinishDate || row.currentDdlDate);
+  const calculatedFinish = textOrDash(row.calculatedFinishDate || row.progressForecastFinishDate || row.expectedFinishDate || row.currentDdlDate);
+  const latestFinish = textOrDash(row.latestFinishDate || row.originalLatestFinishDate);
+  const forecastStart = calculatedStart;
+  const forecastFinish = calculatedFinish;
+  const expectedFinish = textOrDash(row.expectedFinishDate || row.calculatedFinishDate || row.progressForecastFinishDate || row.currentDdlDate);
+  const ddl = calculatedFinish;
+  const delayLine = latestFinish;
   const risk = normalizeRiskLevel(row.riskLevel);
 
   return {
@@ -1471,8 +1476,11 @@ function scheduleTaskToPrototypeTask(row: ScheduleTaskRow, owners: { productOwne
     owner: ownerForTaskNo(row.taskNo, owners),
     plannedStart,
     forecastStart,
+    calculatedStart,
     plannedFinish,
     forecastFinish,
+    calculatedFinish,
+    latestFinish,
     expectedFinish,
     actualStart,
     actualFinish,
@@ -1595,12 +1603,23 @@ function modelingProgressFromStyles(styles: PrototypeStyle[]): PrototypeProject[
 }
 
 function buildGuideTasksFromProjects(projects: PrototypeProject[]): GuideTask[] {
-  const week = currentNaturalWeek();
+  const weekWindow = currentProductGuideWeekWindow();
   const rows: GuideTask[] = [];
 
   for (const project of projects) {
     for (const task of project.tasks) {
-      if (isDoneStatus(task.status)) continue;
+      const bucket = classifyProductGuideWeeklyTask(
+        {
+          calculatedStartDate: task.calculatedStart,
+          calculatedFinishDate: task.calculatedFinish,
+          actualStartDate: task.actualStart,
+          actualFinishDate: task.actualFinish,
+          statusLabel: task.status,
+        },
+        weekWindow,
+      );
+
+      if (bucket === "none") continue;
 
       const baseTask = {
         projectId: project.id,
@@ -1609,24 +1628,14 @@ function buildGuideTasksFromProjects(projects: PrototypeProject[]): GuideTask[] 
         ddl: task.ddl,
         delayLine: task.delayLine,
       };
-      const isRiskTask = task.risk === "delay" || task.risk === "risk";
-      const isLicensorTask = hasLicensorSignal(task);
 
-      if (isRiskTask) {
-        rows.push({ ...baseTask, bucket: "risk", sortDate: firstDateText(task.ddl, task.delayLine, task.forecastFinish) });
-      }
-
-      if (isLicensorTask) {
-        rows.push({ ...baseTask, bucket: "licensor", sortDate: firstDateText(task.ddl, task.delayLine, task.forecastFinish) });
-      }
-
-      if (isDueThisWeek(task, week)) {
-        rows.push({ ...baseTask, bucket: "due", sortDate: firstDateText(task.ddl, task.expectedFinish, task.forecastFinish) });
-      } else if (shouldStartThisWeek(task, week)) {
-        rows.push({ ...baseTask, bucket: "start", sortDate: firstDateText(task.forecastStart, task.plannedStart) });
-      } else if (isProgressThisWeek(task, week)) {
-        rows.push({ ...baseTask, bucket: "progress", sortDate: firstDateText(task.forecastFinish, task.ddl, task.delayLine) });
-      }
+      rows.push({
+        ...baseTask,
+        bucket,
+        sortDate: bucket === "start"
+          ? firstDateText(task.calculatedStart, task.forecastStart, task.plannedStart)
+          : firstDateText(task.calculatedFinish, task.ddl, task.expectedFinish, task.forecastFinish),
+      });
     }
   }
 
@@ -1817,66 +1826,6 @@ function projectProgressFromTasks(tasks: PrototypeTask[]) {
   return Math.round((tasks.filter((task) => isDoneStatus(task.status)).length / tasks.length) * 100);
 }
 
-function currentNaturalWeek(today = new Date()) {
-  const day = today.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() + mondayOffset);
-  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
-
-  return { start, end };
-}
-
-function hasLicensorSignal(task: PrototypeTask) {
-  const text = `${task.name}${task.status}${task.reason}`;
-  return text.includes("版权") || text.includes("反馈") || text.includes("送审") || text.includes("等反馈");
-}
-
-function isDueThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
-  return [task.ddl, task.expectedFinish, task.forecastFinish, task.plannedFinish].some((dateText) =>
-    isDateTextInRange(dateText, week.start, week.end),
-  );
-}
-
-function shouldStartThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
-  if (!isStartReadyStatus(task.status)) return false;
-  const start = firstDate(task.forecastStart, task.plannedStart);
-  return Boolean(start && start <= week.end);
-}
-
-function isStartReadyStatus(status: string) {
-  return status.includes("未开始") || status.includes("现在该开始");
-}
-
-function isProgressThisWeek(task: PrototypeTask, week: { start: Date; end: Date }) {
-  const needsProgress =
-    task.status.includes("进行") ||
-    task.status.includes("推进") ||
-    task.status.includes("送审") ||
-    task.status.includes("等前置");
-
-  if (!needsProgress) return false;
-
-  const start = firstDate(task.forecastStart, task.plannedStart);
-  const end = firstDate(task.forecastFinish, task.expectedFinish, task.ddl);
-
-  if (!start && !end) return true;
-  return (!start || start <= week.end) && (!end || end >= week.start);
-}
-
-function isDateTextInRange(value: string, start: Date, end: Date) {
-  const date = parseDateText(value);
-  return Boolean(date && date >= start && date <= end);
-}
-
-function firstDate(...values: string[]) {
-  for (const value of values) {
-    const date = parseDateText(value);
-    if (date) return date;
-  }
-
-  return null;
-}
-
 function firstDateText(...values: string[]) {
   return values.find((value) => Boolean(parseDateText(value))) ?? "-";
 }
@@ -1893,8 +1842,6 @@ function sortGuideTasks(a: GuideTask, b: GuideTask) {
     due: 0,
     progress: 1,
     start: 2,
-    risk: 3,
-    licensor: 4,
   };
   const order = bucketOrder[a.bucket] - bucketOrder[b.bucket];
   if (order !== 0) return order;
@@ -2062,8 +2009,11 @@ const emptyTask: PrototypeTask = {
   owner: "待同步",
   plannedStart: "-",
   forecastStart: "-",
+  calculatedStart: "-",
   plannedFinish: "-",
   forecastFinish: "-",
+  calculatedFinish: "-",
+  latestFinish: "-",
   expectedFinish: "-",
   actualStart: undefined,
   actualFinish: undefined,
@@ -4107,8 +4057,8 @@ function WeekGuidePage({ tasks, projects, onOpenTask }: { tasks: GuideTask[]; pr
     <div className="grid gap-3">
       {tasks.length === 0 && unfinishedTasks.length > 0 ? (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <div className="font-semibold">当前项目组有未完成任务，但没有命中本周、风险或版权方反馈规则。</div>
-          <div className="mt-1 text-xs">可以先进入工作台任务队列确认下一步；如果这里仍应出现事项，需要回看项目排期返回的日期和风险判断。</div>
+          <div className="font-semibold">当前项目组有未完成任务，但没有命中本周需完成、要推进或要开始。</div>
+          <div className="mt-1 text-xs">可以先进入工作台任务队列确认下一步；如果这里仍应出现事项，需要回看项目排期返回的 calculated 日期。</div>
           {firstUnfinishedTask ? (
             <button
               type="button"

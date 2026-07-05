@@ -16,6 +16,8 @@ let prisma: typeof import("../src/lib/db/prisma").prisma;
 let milestoneByTaskNo: typeof import("../src/lib/schedule-domain").milestoneByTaskNo;
 let runAndPersistScheduleAnalysis: typeof import("../src/lib/schedule-engine/service").runAndPersistScheduleAnalysis;
 let getScheduleWorkbenchData: typeof import("../src/lib/schedule-repository").getScheduleWorkbenchData;
+let classifyProductGuideWeeklyTask: typeof import("../src/lib/product-guide-weekly-work").classifyProductGuideWeeklyTask;
+let productGuideWeekWindowFromDateText: typeof import("../src/lib/product-guide-weekly-work").productGuideWeekWindowFromDateText;
 let ingestProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").ingestProjectTaskFactEvent;
 let parseProjectTaskFactEvent: typeof import("../src/lib/schedule-task-fact-events-core").parseProjectTaskFactEvent;
 let ingestTaskFactEventAndRecalculate: typeof import("../src/lib/schedule-task-fact-events-service").ingestTaskFactEventAndRecalculate;
@@ -30,6 +32,7 @@ type Scenario = {
   projects: ScenarioProject[];
   events?: ScenarioEvent[];
   directEngineCases?: DirectEngineCase[];
+  productGuideWeeklyCases?: ProductGuideWeeklyCase[];
   expect?: ScenarioExpect;
 };
 
@@ -203,6 +206,26 @@ type DirectEngineRowExpectation = {
   calculatedNotBeforeToday?: boolean;
 };
 
+type ProductGuideWeeklyCase = {
+  id: string;
+  description?: string;
+  today?: string;
+  task: {
+    calculatedStartDate?: string | null;
+    calculatedFinishDate?: string | null;
+    actualStartDate?: string | null;
+    actualFinishDate?: string | null;
+    statusLabel?: string | null;
+    taskEnabled?: boolean | null;
+    riskLevel?: string | null;
+    impactStatus?: string | null;
+    latestFinishDate?: string | null;
+  };
+  expect: {
+    bucket: "due" | "progress" | "start" | "none";
+  };
+};
+
 type CliOptions = {
   scenarioId?: string;
   list: boolean;
@@ -279,11 +302,12 @@ async function loadRuntime() {
     return;
   }
 
-  const [db, domain, adapters, repository, events, eventService] = await Promise.all([
+  const [db, domain, adapters, repository, productGuideWeeklyWork, events, eventService] = await Promise.all([
     import("../src/lib/db/prisma"),
     import("../src/lib/schedule-domain"),
     import("../src/lib/schedule-engine/service"),
     import("../src/lib/schedule-repository"),
+    import("../src/lib/product-guide-weekly-work"),
     import("../src/lib/schedule-task-fact-events-core"),
     import("../src/lib/schedule-task-fact-events-service"),
   ]);
@@ -292,6 +316,8 @@ async function loadRuntime() {
   milestoneByTaskNo = domain.milestoneByTaskNo;
   runAndPersistScheduleAnalysis = adapters.runAndPersistScheduleAnalysis;
   getScheduleWorkbenchData = repository.getScheduleWorkbenchData;
+  classifyProductGuideWeeklyTask = productGuideWeeklyWork.classifyProductGuideWeeklyTask;
+  productGuideWeekWindowFromDateText = productGuideWeeklyWork.productGuideWeekWindowFromDateText;
   ingestProjectTaskFactEvent = events.ingestProjectTaskFactEvent;
   parseProjectTaskFactEvent = events.parseProjectTaskFactEvent;
   ingestTaskFactEventAndRecalculate = eventService.ingestTaskFactEventAndRecalculate;
@@ -796,6 +822,20 @@ async function assertScenario(runtime: ScenarioRuntime) {
   }
 
   assertions.push(...assertDirectEngineCases(scenario));
+  assertions.push(...assertProductGuideWeeklyCases(scenario));
+
+  return assertions;
+}
+
+function assertProductGuideWeeklyCases(scenario: Scenario) {
+  const assertions: AssertionResult[] = [];
+
+  for (const weeklyCase of scenario.productGuideWeeklyCases ?? []) {
+    const weekWindow = productGuideWeekWindowFromDateText(weeklyCase.today ?? scenario.today);
+    const bucket = classifyProductGuideWeeklyTask(weeklyCase.task, weekWindow);
+
+    assertions.push(equalResult(`产品组周任务 ${weeklyCase.id} 分组`, bucket, weeklyCase.expect.bucket));
+  }
 
   return assertions;
 }

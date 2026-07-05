@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/db/prisma";
 import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import { getModelingProductGuideEvents } from "@/lib/modeling-product-guide-events";
+import { classifyProductGuideWeeklyTask, currentProductGuideWeekWindow } from "@/lib/product-guide-weekly-work";
 import type {
   ProductGuideData,
   ProductGuideDueBucket,
@@ -91,6 +92,7 @@ type ProjectTaskRow = {
   milestoneType: string;
   ownerId: string | null;
   plannedFinishDate: Date | null;
+  actualStartDate: Date | null;
   actualFinishDate: Date | null;
   expectedFinishDate: Date | null;
   status: string;
@@ -318,6 +320,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
             milestoneType: true,
             ownerId: true,
             plannedFinishDate: true,
+            actualStartDate: true,
             actualFinishDate: true,
             expectedFinishDate: true,
             status: true,
@@ -473,7 +476,8 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
       }
 
       const riskLevel = toGuideRiskLevel(row.riskLevel, row.delayDays);
-      const dueDate = firstDate(row.plannedFinishDate, row.expectedFinishDate, task?.expectedFinishDate, row.forecastFinishDate);
+      const scheduleDates = scheduleTaskDates(row, task);
+      const dueDate = scheduleDates.calculatedFinishDate;
       const lastUpdatedAt = task?.lastUpdatedAt ?? task?.updatedAt ?? undefined;
       const staleDays = daysSince(task?.lastUpdatedAt);
       const isStale = staleDays > 3;
@@ -499,6 +503,7 @@ export async function getProductGuideData(): Promise<ProductGuideData> {
           maps,
           riskLevel: isNearRisk ? riskLevel : isStale || task?.isBlocked ? "watch" : "normal",
           dueDate,
+          scheduleDates,
           lastUpdatedAt,
           staleDays,
           isStale,
@@ -733,6 +738,7 @@ function buildScheduleTaskItem({
   maps,
   riskLevel,
   dueDate,
+  scheduleDates,
   lastUpdatedAt,
   staleDays,
   isStale,
@@ -744,7 +750,8 @@ function buildScheduleTaskItem({
   row: ScheduleTaskResultRow;
   maps: ContextMaps;
   riskLevel: ProductGuideRiskLevel;
-  dueDate: Date | undefined;
+  dueDate: Date | null | undefined;
+  scheduleDates: ReturnType<typeof scheduleTaskDates>;
   lastUpdatedAt: Date | undefined;
   staleDays: number;
   isStale: boolean;
@@ -775,8 +782,12 @@ function buildScheduleTaskItem({
     ownerKey: taskOwner.key,
     ownerName: taskOwner.label,
     plannedFinishDate: formatDate(row.plannedFinishDate ?? task?.plannedFinishDate),
-    forecastFinishDate: formatDate(row.forecastFinishDate ?? row.expectedFinishDate ?? task?.expectedFinishDate),
-    actualFinishDate: formatDate(task?.actualFinishDate ?? completionDateForRaw(row.rawResult)),
+    forecastFinishDate: formatDate(scheduleDates.calculatedFinishDate ?? row.forecastFinishDate ?? row.expectedFinishDate ?? task?.expectedFinishDate),
+    calculatedStartDate: formatDate(scheduleDates.calculatedStartDate),
+    calculatedFinishDate: formatDate(scheduleDates.calculatedFinishDate),
+    latestFinishDate: formatDate(scheduleDates.latestFinishDate),
+    actualStartDate: formatDate(scheduleDates.actualStartDate),
+    actualFinishDate: formatDate(scheduleDates.actualFinishDate),
     statusLabel,
     riskLevel,
     riskLabel: riskLabel[riskLevel],
@@ -834,6 +845,7 @@ function buildProjectRiskItem({
     ownerName: taskOwner.label,
     plannedFinishDate: formatDate(task?.plannedFinishDate ?? result.plannedLaunchDate),
     forecastFinishDate: formatDate(task?.expectedFinishDate ?? result.forecastLaunchDate),
+    actualStartDate: formatDate(task?.actualStartDate),
     statusLabel: task?.status ?? result.currentTaskName ?? "未完成",
     riskLevel,
     riskLabel: riskLabel[riskLevel],
@@ -897,6 +909,7 @@ function buildProjectTaskItem({
     ownerName: taskOwner.label,
     plannedFinishDate: formatDate(task.plannedFinishDate),
     forecastFinishDate: formatDate(task.expectedFinishDate),
+    actualStartDate: formatDate(task.actualStartDate),
     actualFinishDate: formatDate(task.actualFinishDate),
     statusLabel: task.status,
     riskLevel,
@@ -1496,6 +1509,8 @@ function mergeRecentUpdates(a: ProductGuideRecentUpdate[], b: ProductGuideRecent
 }
 
 function buildMetrics(items: ProductGuideItem[]): ProductGuideMetric[] {
+  const weekWindow = currentProductGuideWeekWindow();
+  const weeklyBuckets = items.map((item) => classifyProductGuideWeeklyTask(item, weekWindow));
   const riskCount = items.filter((item) => item.riskLevel === "risk" || item.riskLevel === "delay").length;
   const staleCount = items.filter((item) => item.isStale).length;
   const artReviewCount = items.filter((item) => item.requiresArtReview).length;
@@ -1510,8 +1525,8 @@ function buildMetrics(items: ProductGuideItem[]): ProductGuideMetric[] {
     },
     {
       label: "本周需处理",
-      value: items.filter((item) => item.dueBucket === "today" || item.dueBucket === "this-week").length,
-      helper: "未来 7 天内需推进",
+      value: weeklyBuckets.filter((bucket) => bucket !== "none").length,
+      helper: "本周需完成、推进或开始",
       tone: "info",
     },
     {
@@ -1923,10 +1938,6 @@ function startOfDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12));
 }
 
-function firstDate(...values: Array<Date | null | undefined>) {
-  return values.find((value): value is Date => Boolean(value));
-}
-
 function dateSortValue(value?: string) {
   if (!value) {
     return Number.MAX_SAFE_INTEGER;
@@ -2103,9 +2114,16 @@ function isWaitingLicensorText(value: string) {
   return value.includes("版权") || value.includes("反馈") || value.includes("送审") || value.includes("等反馈");
 }
 
-function completionDateForRaw(value: unknown) {
-  const raw = rawObject(value);
-  return dateFromRawValue(raw.actualFinishDate) ?? dateFromRawValue(raw.inferredCompletionDate);
+function scheduleTaskDates(row: ScheduleTaskResultRow, task?: ProjectTaskRow) {
+  const raw = rawObject(row.rawResult);
+
+  return {
+    calculatedStartDate: dateFromRawValue(raw.calculatedStartDate),
+    calculatedFinishDate: dateFromRawValue(raw.calculatedFinishDate) ?? row.forecastFinishDate,
+    latestFinishDate: dateFromRawValue(raw.latestFinishDate),
+    actualStartDate: dateFromRawValue(raw.actualStartDate) ?? task?.actualStartDate ?? null,
+    actualFinishDate: dateFromRawValue(raw.actualFinishDate) ?? dateFromRawValue(raw.inferredCompletionDate) ?? task?.actualFinishDate ?? null,
+  };
 }
 
 function rawObject(value: unknown): Record<string, unknown> {

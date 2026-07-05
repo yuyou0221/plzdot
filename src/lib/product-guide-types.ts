@@ -89,6 +89,10 @@ export type ProductGuideItem = {
   artOwnerName: string;
   plannedFinishDate?: string;
   forecastFinishDate?: string;
+  calculatedStartDate?: string;
+  calculatedFinishDate?: string;
+  latestFinishDate?: string;
+  actualStartDate?: string;
   actualFinishDate?: string;
   statusLabel: string;
   riskLevel: ProductGuideRiskLevel;
