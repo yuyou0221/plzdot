@@ -1008,7 +1008,8 @@ function writeCsv(file, rows, columns) {
 function main() {
   const args = parseArgs(process.argv);
   const today = args.today || shanghaiToday();
-  const engine = require(args.engine);
+  const runtimeRequire = eval('require');
+  const engine = runtimeRequire(args.engine);
   const helpers = makeDateHelpers(engine);
   const extracted = runExcelExtractor(args);
   const payload = analyzeExtracted(extracted, args, engine, helpers, today);

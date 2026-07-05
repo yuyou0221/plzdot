@@ -1,14 +1,10 @@
-import { createRequire } from "node:module";
-import path from "node:path";
 import type {
   ScheduleAnalyzeOptions,
   ScheduleEnginePayload,
   ScheduleEnginePort,
 } from "@/lib/schedule-engine/port";
-
-const scheduleEngineRequire = createRequire(
-  path.join(process.cwd(), "src", "lib", "schedule-engine", "project-analysis-v5-port.cjs"),
-);
+import * as defaultAnalysisModuleImport from "@/lib/schedule-engine/core/project-analysis-v5-excel.js";
+import * as defaultCoreEngineImport from "@/lib/schedule-engine/core/project-schedule-core.js";
 
 export type ProjectAnalysisV5ExtractedInput = {
   workbook?: string;
@@ -52,11 +48,15 @@ export type ProjectAnalysisV5PortConfig = {
 };
 
 function loadDefaultCoreEngine() {
-  return scheduleEngineRequire("./core/project-schedule-core.js");
+  return resolveCommonJsModule(defaultCoreEngineImport, "project-schedule-core.js", ["compute"]);
 }
 
 function loadDefaultAnalysisModule() {
-  return scheduleEngineRequire("./core/project-analysis-v5-excel.js") as ProjectAnalysisV5Module;
+  return resolveCommonJsModule<ProjectAnalysisV5Module>(
+    defaultAnalysisModuleImport,
+    "project-analysis-v5-excel.js",
+    ["analyzeExtracted", "makeDateHelpers"],
+  );
 }
 
 function fallbackShanghaiToday() {
@@ -117,4 +117,37 @@ export function createProjectAnalysisV5ScheduleEnginePort(config: ProjectAnalysi
       );
     },
   };
+}
+
+function resolveCommonJsModule<TModule>(
+  moduleValue: unknown,
+  moduleName: string,
+  requiredFunctionNames: string[],
+): TModule {
+  const candidates = [moduleValue, commonJsDefault(moduleValue)];
+  const resolved = candidates.find((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+
+    return requiredFunctionNames.every((functionName) => typeof (candidate as Record<string, unknown>)[functionName] === "function");
+  });
+
+  if (!resolved) {
+    const keys = candidates
+      .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === "object")
+      .map((candidate) => Object.keys(candidate).join(", ") || "(no keys)")
+      .join(" | ");
+    throw new Error(`排期内核模块 ${moduleName} 加载失败：缺少 ${requiredFunctionNames.join(", ")}。当前导出：${keys || "(empty)"}`);
+  }
+
+  return resolved as TModule;
+}
+
+function commonJsDefault(moduleValue: unknown) {
+  if (!moduleValue || typeof moduleValue !== "object") {
+    return null;
+  }
+
+  return (moduleValue as { default?: unknown }).default ?? null;
 }
