@@ -480,6 +480,11 @@ function createPlannedScheduleForLaunch(engine, params, plannedLaunchDate, refer
 }
 
 const EARLY_PLANNED_TASK_IDS = new Set([13, 16, 19]);
+const DISPLAY_ONLY_SIDE_TASK_IDS = new Set([8, 9]);
+
+function isDisplayOnlySideTaskId(taskId) {
+  return DISPLAY_ONLY_SIDE_TASK_IDS.has(Number(taskId));
+}
 
 function applyEarlyPlannedTasks(schedule, helpers) {
   const tasks = schedule.tasks.map(task => ({ ...task }));
@@ -757,10 +762,61 @@ function calculateFromPlannedWithActuals(tasks, plannedById, actualById, inferre
       forecastBasis: basis,
     });
   }
+  applyDisplayOnlySideTaskDates(tasks, plannedById, actualById, inferredById, calc, helpers);
   return calc;
 }
 
-function impactStatus({ actualFinishDate, inferredCompleted, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays }) {
+function applyDisplayOnlySideTaskDates(tasks, plannedById, actualById, inferredById, calc, helpers) {
+  const projectStartDate = plannedById.get(1)?.startDate || '';
+  const task10Actual = actualById.get(10) || {};
+  const task10Inferred = inferredById.get(10) || {};
+  const task10Calc = calc.get(10) || {};
+  const task10Finish = task10Actual.actualFinishDate
+    || task10Inferred.inferredCompletionDate
+    || task10Calc.forecastFinish
+    || '';
+  const task10Basis = task10Actual.actualFinishDate
+    ? 'display_only_follow_task_10_actual'
+    : task10Inferred.inferredCompleted
+      ? 'display_only_follow_task_10_inferred'
+      : 'display_only_follow_task_10_calculated';
+
+  if (!task10Finish) return;
+
+  for (const task of tasks) {
+    const id = Number(task.id);
+    if (!isDisplayOnlySideTaskId(id)) continue;
+
+    const actual = actualById.get(id) || {};
+    const ownActualFinish = actual.actualFinishDate || '';
+    const finish = ownActualFinish || task10Finish;
+    const calculatedStart = helpers.maxDate(projectStartDate, helpers.subDays(finish, Number(task.days || 0)));
+    const basis = ownActualFinish ? 'actual_finish' : task10Basis;
+
+    calc.set(id, {
+      start: ownActualFinish ? actual.actualStartDate || calculatedStart : '',
+      finish: ownActualFinish ? ownActualFinish : '',
+      basis,
+      forecastStart: calculatedStart,
+      forecastFinish: finish,
+      forecastBasis: basis,
+    });
+  }
+}
+
+function impactStatus({ actualFinishDate, inferredCompleted, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays, sideTask }) {
+  if (sideTask) {
+    if (actualFinishDate) {
+      if (planDeltaDays > 0) return '旁路任务已完成-晚于计划';
+      return '旁路任务已完成';
+    }
+    if (inferredCompleted) {
+      if (planDeltaDays > 0 || deadlineRiskDays > 0 || currentDeadlineRiskDays > 0) return '旁路任务推断完成-晚于计划';
+      return '旁路任务推断完成';
+    }
+    if (planDeltaDays > 0 || deadlineRiskDays > 0 || currentDeadlineRiskDays > 0) return '旁路任务落后';
+    return '旁路任务正常';
+  }
   if (actualFinishDate) {
     if (deadlineRiskDays > 0) return '已完成-影响上线';
     if (planDeltaDays > 0) return '已完成-晚于计划';
@@ -777,15 +833,19 @@ function impactStatus({ actualFinishDate, inferredCompleted, planDeltaDays, dead
   return '影响上线';
 }
 
-function riskLevel({ actualFinishDate, inferredCompleted, taskStatus, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays, floatDays, isLaunchPath }) {
-  if (actualFinishDate) return '已完成';
-  if (inferredCompleted) return '已完成(推断)';
-  if (isLaunchPath && (deadlineRiskDays > 0 || currentDeadlineRiskDays > 0)) return '严重';
-  if (taskStatus === '逾期未完成') return '高';
-  if (floatDays < 0) return '严重';
-  if (floatDays === 0) return '高';
-  if (planDeltaDays > 0) return '中';
-  return '低';
+function riskLevel({ actualFinishDate, inferredCompleted, taskStatus, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays, floatDays, isLaunchPath, sideTask }) {
+  if (actualFinishDate) return '\u5df2\u5b8c\u6210';
+  if (inferredCompleted) return '\u5df2\u5b8c\u6210(\u63a8\u65ad)';
+  if (sideTask) {
+    if (planDeltaDays > 0 || deadlineRiskDays > 0 || currentDeadlineRiskDays > 0) return '\u63d0\u9192';
+    return '\u6b63\u5e38';
+  }
+  if (isLaunchPath && (deadlineRiskDays > 0 || currentDeadlineRiskDays > 0)) return '\u4e25\u91cd';
+  if (taskStatus === '\u903e\u671f\u672a\u5b8c\u6210') return '\u9ad8';
+  if (floatDays < 0) return '\u4e25\u91cd';
+  if (floatDays === 0) return '\u9ad8';
+  if (planDeltaDays > 0) return '\u4e2d';
+  return '\u4f4e';
 }
 
 function calculateProject(project, projectActualRows, engine, helpers, today, options = {}) {
@@ -831,7 +891,8 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
     const inferredCompleted = inferred.inferredCompleted === true;
     const measuredFinish = c.forecastFinish || '';
     const launchDeltaDays = helpers.signedDays(effectiveLaunchDate, currentProjectedLaunchDate);
-    const isLaunchPath = reachesLaunch(id);
+    const sideTask = !!t.sideTask || isDisplayOnlySideTaskId(id);
+    const isLaunchPath = !sideTask && reachesLaunch(id);
     const basis = ddlBasis(t, actualById, inferredById);
     const predStatus = actualPredecessorStatus(t, actualById, inferredById);
     const actualStarted = !!a.actualStartDate && !a.actualFinishDate;
@@ -870,6 +931,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       planDeltaDays,
       deadlineRiskDays,
       currentDeadlineRiskDays,
+      sideTask,
     });
     return {
       recordKey: `${project.projectId}-${id}`,
@@ -895,7 +957,9 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       taskName: t.name,
       legacyTaskId: t.legacyId,
       taskEnabled: true,
-      sideTask: !!t.sideTask,
+      sideTask,
+      nonSchedulingTask: sideTask,
+      displayOnlySideTask: sideTask,
       durationDays: t.days,
       plannedStartDate: p.startDate,
       plannedFinishDate: p.finishDate,
@@ -939,8 +1003,10 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
         currentDeadlineRiskDays,
         floatDays,
         isLaunchPath,
+        sideTask,
       }),
-      isBlockingLaunch: isLaunchPath
+      isBlockingLaunch: !sideTask
+        && isLaunchPath
         && !a.actualFinishDate
         && !inferredCompleted
         && helpers.signedDays(o.finishDate, c.forecastFinish) > 0,
@@ -965,6 +1031,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
   });
 
   const futureRows = rows.filter(r => !r.actualFinishDate && !r.inferredCompleted);
+  const schedulingFutureRows = futureRows.filter(r => !r.nonSchedulingTask);
   return {
     project: {
       ...project,
@@ -984,9 +1051,9 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
         totalTasks: rows.length,
         unfinishedTasks: futureRows.length,
         inferredCompletedTasks: rows.filter(r => r.inferredCompleted).length,
-        behindPlanTasks: futureRows.filter(r => r.planDeltaDays > 0).length,
-        blockingLaunchTasks: futureRows.filter(r => r.isBlockingLaunch).length,
-        noBufferTasks: futureRows.filter(r => r.floatDays <= 0).length,
+        behindPlanTasks: schedulingFutureRows.filter(r => r.planDeltaDays > 0).length,
+        blockingLaunchTasks: schedulingFutureRows.filter(r => r.isBlockingLaunch).length,
+        noBufferTasks: schedulingFutureRows.filter(r => r.floatDays <= 0).length,
       },
     },
     rows,
@@ -1035,8 +1102,8 @@ function main() {
     generatedAt: today,
     projectCount: payload.projectCount,
     futureTaskCount: payload.futureTaskCount,
-    blockingLaunchTasks: payload.futureRows.filter(r => r.isBlockingLaunch).length,
-    behindPlanTasks: payload.futureRows.filter(r => r.planDeltaDays > 0).length,
+    blockingLaunchTasks: payload.futureRows.filter(r => !r.nonSchedulingTask && r.isBlockingLaunch).length,
+    behindPlanTasks: payload.futureRows.filter(r => !r.nonSchedulingTask && r.planDeltaDays > 0).length,
     jsonFile,
     csvFile,
     xlsxFile,

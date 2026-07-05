@@ -1,0 +1,249 @@
+{
+  "id": "side-tasks-8-9-v5",
+  "name": "#8/#9 旁路任务口径",
+  "description": "验证 #8 打印灰模实物确认、#9 工程审核只做日期展示和提醒，不参与主链排期、不阻塞上线、不影响建模里程碑主完成判断。",
+  "today": "2026-07-05",
+  "taskRules": [
+    { "taskNo": 5, "taskName": "绘制款式效果图", "standardWorkdays": 14 },
+    { "taskNo": 7, "taskName": "精细建模确认风格", "standardWorkdays": 14 },
+    { "taskNo": 8, "taskName": "打印灰模实物确认", "standardWorkdays": 56 },
+    { "taskNo": 9, "taskName": "工程审核", "standardWorkdays": 56 },
+    { "taskNo": 10, "taskName": "根据效果图建模", "standardWorkdays": 42 }
+  ],
+  "projects": [
+    {
+      "ref": "side-current",
+      "projectCode": "SIM-SIDE-2633",
+      "projectName": "旁路任务当前项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-SIDE",
+      "productType": "盲盒",
+      "styleCount": 5,
+      "projectLevel": "A",
+      "plannedLaunchDate": "2026-11-20",
+      "projectStartDate": "2026-04-17",
+      "projectTeamId": "模拟丹东组",
+      "projectOwnerId": "模拟产品研发SIDE",
+      "artOwnerId": "模拟产品美术SIDE",
+      "routeType": "手板路线",
+      "needThreeView": false,
+      "status": "3D建模",
+      "tasks": [
+        { "taskNo": 5, "taskName": "绘制款式效果图" },
+        { "taskNo": 7, "taskName": "精细建模确认风格" },
+        { "taskNo": 8, "taskName": "打印灰模实物确认" },
+        { "taskNo": 9, "taskName": "工程审核" },
+        { "taskNo": 10, "taskName": "根据效果图建模" }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "ref": "task-5-completed",
+      "projectRef": "side-current",
+      "eventType": "task_completed",
+      "taskNo": 5,
+      "taskKey": "#5",
+      "taskName": "绘制款式效果图",
+      "occurredAt": "2026-06-08T18:00:00+08:00",
+      "operatorId": "schedule-simulation:side",
+      "operatorName": "模拟产品经理SIDE",
+      "payload": {
+        "actualStartDate": "2026-05-14",
+        "actualFinishDate": "2026-06-08",
+        "status": "已完成"
+      }
+    },
+    {
+      "ref": "task-7-completed",
+      "projectRef": "side-current",
+      "eventType": "task_completed",
+      "taskNo": 7,
+      "taskKey": "#7",
+      "taskName": "精细建模确认风格",
+      "occurredAt": "2026-06-11T18:00:00+08:00",
+      "operatorId": "schedule-simulation:side",
+      "operatorName": "模拟产品经理SIDE",
+      "payload": {
+        "actualStartDate": "2026-06-01",
+        "actualFinishDate": "2026-06-11",
+        "status": "已完成"
+      }
+    },
+    {
+      "ref": "task-8-started",
+      "projectRef": "side-current",
+      "eventType": "task_started",
+      "taskNo": 8,
+      "taskKey": "#8",
+      "taskName": "打印灰模实物确认",
+      "occurredAt": "2026-06-22T09:00:00+08:00",
+      "operatorId": "schedule-simulation:side",
+      "operatorName": "模拟产品经理SIDE",
+      "payload": {
+        "actualStartDate": "2026-06-22",
+        "status": "进行中"
+      }
+    },
+    {
+      "ref": "task-10-started",
+      "projectRef": "side-current",
+      "eventType": "task_started",
+      "taskNo": 10,
+      "taskKey": "#10",
+      "taskName": "根据效果图建模",
+      "occurredAt": "2026-06-11T09:00:00+08:00",
+      "operatorId": "schedule-simulation:side",
+      "operatorName": "模拟产品经理SIDE",
+      "payload": {
+        "actualStartDate": "2026-06-11",
+        "status": "送审中"
+      }
+    },
+    {
+      "ref": "task-10-expected",
+      "projectRef": "side-current",
+      "eventType": "task_expected_finish_updated",
+      "taskNo": 10,
+      "taskKey": "#10",
+      "taskName": "根据效果图建模",
+      "occurredAt": "2026-06-30T09:00:00+08:00",
+      "operatorId": "schedule-simulation:side",
+      "operatorName": "模拟产品经理SIDE",
+      "payload": {
+        "expectedFinishDate": "2026-06-30",
+        "status": "送审中"
+      }
+    }
+  ],
+  "directEngineCases": [
+    {
+      "id": "task-10-calculated-followed",
+      "description": "#10 未完成时，#8/#9 跟随 #10 calculatedFinishDate，但不阻塞上线。",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-side-tasks-8-9-v5",
+        "taskRules": [
+          { "taskId": 5, "taskName": "绘制款式效果图" },
+          { "taskId": 7, "taskName": "精细建模确认风格" },
+          { "taskId": 8, "taskName": "打印灰模实物确认" },
+          { "taskId": 9, "taskName": "工程审核" },
+          { "taskId": 10, "taskName": "根据效果图建模" }
+        ],
+        "projects": [
+          {
+            "项目编号": "DIRECT-SIDE-01",
+            "项目名称": "旁路任务直测项目一",
+            "启动日期": "2026-04-17",
+            "预估出货日期": "2026-11-20",
+            "路线": "手板路线",
+            "是否需要三视图": false,
+            "当前阶段": "3D建模"
+          }
+        ],
+        "actuals": [
+          { "projectId": "DIRECT-SIDE-01", "taskId": 5, "taskName": "绘制款式效果图", "actualStartDate": "2026-05-14", "actualFinishDate": "2026-06-08", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 7, "taskName": "精细建模确认风格", "actualStartDate": "2026-06-01", "actualFinishDate": "2026-06-11", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 10, "taskName": "根据效果图建模", "actualStartDate": "2026-06-11", "expectedFinishDate": "2026-06-30", "taskStatus": "送审中" }
+        ]
+      },
+      "expect": {
+        "rows": [
+          { "projectId": "DIRECT-SIDE-01", "taskId": 8, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 9, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 10, "calculatedFinishDate": "2026-08-01" }
+        ]
+      }
+    },
+    {
+      "id": "task-10-actual-infers-side-tasks",
+      "description": "#10 实际完成时，#8/#9 推断完成并跟随 #10 完成日。",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-side-tasks-8-9-v5",
+        "taskRules": [
+          { "taskId": 5, "taskName": "绘制款式效果图" },
+          { "taskId": 7, "taskName": "精细建模确认风格" },
+          { "taskId": 8, "taskName": "打印灰模实物确认" },
+          { "taskId": 9, "taskName": "工程审核" },
+          { "taskId": 10, "taskName": "根据效果图建模" }
+        ],
+        "projects": [
+          {
+            "项目编号": "DIRECT-SIDE-02",
+            "项目名称": "旁路任务直测项目二",
+            "启动日期": "2026-04-17",
+            "预估出货日期": "2026-11-20",
+            "路线": "手板路线",
+            "是否需要三视图": false,
+            "当前阶段": "3D建模"
+          }
+        ],
+        "actuals": [
+          { "projectId": "DIRECT-SIDE-02", "taskId": 5, "taskName": "绘制款式效果图", "actualStartDate": "2026-05-14", "actualFinishDate": "2026-06-08", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-02", "taskId": 7, "taskName": "精细建模确认风格", "actualStartDate": "2026-06-01", "actualFinishDate": "2026-06-11", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-02", "taskId": 10, "taskName": "根据效果图建模", "actualStartDate": "2026-06-11", "actualFinishDate": "2026-07-15", "taskStatus": "已完成" }
+        ]
+      },
+      "expect": {
+        "rows": [
+          { "projectId": "DIRECT-SIDE-02", "taskId": 8, "calculatedFinishDate": "2026-07-15", "inferredCompleted": true, "inferredCompletionDate": "2026-07-15", "isBlockingLaunch": false },
+          { "projectId": "DIRECT-SIDE-02", "taskId": 9, "calculatedFinishDate": "2026-07-15", "inferredCompleted": true, "inferredCompletionDate": "2026-07-15", "isBlockingLaunch": false }
+        ]
+      }
+    },
+    {
+      "id": "own-actual-finish-wins",
+      "description": "#8/#9 自己有实际完成时，不被 #10 的完成日覆盖。",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-side-tasks-8-9-v5",
+        "taskRules": [
+          { "taskId": 5, "taskName": "绘制款式效果图" },
+          { "taskId": 7, "taskName": "精细建模确认风格" },
+          { "taskId": 8, "taskName": "打印灰模实物确认" },
+          { "taskId": 9, "taskName": "工程审核" },
+          { "taskId": 10, "taskName": "根据效果图建模" }
+        ],
+        "projects": [
+          {
+            "项目编号": "DIRECT-SIDE-03",
+            "项目名称": "旁路任务直测项目三",
+            "启动日期": "2026-04-17",
+            "预估出货日期": "2026-11-20",
+            "路线": "手板路线",
+            "是否需要三视图": false,
+            "当前阶段": "3D建模"
+          }
+        ],
+        "actuals": [
+          { "projectId": "DIRECT-SIDE-03", "taskId": 5, "taskName": "绘制款式效果图", "actualStartDate": "2026-05-14", "actualFinishDate": "2026-06-08", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-03", "taskId": 7, "taskName": "精细建模确认风格", "actualStartDate": "2026-06-01", "actualFinishDate": "2026-06-11", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-03", "taskId": 9, "taskName": "工程审核", "actualStartDate": "2026-06-20", "actualFinishDate": "2026-07-10", "taskStatus": "已完成" },
+          { "projectId": "DIRECT-SIDE-03", "taskId": 10, "taskName": "根据效果图建模", "actualStartDate": "2026-06-11", "actualFinishDate": "2026-07-15", "taskStatus": "已完成" }
+        ]
+      },
+      "expect": {
+        "rows": [
+          { "projectId": "DIRECT-SIDE-03", "taskId": 9, "actualFinishDate": "2026-07-10", "calculatedFinishDate": "2026-07-10", "inferredCompleted": false, "isBlockingLaunch": false }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 5,
+    "projects": [
+      {
+        "ref": "side-current",
+        "scheduleResult": {
+          "exists": true
+        },
+        "scheduleTasks": [
+          { "taskNo": 8, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "taskNo": 9, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "taskNo": 10, "calculatedFinishDate": "2026-08-01" }
+        ]
+      }
+    ]
+  }
+}

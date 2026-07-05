@@ -3,6 +3,7 @@ import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import {
   evaluateScheduleMilestoneRiskLevel,
   isCompletedScheduleMilestoneTask,
+  isDisplayOnlySideTaskNo,
   isKnownMilestone,
   milestoneByTaskNo,
 } from "@/lib/schedule-domain";
@@ -28,6 +29,11 @@ const riskMap: Record<string, RiskLevel> = {
   延期风险: "risk",
   必然延期: "delay",
   严重延期: "delay",
+  严重: "delay",
+  高: "risk",
+  中: "risk",
+  低: "normal",
+  提醒: "normal",
   done: "done",
   doneLate: "doneLate",
   normal: "normal",
@@ -560,6 +566,10 @@ function normalizeMilestone(value: string, taskNo: number): Milestone | null {
 }
 
 function milestoneRowsForCard(rows: TaskResultRow[], milestone: Milestone) {
+  if (rows.some((row) => row.taskNo >= 7 && row.taskNo <= 10)) {
+    return rows.filter((row) => !isDisplayOnlySideTaskNo(row.taskNo));
+  }
+
   if (milestone !== "红蜡里程碑") {
     return rows;
   }
