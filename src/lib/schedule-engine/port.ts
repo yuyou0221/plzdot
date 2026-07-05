@@ -23,6 +23,9 @@ export type ScheduleEngineTaskResult = {
   projectName: string;
   taskId: number;
   taskName: string;
+  durationDays?: number;
+  startAfterRules?: string;
+  finishAfterRules?: string;
   plannedLaunchDate?: string;
   projectStartDate?: string;
   effectiveProjectStartDate?: string;

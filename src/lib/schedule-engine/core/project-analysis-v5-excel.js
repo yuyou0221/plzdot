@@ -961,6 +961,8 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       nonSchedulingTask: sideTask,
       displayOnlySideTask: sideTask,
       durationDays: t.days,
+      startAfterRules: (t.startAfter || []).map(rule => `#${rule.id}`).join(','),
+      finishAfterRules: (t.finishAfter || []).map(rule => `#${rule.id}+${rule.lagDays || 0}`).join(','),
       plannedStartDate: p.startDate,
       plannedFinishDate: p.finishDate,
       originalLatestStartDate: o.startDate,
@@ -1088,7 +1090,7 @@ function main() {
   fs.writeFileSync(jsonFile, JSON.stringify(payload, null, 2), 'utf8');
   writeCsv(csvFile, payload.futureRows, [
     'projectId', 'projectName', 'projectStatus', 'plannedLaunchDate', 'projectedLaunchDate', 'launchDeltaDays',
-    'taskId', 'taskName', 'durationDays', 'taskStatus', 'autoStarted', 'missingActualPredecessorIds',
+    'taskId', 'taskName', 'durationDays', 'startAfterRules', 'finishAfterRules', 'taskStatus', 'autoStarted', 'missingActualPredecessorIds',
     'actualStartDate', 'actualFinishDate', 'inferredCompleted', 'inferredCompletionDate',
     'plannedStartDate', 'plannedFinishDate', 'forecastStartDate', 'forecastFinishDate',
     'originalLatestStartDate', 'originalLatestFinishDate', 'latestStartDate', 'latestFinishDate',
