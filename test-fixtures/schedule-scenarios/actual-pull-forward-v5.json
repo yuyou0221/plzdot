@@ -1,0 +1,879 @@
+{
+  "id": "actual-pull-forward-v5",
+  "name": "actual pull-forward calculated semantics",
+  "description": "Verify calculated dates are current reachable forecasts instead of being held by planned baseline.",
+  "today": "2026-07-05",
+  "taskRules": [
+    {
+      "taskNo": 7,
+      "taskName": "style confirm",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 8,
+      "taskName": "gray model print check",
+      "standardWorkdays": 56
+    },
+    {
+      "taskNo": 9,
+      "taskName": "engineering review",
+      "standardWorkdays": 56
+    },
+    {
+      "taskNo": 10,
+      "taskName": "modeling",
+      "standardWorkdays": 42
+    },
+    {
+      "taskNo": 11,
+      "taskName": "split doc",
+      "standardWorkdays": 1
+    },
+    {
+      "taskNo": 13,
+      "taskName": "decal ai doc",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 14,
+      "taskName": "split confirm",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 18,
+      "taskName": "sample making",
+      "standardWorkdays": 35
+    }
+  ],
+  "projects": [
+    {
+      "ref": "pull-db",
+      "projectCode": "SIM-PULL-01",
+      "projectName": "actual pull-forward simulation",
+      "licensorName": "sim licensor",
+      "ipName": "sim ip",
+      "productType": "figure",
+      "styleCount": 5,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-11-20",
+      "projectStartDate": "2026-04-17",
+      "status": "modeling",
+      "tasks": [
+        {
+          "taskNo": 7,
+          "taskName": "style confirm"
+        },
+        {
+          "taskNo": 8,
+          "taskName": "gray model print check"
+        },
+        {
+          "taskNo": 9,
+          "taskName": "engineering review"
+        },
+        {
+          "taskNo": 10,
+          "taskName": "modeling"
+        },
+        {
+          "taskNo": 11,
+          "taskName": "split doc"
+        }
+      ]
+    }
+  ],
+  "directEngineCases": [
+    {
+      "id": "actual-finish-pulls-downstream-before-planned",
+      "description": "#10 actualFinishDate before planned pulls #11 earlier than planned.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-01",
+            "projectName": "DIRECT-PULL-01",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-01",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-01",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-17",
+            "actualFinishDate": "2026-07-15",
+            "taskStatus": "done"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-01",
+            "taskId": 10,
+            "calculatedFinishDate": "2026-07-15"
+          },
+          {
+            "projectId": "DIRECT-PULL-01",
+            "taskId": 11,
+            "calculatedStartDate": "2026-07-15",
+            "calculatedFinishDate": "2026-07-16"
+          }
+        ]
+      }
+    },
+    {
+      "id": "remaining-days-pulls-running-task-earlier",
+      "description": "remainingDays is a current forecast and can beat actualStart + standard duration.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-02",
+            "projectName": "DIRECT-PULL-02",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-02",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-02",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-11",
+            "remainingDays": 10,
+            "taskStatus": "in progress"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-02",
+            "taskId": 10,
+            "calculatedStartDate": "2026-06-11",
+            "calculatedFinishDate": "2026-07-15"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expected-finish-pulls-running-task-earlier",
+      "description": "future expectedFinishDate is a current forecast and can beat standard duration.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-03",
+            "projectName": "DIRECT-PULL-03",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-03",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-03",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-11",
+            "expectedFinishDate": "2026-07-15",
+            "taskStatus": "in progress"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-03",
+            "taskId": 10,
+            "calculatedStartDate": "2026-06-11",
+            "calculatedFinishDate": "2026-07-15"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expired-expected-does-not-stop-in-past",
+      "description": "expired expectedFinishDate cannot keep an unfinished task in the past.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-04",
+            "projectName": "DIRECT-PULL-04",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-04",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-04",
+            "taskId": 10,
+            "taskName": "modeling",
+            "expectedFinishDate": "2026-06-30",
+            "taskStatus": "not started"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-04",
+            "taskId": 10,
+            "calculatedStartDate": "2026-07-05",
+            "calculatedNotBeforeToday": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "past-predecessor-does-not-auto-start-in-past",
+      "description": "not-started successor can be pulled by predecessor but not auto-started in the past without actualStartDate.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-05",
+            "projectName": "DIRECT-PULL-05",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-05",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-05",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-20",
+            "taskStatus": "done"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-05",
+            "taskId": 11,
+            "calculatedStartDate": "2026-07-05"
+          }
+        ]
+      }
+    },
+    {
+      "id": "future-predecessor-pulls-successor-before-planned",
+      "description": "future reachable predecessor finish can start successor earlier than planned.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-06",
+            "projectName": "DIRECT-PULL-06",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-06",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-06",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-17",
+            "expectedFinishDate": "2026-07-20",
+            "taskStatus": "in progress"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-06",
+            "taskId": 11,
+            "calculatedStartDate": "2026-07-20",
+            "calculatedFinishDate": "2026-07-21"
+          }
+        ]
+      }
+    },
+    {
+      "id": "finish-after-remains-hard-constraint",
+      "description": "expectedFinishDate cannot pass a later finishAfter constraint.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-07",
+            "projectName": "DIRECT-PULL-07",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-17",
+            "actualFinishDate": "2026-07-01",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 11,
+            "taskName": "split doc",
+            "actualStartDate": "2026-07-01",
+            "actualFinishDate": "2026-07-02",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 13,
+            "taskName": "decal ai doc",
+            "actualStartDate": "2026-07-05",
+            "actualFinishDate": "2026-07-25",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 14,
+            "taskName": "split confirm",
+            "actualStartDate": "2026-07-01",
+            "actualFinishDate": "2026-07-01",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 18,
+            "taskName": "sample making",
+            "expectedFinishDate": "2026-07-15",
+            "taskStatus": "not started"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-07",
+            "taskId": 18,
+            "calculatedFinishDate": "2026-07-29"
+          }
+        ]
+      }
+    },
+    {
+      "id": "actual-finish-wins-over-model-constraint",
+      "description": "actualFinishDate is trusted even when earlier than finishAfter model constraint.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-08",
+            "projectName": "DIRECT-PULL-08",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-17",
+            "actualFinishDate": "2026-07-01",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 11,
+            "taskName": "split doc",
+            "actualStartDate": "2026-07-01",
+            "actualFinishDate": "2026-07-02",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 13,
+            "taskName": "decal ai doc",
+            "actualStartDate": "2026-07-05",
+            "actualFinishDate": "2026-07-25",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 14,
+            "taskName": "split confirm",
+            "actualStartDate": "2026-07-01",
+            "actualFinishDate": "2026-07-01",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 18,
+            "taskName": "sample making",
+            "actualStartDate": "2026-07-05",
+            "actualFinishDate": "2026-07-15",
+            "taskStatus": "done"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-08",
+            "taskId": 18,
+            "calculatedFinishDate": "2026-07-15",
+            "calculationWarnings": "actual_finish_before_finish_after_constraint"
+          }
+        ]
+      }
+    },
+    {
+      "id": "side-tasks-follow-pulled-task-10",
+      "description": "#8/#9 continue following pulled #10 and remain non-blocking side tasks.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-actual-pull-forward-v5",
+        "taskRules": [
+          {
+            "taskId": 7,
+            "taskName": "style confirm"
+          },
+          {
+            "taskId": 8,
+            "taskName": "gray model print check"
+          },
+          {
+            "taskId": 9,
+            "taskName": "engineering review"
+          },
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-PULL-09",
+            "projectName": "DIRECT-PULL-09",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-PULL-09",
+            "taskId": 7,
+            "taskName": "style confirm",
+            "actualStartDate": "2026-06-01",
+            "actualFinishDate": "2026-06-11",
+            "taskStatus": "done"
+          },
+          {
+            "projectId": "DIRECT-PULL-09",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-11",
+            "expectedFinishDate": "2026-07-15",
+            "taskStatus": "in progress"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-PULL-09",
+            "taskId": 8,
+            "calculatedFinishDate": "2026-07-15",
+            "isBlockingLaunch": false,
+            "isLaunchPath": false,
+            "nonSchedulingTask": true,
+            "displayOnlySideTask": true
+          },
+          {
+            "projectId": "DIRECT-PULL-09",
+            "taskId": 9,
+            "calculatedFinishDate": "2026-07-15",
+            "isBlockingLaunch": false,
+            "isLaunchPath": false,
+            "nonSchedulingTask": true,
+            "displayOnlySideTask": true
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "projects": [
+      {
+        "ref": "pull-db",
+        "scheduleResult": {
+          "exists": true
+        }
+      }
+    ]
+  }
+}

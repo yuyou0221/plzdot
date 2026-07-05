@@ -149,9 +149,9 @@
       },
       "expect": {
         "rows": [
-          { "projectId": "DIRECT-SIDE-01", "taskId": 8, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
-          { "projectId": "DIRECT-SIDE-01", "taskId": 9, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
-          { "projectId": "DIRECT-SIDE-01", "taskId": 10, "calculatedFinishDate": "2026-08-01" }
+          { "projectId": "DIRECT-SIDE-01", "taskId": 8, "calculatedFinishDate": "2026-07-26", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 9, "calculatedFinishDate": "2026-07-26", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "projectId": "DIRECT-SIDE-01", "taskId": 10, "calculatedFinishDate": "2026-07-26" }
         ]
       }
     },
@@ -239,9 +239,9 @@
           "exists": true
         },
         "scheduleTasks": [
-          { "taskNo": 8, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
-          { "taskNo": 9, "calculatedFinishDate": "2026-08-01", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
-          { "taskNo": 10, "calculatedFinishDate": "2026-08-01" }
+          { "taskNo": 8, "calculatedFinishDate": "2026-07-26", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "taskNo": 9, "calculatedFinishDate": "2026-07-26", "isBlockingLaunch": false, "isLaunchPath": false, "nonSchedulingTask": true, "displayOnlySideTask": true },
+          { "taskNo": 10, "calculatedFinishDate": "2026-07-26" }
         ]
       }
     ]
