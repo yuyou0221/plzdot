@@ -65,9 +65,12 @@ export type ScheduleTaskRow = {
   originalLatestFinishDate: string;
   latestStartDate: string;
   latestFinishDate: string;
+  currentLatestStartDate?: string;
+  currentLatestFinishDate?: string;
   floatDays: number | null;
   planDeltaDays: number | null;
   deadlineRiskDays: number | null;
+  currentDeadlineRiskDays?: number | null;
   warningWindowDays: number | null;
   impactStatus: string;
   riskLevel: RiskLevel;

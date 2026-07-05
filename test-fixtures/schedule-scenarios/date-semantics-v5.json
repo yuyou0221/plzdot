@@ -1,0 +1,245 @@
+{
+  "id": "date-semantics-v5",
+  "name": "V5 日期语义修复",
+  "description": "验证 planned 来自项目启动正推，latest 来自上线倒推，calculated 不停留在过去，actual 覆盖 calculated。",
+  "today": "2026-05-31",
+  "taskRules": [
+    { "taskNo": 1, "taskName": "市场调研", "standardWorkdays": 7 },
+    { "taskNo": 2, "taskName": "可行性研究", "standardWorkdays": 7 },
+    { "taskNo": 3, "taskName": "项目企划", "standardWorkdays": 7 },
+    { "taskNo": 13, "taskName": "水贴AI文档制作", "standardWorkdays": 14 }
+  ],
+  "projects": [
+    {
+      "ref": "semantic-buffer",
+      "projectCode": "SIM-V5-DATE-01",
+      "projectName": "日期语义缓冲项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-DATE",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2026-12-20",
+      "projectStartDate": "2026-01-01",
+      "projectTeamId": "模拟项目组DATE",
+      "projectOwnerId": "模拟产品研发DATE",
+      "artOwnerId": "模拟产品美术DATE",
+      "routeType": "A",
+      "needThreeView": true,
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 1, "taskName": "市场调研" },
+        { "taskNo": 2, "taskName": "可行性研究" },
+        { "taskNo": 13, "taskName": "水贴AI文档制作" }
+      ]
+    },
+    {
+      "ref": "overdue-unstarted",
+      "projectCode": "SIM-V5-DATE-03",
+      "projectName": "未开始逾期项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-OVERDUE",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2027-12-20",
+      "projectStartDate": "2026-01-01",
+      "projectTeamId": "模拟项目组DATE",
+      "projectOwnerId": "模拟产品研发DATE",
+      "artOwnerId": "模拟产品美术DATE",
+      "routeType": "A",
+      "needThreeView": false,
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 1, "taskName": "市场调研" }
+      ]
+    },
+    {
+      "ref": "expired-expected",
+      "projectCode": "SIM-V5-DATE-04",
+      "projectName": "过期预计完成项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-EXPECTED",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2027-12-20",
+      "projectStartDate": "2026-01-01",
+      "projectTeamId": "模拟项目组DATE",
+      "projectOwnerId": "模拟产品研发DATE",
+      "artOwnerId": "模拟产品美术DATE",
+      "routeType": "A",
+      "needThreeView": false,
+      "status": "进行中",
+      "tasks": [
+        { "taskNo": 1, "taskName": "市场调研" }
+      ]
+    },
+    {
+      "ref": "missing-start",
+      "projectCode": "SIM-V5-DATE-02",
+      "projectName": "缺少启动日期项目",
+      "licensorName": "番茄模拟版权方",
+      "ipName": "模拟IP-NO-START",
+      "productType": "盲盒",
+      "plannedLaunchDate": "2026-12-20",
+      "projectTeamId": "模拟项目组DATE",
+      "projectOwnerId": "模拟产品研发DATE",
+      "artOwnerId": "模拟产品美术DATE",
+      "routeType": "A",
+      "needThreeView": false,
+      "status": "进行中",
+      "tasks": []
+    }
+  ],
+  "events": [
+    {
+      "ref": "task-2-completed",
+      "projectRef": "semantic-buffer",
+      "eventType": "task_completed",
+      "taskNo": 2,
+      "taskKey": "#2",
+      "taskName": "可行性研究",
+      "occurredAt": "2026-02-01T18:00:00+08:00",
+      "operatorId": "schedule-simulation:date-semantics",
+      "operatorName": "模拟产品经理DATE",
+      "payload": {
+        "actualStartDate": "2026-01-20",
+        "actualFinishDate": "2026-02-01",
+        "status": "已完成",
+        "note": "实际完成日期必须覆盖 calculatedFinishDate"
+      }
+    },
+    {
+      "ref": "task-1-expired-expected",
+      "projectRef": "expired-expected",
+      "eventType": "task_expected_finish_updated",
+      "taskNo": 1,
+      "taskKey": "#1",
+      "taskName": "市场调研",
+      "occurredAt": "2026-05-20T18:00:00+08:00",
+      "operatorId": "schedule-simulation:date-semantics",
+      "operatorName": "模拟产品经理DATE",
+      "payload": {
+        "expectedFinishDate": "2026-05-15",
+        "status": "进行中",
+        "note": "过期预计完成日不能让 calculatedFinishDate 停在过去"
+      }
+    }
+  ],
+  "directEngineCases": [
+    {
+      "id": "duplicate-actuals-updated-at",
+      "description": "同项目同任务多条 actual 时按 updatedAt 取最新；最新行缺 taskName 也不能丢弃。",
+      "today": "2026-05-31",
+      "extracted": {
+        "workbook": "direct-date-semantics-v5",
+        "taskRules": [
+          { "taskId": 1, "taskName": "市场调研" }
+        ],
+        "projects": [
+          {
+            "项目编号": "DIRECT-DUP-01",
+            "项目名称": "重复 actual 内核直测项目",
+            "启动日期": "2026-01-01",
+            "预估出货日期": "2027-12-20",
+            "路线": "A",
+            "是否需要三视图": false,
+            "当前阶段": "进行中"
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-DUP-01",
+            "taskId": 1,
+            "taskName": "市场调研",
+            "actualStartDate": "2026-01-05",
+            "expectedFinishDate": "2026-05-10",
+            "taskStatus": "进行中",
+            "updatedAt": "2026-05-01T10:00:00.000Z"
+          },
+          {
+            "projectId": "DIRECT-DUP-01",
+            "taskId": 1,
+            "remainingDays": 5,
+            "taskStatus": "进行中",
+            "updatedAt": "2026-05-20T10:00:00.000Z"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-DUP-01",
+            "taskId": 1,
+            "taskName": "市场调研",
+            "actualStartDate": "2026-01-05",
+            "expectedFinishDate": "2026-05-10",
+            "remainingDays": 5,
+            "calculatedFinishDate": "2026-06-05",
+            "calculatedNotBeforeToday": true
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "processedEvents": 2,
+    "projects": [
+      {
+        "ref": "semantic-buffer",
+        "scheduleResult": {
+          "exists": true
+        },
+        "scheduleTasks": [
+          {
+            "taskNo": 2,
+            "actualStartDate": "2026-01-20",
+            "actualFinishDate": "2026-02-01",
+            "calculatedStartDate": "2026-01-20",
+            "calculatedFinishDate": "2026-02-01",
+            "impactStatus": "已完成-晚于计划",
+            "riskLevel": "已完成"
+          },
+          {
+            "taskNo": 13,
+            "plannedBeforeLatest": true
+          }
+        ]
+      },
+      {
+        "ref": "overdue-unstarted",
+        "scheduleResult": {
+          "exists": true
+        },
+        "scheduleTasks": [
+          {
+            "taskNo": 1,
+            "plannedBeforeLatest": true,
+            "calculatedNotBeforeToday": true,
+            "taskStatus": "逾期未完成",
+            "impactStatus": "落后计划未影响上线",
+            "riskLevel": "高"
+          }
+        ]
+      },
+      {
+        "ref": "expired-expected",
+        "scheduleResult": {
+          "exists": true
+        },
+        "scheduleTasks": [
+          {
+            "taskNo": 1,
+            "calculatedStartDate": "2026-05-31",
+            "calculatedFinishDate": "2026-06-07",
+            "calculatedNotBeforeToday": true,
+            "taskStatus": "逾期未完成",
+            "impactStatus": "落后计划未影响上线",
+            "riskLevel": "高"
+          }
+        ]
+      },
+      {
+        "ref": "missing-start",
+        "scheduleResult": {
+          "exists": false
+        }
+      }
+    ]
+  }
+}

@@ -159,21 +159,34 @@ function normalizeProjects(rawProjects, defaults) {
   return { projects: [...byId.values()], duplicateProjectIds: [...new Set(duplicates)] };
 }
 
-function normalizeActuals(rawActuals, projects, taskNameToId) {
+function normalizeActuals(rawActuals, projects, taskNameToId, taskIdToName = new Map()) {
+  const projectIds = new Set(projects.map(p => p.projectId));
   const projectIdByName = new Map(projects.map(p => [p.projectName, p.projectId]));
   const out = [];
   const unmatched = [];
+  const nameMatched = [];
   for (const r of rawActuals) {
     const projectName = text(r['项目名称'] ?? r.projectName);
-    const projectId = projectIdByName.get(projectName) || '';
-    const taskName = text(r.taskName);
     const recordKey = text(r.recordKey);
-    let taskId = Number.NaN;
     const keyMatch = recordKey.match(/-(\d+)$/);
-    if (keyMatch) taskId = Number(keyMatch[1]);
-    if (!Number.isFinite(taskId)) taskId = taskNameToId.get(taskName);
-    if (!projectId || !taskName || !Number.isFinite(taskId)) {
-      if (projectName || taskName) unmatched.push({ projectName, taskName, recordKey });
+    const recordProjectId = keyMatch ? recordKey.slice(0, -keyMatch[0].length) : '';
+    const explicitProjectId = idText(r.projectId ?? r.systemProjectId ?? r['项目ID'] ?? r['系统项目ID']);
+    let projectId = '';
+    if (recordProjectId && projectIds.has(recordProjectId)) projectId = recordProjectId;
+    else if (explicitProjectId && projectIds.has(explicitProjectId)) projectId = explicitProjectId;
+    else if (projectIdByName.has(projectName)) {
+      projectId = projectIdByName.get(projectName);
+      nameMatched.push({ projectName, taskName: text(r.taskName), recordKey });
+    }
+    const rawTaskName = text(r.taskName ?? r['任务名称']);
+    const explicitTaskId = optionalNumber(r.taskId ?? r.taskNo ?? r['任务编号'] ?? r['任务ID']);
+    let taskId = Number.NaN;
+    if (Number.isFinite(explicitTaskId)) taskId = explicitTaskId;
+    else if (keyMatch) taskId = Number(keyMatch[1]);
+    if (!Number.isFinite(taskId)) taskId = taskNameToId.get(rawTaskName);
+    const taskName = rawTaskName || taskIdToName.get(taskId) || '';
+    if (!projectId || !Number.isFinite(taskId)) {
+      if (projectName || rawTaskName || recordKey) unmatched.push({ projectName, taskName: rawTaskName, recordKey });
       continue;
     }
     out.push({
@@ -185,26 +198,83 @@ function normalizeActuals(rawActuals, projects, taskNameToId) {
       actualStartDate: dateText(r['实际开始日期'] ?? r.actualStartDate),
       actualFinishDate: dateText(r['实际完成日期'] ?? r.actualFinishDate),
       expectedFinishDate: dateText(r['推进中任务预期完成时间'] ?? r.expectedFinishDate),
-      remainingDays: Number.isFinite(Number(r.remainingDays)) ? Number(r.remainingDays) : undefined,
+      remainingDays: optionalNumber(r.remainingDays),
+      updatedAt: dateTimeText(r.updatedAt ?? r.rowUpdatedAt ?? r['更新时间'] ?? r['更新日期']),
+      createdAt: dateTimeText(r.createdAt ?? r['创建时间'] ?? r['创建日期']),
       recordKey,
     });
   }
-  return { actuals: out, unmatchedActuals: unmatched };
+  return { actuals: out, unmatchedActuals: unmatched, nameMatchedActuals: nameMatched };
+}
+
+function optionalNumber(value) {
+  if (value === undefined || value === null) return undefined;
+  const s = String(value).trim();
+  if (!s) return undefined;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function dateTimeText(v) {
+  const s = text(v);
+  if (!s) return '';
+  const date = new Date(s);
+  if (!Number.isNaN(date.getTime())) return date.toISOString();
+  const d = dateText(s);
+  return d ? `${d}T00:00:00.000Z` : '';
 }
 
 function latestActualMap(rows) {
-  const byTask = new Map();
+  const grouped = new Map();
   const duplicates = [];
   for (const row of rows) {
     const id = Number(row.taskId);
-    const old = byTask.get(id);
-    if (old) duplicates.push(id);
-    if (!old || compareActual(row, old) >= 0) byTask.set(id, row);
+    const group = grouped.get(id) || [];
+    if (group.length) duplicates.push(id);
+    group.push(row);
+    grouped.set(id, group);
+  }
+  const byTask = new Map();
+  for (const [id, taskRows] of grouped) {
+    byTask.set(id, mergeActualRows(taskRows));
   }
   return { actualById: byTask, duplicateTaskIds: [...new Set(duplicates)] };
 }
 
+function mergeActualRows(rows) {
+  const ordered = [...rows].sort(compareActual);
+  const latest = ordered[ordered.length - 1] || {};
+  const latestNonEmpty = field => {
+    for (let i = ordered.length - 1; i >= 0; i--) {
+      const value = ordered[i][field];
+      if (!isBlank(value)) return value;
+    }
+    return '';
+  };
+  const latestFiniteNumber = field => {
+    for (let i = ordered.length - 1; i >= 0; i--) {
+      const value = ordered[i][field];
+      if (Number.isFinite(value)) return value;
+    }
+    return undefined;
+  };
+  return {
+    ...latest,
+    projectName: latestNonEmpty('projectName') || latest.projectName,
+    taskName: latestNonEmpty('taskName') || latest.taskName,
+    taskStatus: latestNonEmpty('taskStatus') || latest.taskStatus,
+    actualStartDate: latestNonEmpty('actualStartDate'),
+    actualFinishDate: latestNonEmpty('actualFinishDate'),
+    expectedFinishDate: latestNonEmpty('expectedFinishDate'),
+    remainingDays: latestFiniteNumber('remainingDays'),
+    recordKey: latestNonEmpty('recordKey') || latest.recordKey,
+  };
+}
+
 function compareActual(a, b) {
+  const au = a.updatedAt || a.createdAt || '';
+  const bu = b.updatedAt || b.createdAt || '';
+  if (au !== bu) return au > bu ? 1 : -1;
   const af = a.actualFinishDate || '';
   const bf = b.actualFinishDate || '';
   if (af !== bf) return af > bf ? 1 : -1;
@@ -368,6 +438,16 @@ function createPlannedScheduleFromProjectStart(engine, params, projectStartDate,
   return {
     params,
     productionMilestone: helpers.maxDate(
+      dates.get(30)?.finishDate,
+      dates.get(31)?.finishDate
+    ),
+    plannedProjectStartDate: projectStartDate,
+    plannedTotalScheduleDays: helpers.signedDays(
+      projectStartDate,
+      helpers.maxDate(dates.get(30)?.finishDate, dates.get(31)?.finishDate)
+    ),
+    plannedReferenceStartDate: projectStartDate,
+    plannedReferenceProductionMilestone: helpers.maxDate(
       dates.get(30)?.finishDate,
       dates.get(31)?.finishDate
     ),
@@ -627,12 +707,17 @@ function calculateFromPlannedWithActuals(tasks, plannedById, actualById, inferre
     if (!a?.actualFinishDate && Number.isFinite(a?.remainingDays)) {
       finish = helpers.maxDate(finish, helpers.addDays(today, a.remainingDays));
     }
-    if (!a?.actualFinishDate && a?.expectedFinishDate) {
+    if (!a?.actualFinishDate && a?.expectedFinishDate && cmpDate(a.expectedFinishDate, today) >= 0) {
       finish = helpers.maxDate(finish, a.expectedFinishDate);
     }
     if (!a?.actualFinishDate && !inferred?.inferredCompleted && cmpDate(finish, today) < 0) {
-      finish = a?.expectedFinishDate || today;
-      if (cmpDate(start, finish) > 0) start = finish;
+      if (!a?.actualStartDate && !Number.isFinite(a?.remainingDays)) {
+        start = helpers.maxDate(start, today);
+        finish = helpers.finishFromStart(start, t.days);
+      } else {
+        finish = today;
+        if (cmpDate(start, finish) > 0) start = finish;
+      }
     }
     const forecastStart = start;
     const forecastFinish = finish;
@@ -675,24 +760,30 @@ function calculateFromPlannedWithActuals(tasks, plannedById, actualById, inferre
   return calc;
 }
 
-function impactStatus({ actualFinishDate, inferredCompleted, calculatedFinishDate, plannedFinishDate, latestFinishDate, warningWindowDays }) {
-  if (actualFinishDate) return '已完成';
-  if (inferredCompleted) return '已完成(由后置任务推断)';
-  if (cmpDate(calculatedFinishDate, plannedFinishDate) < 0) return '提早';
-  if (cmpDate(calculatedFinishDate, plannedFinishDate) === 0) return '正常';
-  if (cmpDate(calculatedFinishDate, latestFinishDate) > 0) return '再次延期';
-  const daysToAgainDelay = typeof warningWindowDays === 'number'
-    ? warningWindowDays
-    : 0;
-  if (daysToAgainDelay <= 3) return '再次延期风险';
-  return '延期';
+function impactStatus({ actualFinishDate, inferredCompleted, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays }) {
+  if (actualFinishDate) {
+    if (deadlineRiskDays > 0) return '已完成-影响上线';
+    if (planDeltaDays > 0) return '已完成-晚于计划';
+    return '已完成';
+  }
+  if (inferredCompleted) {
+    if (deadlineRiskDays > 0) return '已完成(推断)-影响上线';
+    if (planDeltaDays > 0) return '已完成(推断)-晚于计划';
+    return '已完成(由后置任务推断)';
+  }
+  if (planDeltaDays <= 0) return '正常';
+  if (deadlineRiskDays <= 0) return '落后计划未影响上线';
+  if (currentDeadlineRiskDays > 0) return '继续影响当前上线';
+  return '影响上线';
 }
 
-function riskLevel({ actualFinishDate, inferredCompleted, planDeltaDays, deadlineRiskDays, warningWindowDays }) {
+function riskLevel({ actualFinishDate, inferredCompleted, taskStatus, planDeltaDays, deadlineRiskDays, currentDeadlineRiskDays, floatDays, isLaunchPath }) {
   if (actualFinishDate) return '已完成';
   if (inferredCompleted) return '已完成(推断)';
-  if (deadlineRiskDays > 0) return '严重';
-  if (planDeltaDays > 0 && warningWindowDays <= 3) return '高';
+  if (isLaunchPath && (deadlineRiskDays > 0 || currentDeadlineRiskDays > 0)) return '严重';
+  if (taskStatus === '逾期未完成') return '高';
+  if (floatDays < 0) return '严重';
+  if (floatDays === 0) return '高';
   if (planDeltaDays > 0) return '中';
   return '低';
 }
@@ -708,7 +799,7 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
   const effectiveProjectStartDate = helpers.nextScheduleDate(project.projectStartDate);
   const effectiveLaunchDate = helpers.nextScheduleDate(project.plannedLaunchDate);
   const plannedBufferDays = Number(options.plannedBufferDays || 0);
-  const planned = createPlannedScheduleForLaunch(engine, params, effectiveLaunchDate, effectiveProjectStartDate, helpers);
+  const planned = createPlannedScheduleFromProjectStart(engine, params, effectiveProjectStartDate, helpers);
   const plannedById = taskMap(planned);
   const originLatest = applyDetailPageSchedule(
     engine.fromTasks(detailPageAnchorMap(effectiveLaunchDate, helpers), params),
@@ -749,38 +840,37 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       && !inferredCompleted
       && predStatus.allActualPredecessorsDone
       && predStatus.predecessorIds.length > 0;
-    const autoStartedWarningFinish = autoStarted ? helpers.finishFromStart(today, t.days) : '';
-    const shouldWarnCurrentTask = actualStarted || autoStarted;
-    const warningFinish = autoStarted
-      ? autoStartedWarningFinish
-      : shouldWarnCurrentTask
-        ? (measuredFinish || c.forecastFinish || '')
-        : measuredFinish;
+    const forecastFinishForStatus = measuredFinish || c.forecastFinish || '';
     const floatDays = helpers.signedDays(p.finishDate, o.finishDate);
     const planDeltaDays = helpers.signedDays(p.finishDate, c.forecastFinish);
     const deadlineRiskDays = helpers.signedDays(o.finishDate, c.forecastFinish);
+    const currentDeadlineRiskDays = helpers.signedDays(l.finishDate, c.forecastFinish);
     const warningWindowDays = helpers.signedDays(c.forecastFinish, l.finishDate);
+    const overdueUnfinished = !a.actualFinishDate
+      && !a.actualStartDate
+      && !inferredCompleted
+      && cmpDate(p.finishDate, today) < 0
+      && predStatus.missingActualPredecessorIds.length === 0;
     const taskStatus = a.actualFinishDate
       ? '已完成'
       : inferredCompleted
         ? '已完成(由后置任务推断)'
         : actualStarted
           ? '进行中'
-          : autoStarted
+          : overdueUnfinished
+            ? '逾期未完成'
+            : autoStarted
             ? '当前应开始'
             : predStatus.missingActualPredecessorIds.length
             ? '等待前置实际完成'
             : '未开始';
-    const rowImpactStatus = shouldWarnCurrentTask
-      ? impactStatus({
-          actualFinishDate: a.actualFinishDate,
-          inferredCompleted,
-          calculatedFinishDate: warningFinish,
-          plannedFinishDate: p.finishDate,
-          latestFinishDate: o.finishDate,
-          warningWindowDays,
-        })
-      : '';
+    const rowImpactStatus = impactStatus({
+      actualFinishDate: a.actualFinishDate,
+      inferredCompleted,
+      planDeltaDays,
+      deadlineRiskDays,
+      currentDeadlineRiskDays,
+    });
     return {
       recordKey: `${project.projectId}-${id}`,
       projectId: project.projectId,
@@ -797,9 +887,9 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       plannedProductionMilestone: planned.productionMilestone,
       plannedTotalScheduleDays: planned.plannedTotalScheduleDays,
       projectStartDeltaDays: helpers.signedDays(planned.plannedProjectStartDate, effectiveProjectStartDate),
-      projectFeasibility: cmpDate(effectiveProjectStartDate, planned.plannedProjectStartDate) > 0 ? 'actual_start_late' : 'actual_start_on_or_before_plan',
+      projectFeasibility: cmpDate(planned.productionMilestone, effectiveLaunchDate) > 0 ? 'planned_path_exceeds_launch' : 'planned_path_within_launch',
       plannedBufferDays,
-      plannedScheduleBasis: 'planned_launch_minus_total_duration_forward',
+      plannedScheduleBasis: 'project_start_forward',
       projectedLaunchDate: currentProjectedLaunchDate,
       taskId: id,
       taskName: t.name,
@@ -811,8 +901,8 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       plannedFinishDate: p.finishDate,
       originalLatestStartDate: o.startDate,
       originalLatestFinishDate: o.finishDate,
-      latestStartDate: l.startDate,
-      latestFinishDate: l.finishDate,
+      latestStartDate: o.startDate,
+      latestFinishDate: o.finishDate,
       currentLatestStartDate: l.startDate,
       currentLatestFinishDate: l.finishDate,
       calculatedStartDate: c.forecastStart,
@@ -836,10 +926,20 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       floatDays,
       planDeltaDays,
       deadlineRiskDays,
+      currentDeadlineRiskDays,
       warningWindowDays,
       launchDeltaDays,
       impactStatus: rowImpactStatus,
-      riskLevel: riskLevel({ actualFinishDate: a.actualFinishDate, inferredCompleted, planDeltaDays, deadlineRiskDays, warningWindowDays }),
+      riskLevel: riskLevel({
+        actualFinishDate: a.actualFinishDate,
+        inferredCompleted,
+        taskStatus,
+        planDeltaDays,
+        deadlineRiskDays,
+        currentDeadlineRiskDays,
+        floatDays,
+        isLaunchPath,
+      }),
       isBlockingLaunch: isLaunchPath
         && !a.actualFinishDate
         && !inferredCompleted
@@ -851,9 +951,9 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       calculatedAt: today,
       note: [
         `planned=${p.startDate}~${p.finishDate}`,
-        `originalLatest=${o.startDate}~${o.finishDate}`,
-        `againDelayWarningLatest=${l.startDate}~${l.finishDate}`,
-        `calculated=${c.forecastStart}~${c.forecastFinish}`,
+        `latest=${o.startDate}~${o.finishDate}`,
+        `currentLatest=${l.startDate}~${l.finishDate}`,
+        `calculated=${c.forecastStart}~${forecastFinishForStatus}`,
         `forecast=${c.forecastStart}~${c.forecastFinish}`,
         project.assumptions.length ? `assumptions=${project.assumptions.join(';')}` : '',
         `actualProjectStart=${effectiveProjectStartDate}`,
@@ -875,8 +975,8 @@ function calculateProject(project, projectActualRows, engine, helpers, today, op
       plannedTotalScheduleDays: planned.plannedTotalScheduleDays,
       projectStartDeltaDays: helpers.signedDays(planned.plannedProjectStartDate, effectiveProjectStartDate),
       plannedBufferDays,
-      plannedScheduleBasis: 'planned_launch_minus_total_duration_forward',
-      projectFeasibility: cmpDate(effectiveProjectStartDate, planned.plannedProjectStartDate) > 0 ? 'actual_start_late' : 'actual_start_on_or_before_plan',
+      plannedScheduleBasis: 'project_start_forward',
+      projectFeasibility: cmpDate(planned.productionMilestone, effectiveLaunchDate) > 0 ? 'planned_path_exceeds_launch' : 'planned_path_within_launch',
       projectedLaunchDate: currentProjectedLaunchDate,
       launchDeltaDays: helpers.signedDays(effectiveLaunchDate, currentProjectedLaunchDate),
       duplicateActualTaskIds: duplicateTaskIds,
@@ -924,7 +1024,8 @@ function main() {
     'actualStartDate', 'actualFinishDate', 'inferredCompleted', 'inferredCompletionDate',
     'plannedStartDate', 'plannedFinishDate', 'forecastStartDate', 'forecastFinishDate',
     'originalLatestStartDate', 'originalLatestFinishDate', 'latestStartDate', 'latestFinishDate',
-    'floatDays', 'planDeltaDays', 'deadlineRiskDays', 'warningWindowDays',
+    'currentLatestStartDate', 'currentLatestFinishDate',
+    'floatDays', 'planDeltaDays', 'deadlineRiskDays', 'currentDeadlineRiskDays', 'warningWindowDays',
     'impactStatus', 'riskLevel', 'isBlockingLaunch',
   ]);
   exportChineseWorkbook(args, jsonFile, xlsxFile);
@@ -946,8 +1047,9 @@ function main() {
 
 function analyzeExtracted(extracted, args, engine, helpers, today) {
   const taskNameToId = new Map((extracted.taskRules || []).map(r => [text(r.taskName), Number(r.taskId)]).filter(([name, id]) => name && Number.isFinite(id)));
+  const taskIdToName = new Map((extracted.taskRules || []).map(r => [Number(r.taskId), text(r.taskName)]).filter(([id, name]) => Number.isFinite(id) && name));
   const { projects, duplicateProjectIds } = normalizeProjects(extracted.projects || [], args);
-  const { actuals, unmatchedActuals } = normalizeActuals(extracted.actuals || [], projects, taskNameToId);
+  const { actuals, unmatchedActuals, nameMatchedActuals } = normalizeActuals(extracted.actuals || [], projects, taskNameToId, taskIdToName);
   const filteredProjects = projects.filter(p => {
     if (args.project && p.projectId !== args.project) return false;
     if (args.projectName && !p.projectName.includes(args.projectName)) return false;
@@ -981,13 +1083,15 @@ function analyzeExtracted(extracted, args, engine, helpers, today) {
       scenarioDefault: args.scenario,
       hasThreeViewDefault: args.hasThreeView,
       plannedBufferDays: args.plannedBufferDays,
-      plannedScheduleBasis: 'planned_launch_minus_total_duration_forward',
-      actualTaskMatching: 'recordKey taskId first, then exact taskName from 任务规则v4',
+      plannedScheduleBasis: 'project_start_forward',
+      actualTaskMatching: 'projectId + taskId/taskNo/recordKey is sufficient; taskName is optional and can be filled from 任务规则v4',
     },
     warnings: {
       duplicateProjectIds,
       unmatchedActualCount: unmatchedActuals.length,
       unmatchedActualSamples: unmatchedActuals.slice(0, 20),
+      nameMatchedActualCount: nameMatchedActuals.length,
+      nameMatchedActualSamples: nameMatchedActuals.slice(0, 20),
       errors,
     },
     projects: results.map(r => r.project),
