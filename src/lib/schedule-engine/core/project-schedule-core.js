@@ -362,7 +362,7 @@ function buildTasks(params) {
 
   tasks = tasks.concat([
     task(16, "包装设计", 21, { legacyId: 19, startAfter: [10] }),
-    task(17, "红蜡确认", 21, {
+    task(17, "红蜡确认", p.scenario === "B" ? 10 : 21, {
       legacyId: 17,
       startAfter: p.scenario === "B" ? [18] : [14, 15]
     }),

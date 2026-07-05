@@ -1,0 +1,511 @@
+{
+  "id": "handboard-task17-duration-v5",
+  "name": "handboard route task 17 duration",
+  "description": "Verify route B keeps #21 waiting for #17 while shortening #17 to 10 workdays; route A remains unchanged.",
+  "today": "2026-07-05",
+  "taskRules": [
+    {
+      "taskNo": 10,
+      "taskName": "modeling",
+      "standardWorkdays": 42
+    },
+    {
+      "taskNo": 11,
+      "taskName": "split doc",
+      "standardWorkdays": 1
+    },
+    {
+      "taskNo": 12,
+      "taskName": "cost confirm",
+      "standardWorkdays": 7
+    },
+    {
+      "taskNo": 13,
+      "taskName": "decal ai doc",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 14,
+      "taskName": "split confirm",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 15,
+      "taskName": "white wax review",
+      "standardWorkdays": 14
+    },
+    {
+      "taskNo": 17,
+      "taskName": "wax or handboard confirm",
+      "standardWorkdays": 21
+    },
+    {
+      "taskNo": 18,
+      "taskName": "sample making",
+      "standardWorkdays": 35
+    },
+    {
+      "taskNo": 21,
+      "taskName": "T1 mold",
+      "standardWorkdays": 45
+    },
+    {
+      "taskNo": 23,
+      "taskName": "T2 mold",
+      "standardWorkdays": 15
+    },
+    {
+      "taskNo": 24,
+      "taskName": "mold confirm",
+      "standardWorkdays": 10
+    },
+    {
+      "taskNo": 30,
+      "taskName": "first production",
+      "standardWorkdays": 40
+    }
+  ],
+  "projects": [
+    {
+      "ref": "handboard-db",
+      "projectCode": "SIM-HAND-17-B",
+      "projectName": "handboard task17 duration db case",
+      "licensorName": "sim licensor",
+      "ipName": "sim ip",
+      "productType": "figure",
+      "styleCount": 5,
+      "projectLevel": "A",
+      "routeType": "B",
+      "plannedLaunchDate": "2026-11-20",
+      "projectStartDate": "2026-04-17",
+      "status": "mold",
+      "tasks": [
+        {
+          "taskNo": 10,
+          "taskName": "modeling"
+        },
+        {
+          "taskNo": 11,
+          "taskName": "split doc"
+        },
+        {
+          "taskNo": 12,
+          "taskName": "cost confirm"
+        },
+        {
+          "taskNo": 13,
+          "taskName": "decal ai doc"
+        },
+        {
+          "taskNo": 14,
+          "taskName": "split confirm"
+        },
+        {
+          "taskNo": 17,
+          "taskName": "wax or handboard confirm"
+        },
+        {
+          "taskNo": 18,
+          "taskName": "sample making"
+        },
+        {
+          "taskNo": 21,
+          "taskName": "T1 mold"
+        },
+        {
+          "taskNo": 23,
+          "taskName": "T2 mold"
+        },
+        {
+          "taskNo": 24,
+          "taskName": "mold confirm"
+        },
+        {
+          "taskNo": 30,
+          "taskName": "first production"
+        }
+      ]
+    }
+  ],
+  "directEngineCases": [
+    {
+      "id": "route-b-task17-is-10-days-and-task21-waits",
+      "description": "Route B shortens #17 to 10 days while #21 still waits for #17 and #12.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-handboard-task17-duration-v5",
+        "taskRules": [
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 12,
+            "taskName": "cost confirm"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 17,
+            "taskName": "wax or handboard confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          },
+          {
+            "taskId": 21,
+            "taskName": "T1 mold"
+          },
+          {
+            "taskId": 23,
+            "taskName": "T2 mold"
+          },
+          {
+            "taskId": 24,
+            "taskName": "mold confirm"
+          },
+          {
+            "taskId": 30,
+            "taskName": "first production"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-HAND-B-01",
+            "projectName": "direct handboard route B",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": []
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-HAND-B-01",
+            "taskId": 17,
+            "durationDays": 10,
+            "startAfterRules": "#18"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-01",
+            "taskId": 21,
+            "durationDays": 45,
+            "startAfterRules": "#17,#12"
+          }
+        ]
+      }
+    },
+    {
+      "id": "route-a-task17-remains-21-days",
+      "description": "Route A keeps #17 duration and dependencies unchanged.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-handboard-task17-duration-v5",
+        "taskRules": [
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 12,
+            "taskName": "cost confirm"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 15,
+            "taskName": "white wax review"
+          },
+          {
+            "taskId": 17,
+            "taskName": "wax confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          },
+          {
+            "taskId": 21,
+            "taskName": "T1 mold"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-HAND-A-01",
+            "projectName": "direct wax route A",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "A",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": []
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-HAND-A-01",
+            "taskId": 17,
+            "durationDays": 21,
+            "startAfterRules": "#14,#15"
+          },
+          {
+            "projectId": "DIRECT-HAND-A-01",
+            "taskId": 21,
+            "startAfterRules": "#17,#12"
+          }
+        ]
+      }
+    },
+    {
+      "id": "route-b-task21-not-before-delayed-task17",
+      "description": "If route B #17 is delayed, #21 cannot start before #17 finishes.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-handboard-task17-duration-v5",
+        "taskRules": [
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 12,
+            "taskName": "cost confirm"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 17,
+            "taskName": "wax or handboard confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          },
+          {
+            "taskId": 21,
+            "taskName": "T1 mold"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-HAND-B-02",
+            "projectName": "direct handboard delayed task17",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-HAND-B-02",
+            "taskId": 17,
+            "taskName": "wax or handboard confirm",
+            "actualStartDate": "2026-10-01",
+            "actualFinishDate": "2026-10-20",
+            "taskStatus": "done"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-HAND-B-02",
+            "taskId": 17,
+            "durationDays": 10,
+            "calculatedFinishDate": "2026-10-20"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-02",
+            "taskId": 21,
+            "calculatedStartDate": "2026-10-27",
+            "startAfterRules": "#17,#12"
+          }
+        ]
+      }
+    },
+    {
+      "id": "route-b-chain-moves-earlier-than-old-21-day-task17",
+      "description": "With task #17 now 10 days, downstream #21/#23/#24/#30 move earlier compared with the old 21-day handboard duration.",
+      "today": "2026-07-05",
+      "extracted": {
+        "workbook": "direct-handboard-task17-duration-v5",
+        "taskRules": [
+          {
+            "taskId": 10,
+            "taskName": "modeling"
+          },
+          {
+            "taskId": 11,
+            "taskName": "split doc"
+          },
+          {
+            "taskId": 12,
+            "taskName": "cost confirm"
+          },
+          {
+            "taskId": 13,
+            "taskName": "decal ai doc"
+          },
+          {
+            "taskId": 14,
+            "taskName": "split confirm"
+          },
+          {
+            "taskId": 17,
+            "taskName": "wax or handboard confirm"
+          },
+          {
+            "taskId": 18,
+            "taskName": "sample making"
+          },
+          {
+            "taskId": 21,
+            "taskName": "T1 mold"
+          },
+          {
+            "taskId": 22,
+            "taskName": "color sample"
+          },
+          {
+            "taskId": 23,
+            "taskName": "T2 mold"
+          },
+          {
+            "taskId": 24,
+            "taskName": "mold confirm"
+          },
+          {
+            "taskId": 25,
+            "taskName": "production sample"
+          },
+          {
+            "taskId": 26,
+            "taskName": "display box sample"
+          },
+          {
+            "taskId": 27,
+            "taskName": "package sample"
+          },
+          {
+            "taskId": 28,
+            "taskName": "package simulation"
+          },
+          {
+            "taskId": 30,
+            "taskName": "first production"
+          }
+        ],
+        "projects": [
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "projectName": "direct handboard chain movement",
+            "projectStartDate": "2026-04-17",
+            "plannedLaunchDate": "2026-11-20",
+            "route": "B",
+            "hasThreeView": false
+          }
+        ],
+        "actuals": [
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 10,
+            "taskName": "modeling",
+            "actualStartDate": "2026-06-17",
+            "actualFinishDate": "2026-08-01",
+            "taskStatus": "done"
+          }
+        ]
+      },
+      "expect": {
+        "rows": [
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 17,
+            "durationDays": 10,
+            "calculatedFinishDate": "2026-09-30"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 21,
+            "calculatedStartDate": "2026-09-30",
+            "calculatedFinishDate": "2026-11-22"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 23,
+            "calculatedFinishDate": "2026-12-07"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 24,
+            "calculatedFinishDate": "2026-12-17"
+          },
+          {
+            "projectId": "DIRECT-HAND-B-03",
+            "taskId": 30,
+            "calculatedStartDate": "2026-12-17",
+            "calculatedFinishDate": "2027-02-26"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "projects": [
+      {
+        "ref": "handboard-db",
+        "scheduleResult": {
+          "exists": true
+        },
+        "scheduleTasks": [
+          {
+            "taskNo": 17,
+            "durationDays": 10,
+            "startAfterRules": "#18"
+          },
+          {
+            "taskNo": 21,
+            "durationDays": 45,
+            "startAfterRules": "#17,#12"
+          }
+        ]
+      }
+    ]
+  }
+}

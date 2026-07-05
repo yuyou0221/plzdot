@@ -131,6 +131,9 @@ type ScheduleTaskExpectation = {
   calculatedFinishDate?: string;
   actualStartDate?: string | null;
   actualFinishDate?: string | null;
+  durationDays?: number;
+  startAfterRules?: string;
+  finishAfterRules?: string;
   taskStatus?: string;
   impactStatus?: string;
   riskLevel?: string;
@@ -172,6 +175,9 @@ type DirectEngineRowExpectation = {
   actualFinishDate?: string | null;
   expectedFinishDate?: string | null;
   remainingDays?: number | null;
+  durationDays?: number;
+  startAfterRules?: string;
+  finishAfterRules?: string;
   calculatedStartDate?: string;
   calculatedFinishDate?: string;
   impactStatus?: string;
@@ -660,6 +666,9 @@ async function assertScenario(runtime: ScenarioRuntime) {
         "calculatedFinishDate",
         "actualStartDate",
         "actualFinishDate",
+        "durationDays",
+        "startAfterRules",
+        "finishAfterRules",
         "taskStatus",
         "impactStatus",
         "riskLevel",
@@ -775,6 +784,9 @@ function assertDirectEngineCases(scenario: Scenario) {
         "actualFinishDate",
         "expectedFinishDate",
         "remainingDays",
+        "durationDays",
+        "startAfterRules",
+        "finishAfterRules",
         "calculatedStartDate",
         "calculatedFinishDate",
         "impactStatus",
