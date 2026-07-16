@@ -105,7 +105,7 @@ type ProductGuideIntegrationLog = {
 };
 
 const teamStorageKey = "product-guide:team-key";
-const milestoneLaneOrder = ["原画里程碑", "建模里程碑", "红蜡里程碑", "平面里程碑", "产前里程碑", "大货里程碑"];
+const milestoneLaneOrder = ["大货里程碑", "原画里程碑", "建模里程碑", "红蜡里程碑", "平面里程碑", "产前里程碑"];
 
 const riskMeta: Record<
   ProductGuideRiskLevel,

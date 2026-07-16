@@ -1,10 +1,10 @@
 export const scheduleMilestones = [
+  "大货里程碑",
   "原画里程碑",
   "建模里程碑",
   "红蜡里程碑",
   "平面里程碑",
   "产前里程碑",
-  "大货里程碑",
 ] as const;
 
 export type ScheduleMilestone = (typeof scheduleMilestones)[number];
