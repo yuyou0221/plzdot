@@ -541,8 +541,9 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
         rows: planningRows,
         fallbackDate: group.project.plannedLaunchDate,
       });
-      const plannedMonth = plannedDate ? formatMonthLabel(dateToMonthPoint(plannedDate)) : null;
       const completedDate = completedMilestoneDateForPlanning(milestoneRows);
+      const planningMonthDate = completedDate ?? plannedDate;
+      const plannedMonth = planningMonthDate ? formatMonthLabel(dateToMonthPoint(planningMonthDate)) : null;
       const riskLevel = getPlanningMilestoneStatus({
         dueDate: plannedDate,
         completedDate,

@@ -1,7 +1,7 @@
 {
   "id": "planning-milestone-month-v5",
   "name": "规划里程碑月份归组口径",
-  "description": "验证规划里程碑看板月份只使用 latestFinishDate / plannedLaunchDate 倒推目标，实际完成、当前预测、plannedFinishDate 正推结果只影响状态，不移动规划月份。",
+  "description": "验证规划里程碑看板月份优先使用实际完成月份；未完成时使用 latestFinishDate / plannedLaunchDate 倒推目标，当前预测和 plannedFinishDate 正推结果不移动规划月份。",
   "today": "2026-07-05",
   "taskRules": [
     { "taskNo": 30, "taskName": "首批大货生产", "standardWorkdays": 40 },
@@ -103,7 +103,7 @@
         {
           "ref": "done-late-production",
           "milestone": "大货里程碑",
-          "plannedMonth": "26年8月",
+          "plannedMonth": "26年10月",
           "forecastMonth": "26年10月",
           "riskLevel": "doneLate"
         },
