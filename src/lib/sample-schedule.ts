@@ -4,6 +4,23 @@ export type RiskLevel = "done" | "doneLate" | "normal" | "risk" | "delay";
 
 export type Milestone = ScheduleMilestone;
 
+export type ProjectCardDelayReason = {
+  taskNo: number;
+  taskName: string;
+  message: string;
+  calculatedFinishDate?: string;
+  latestFinishDate?: string;
+  latestFinishLabel?: string;
+  delayDays?: number;
+  impactStatus?: string;
+  isBlockingLaunch: boolean;
+  blocksCurrentLaunch: boolean;
+  predecessors: Array<{
+    taskNo: number;
+    taskName: string;
+  }>;
+};
+
 export type ProjectCard = {
   id: string;
   projectId: string;
@@ -13,6 +30,7 @@ export type ProjectCard = {
   forecastMonth?: string;
   milestone: Milestone;
   riskLevel: RiskLevel;
+  delayReasons?: ProjectCardDelayReason[];
 };
 
 export type CalendarProject = {
@@ -257,6 +275,8 @@ function card(
   milestone: Milestone,
   riskLevel: RiskLevel,
 ): ProjectCard {
+  const isDelayed = riskLevel === "risk" || riskLevel === "delay";
+
   return {
     id: `${projectId}-${month}-${milestone}`,
     projectId,
@@ -266,6 +286,23 @@ function card(
     forecastMonth: month,
     milestone,
     riskLevel,
+    delayReasons: isDelayed
+      ? [
+          {
+            taskNo: milestone === "大货里程碑" ? 30 : milestone === "建模里程碑" ? 10 : 5,
+            taskName: milestone === "大货里程碑" ? "首批大货生产" : milestone === "建模里程碑" ? "根据效果图建模" : "当前关键任务",
+            message: "等待前置任务完成；当前预测已超过该里程碑最晚完成日",
+            calculatedFinishDate: "2026-12-16",
+            latestFinishDate: "2026-11-30",
+            latestFinishLabel: "原计划最晚完成",
+            delayDays: 16,
+            impactStatus: "影响原计划上线",
+            isBlockingLaunch: true,
+            blocksCurrentLaunch: false,
+            predecessors: [],
+          },
+        ]
+      : [],
   };
 }
 

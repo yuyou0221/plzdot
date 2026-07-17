@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowUpRight,
   Bell,
   CalendarDays,
   CalendarRange,
@@ -115,6 +116,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   const [selectedCalendarCycleStart, setSelectedCalendarCycleStart] = useState(data.calendarMonths[0] ?? "");
   const [calendarDateOverrides, setCalendarDateOverrides] = useState<Record<string, string>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string>(data.projectCards[0]?.projectId ?? "");
+  const [selectedMilestoneCardId, setSelectedMilestoneCardId] = useState<string>("");
   const [scheduleTasks, setScheduleTasks] = useState<ScheduleTaskRow[]>(data.scheduleTasks);
   const [taskRowsLoadState, setTaskRowsLoadState] = useState<TaskRowsLoadState>(
     data.scheduleTasks.length > 0 ? "loaded" : "idle",
@@ -207,6 +209,26 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
   const activeProjectId =
     visibleProjectIds.length > 0 && !visibleProjectIds.includes(selectedProjectId) ? visibleProjectIds[0] : selectedProjectId;
   const selectedProject = projectDetails[activeProjectId] ?? fallbackDetail(activeProjectId, data.projectCards);
+  const selectedMilestoneCard =
+    isMilestoneBoardView && selectedMilestoneCardId
+      ? visibleCards.find((card) => card.id === selectedMilestoneCardId && card.projectId === activeProjectId)
+      : undefined;
+
+  function selectMilestoneCard(card: ProjectCard) {
+    setSelectedProjectId(card.projectId);
+    setSelectedMilestoneCardId(card.id);
+
+    if (window.matchMedia("(max-width: 1279px)").matches) {
+      window.requestAnimationFrame(() => {
+        document.getElementById("project-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }
+
+  function selectProject(projectId: string) {
+    setSelectedProjectId(projectId);
+    setSelectedMilestoneCardId("");
+  }
 
   useEffect(() => {
     if (mainView !== "planning" || planningView !== "task-detail" || taskRowsLoadState !== "loading") {
@@ -483,9 +505,9 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                 initialMonth={data.initialMonth}
                 milestones={data.milestones}
                 cards={visibleCards}
-                selectedProjectId={activeProjectId}
+                selectedCardId={selectedMilestoneCard?.id ?? ""}
                 viewMode="forecast"
-                onSelect={setSelectedProjectId}
+                onSelect={selectMilestoneCard}
               />
             ) : planningView === "milestone-plan" ? (
               <ScheduleBoard
@@ -493,9 +515,9 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                 initialMonth={data.initialMonth}
                 milestones={data.milestones}
                 cards={visibleCards}
-                selectedProjectId={activeProjectId}
+                selectedCardId={selectedMilestoneCard?.id ?? ""}
                 viewMode="plan"
-                onSelect={setSelectedProjectId}
+                onSelect={selectMilestoneCard}
               />
             ) : planningView === "calendar" ? (
               <LaunchCalendarView
@@ -505,7 +527,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                 selectedCycleStart={selectedCalendarCycle?.startMonth ?? ""}
                 onCycleChange={setSelectedCalendarCycleStart}
                 selectedProjectId={activeProjectId}
-                onSelect={setSelectedProjectId}
+                onSelect={selectProject}
                 onMoveProject={handleCalendarMove}
                 onPlanDateChange={handleCalendarPlanDateChange}
                 movedProjectIds={movedCalendarProjectIds}
@@ -518,7 +540,7 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
               <PlanningTableView
                 projects={visibleCalendarProjects}
                 selectedProjectId={activeProjectId}
-                onSelect={setSelectedProjectId}
+                onSelect={selectProject}
                 onNotify={notifyOperation}
                 onSaved={handlePlanningTableSaved}
               />
@@ -527,13 +549,13 @@ export function ScheduleWorkbench({ currentUser, data }: { currentUser: AuthUser
                 tasks={visibleScheduleTaskRows}
                 loadState={taskRowsLoadState}
                 selectedProjectId={activeProjectId}
-                onSelect={setSelectedProjectId}
+                onSelect={selectProject}
                 onNotify={notifyOperation}
               />
             ) : (
               <ProjectEntryView project={selectedProject} onNotify={notifyPlaceholder} />
             )}
-            <ProjectDetailPanel project={selectedProject} />
+            <ProjectDetailPanel project={selectedProject} selectedCard={selectedMilestoneCard} />
           </div>
         </main>
       </div>
@@ -751,7 +773,7 @@ function ScheduleBoard({
   initialMonth,
   milestones,
   cards,
-  selectedProjectId,
+  selectedCardId,
   viewMode,
   onSelect,
 }: {
@@ -759,9 +781,9 @@ function ScheduleBoard({
   initialMonth?: string;
   milestones: Milestone[];
   cards: ProjectCard[];
-  selectedProjectId: string;
+  selectedCardId: string;
   viewMode: ViewMode;
-  onSelect: (projectId: string) => void;
+  onSelect: (card: ProjectCard) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const monthRefs = useRef(new Map<string, HTMLDivElement>());
@@ -807,7 +829,7 @@ function ScheduleBoard({
               milestones={milestones}
               month={month}
               cards={cards}
-              selectedProjectId={selectedProjectId}
+              selectedCardId={selectedCardId}
               viewMode={viewMode}
               onSelect={onSelect}
               monthRef={(node) => {
@@ -829,7 +851,7 @@ function BoardMonthRow({
   milestones,
   month,
   cards,
-  selectedProjectId,
+  selectedCardId,
   viewMode,
   onSelect,
   monthRef,
@@ -837,9 +859,9 @@ function BoardMonthRow({
   milestones: Milestone[];
   month: string;
   cards: ProjectCard[];
-  selectedProjectId: string;
+  selectedCardId: string;
   viewMode: ViewMode;
-  onSelect: (projectId: string) => void;
+  onSelect: (card: ProjectCard) => void;
   monthRef: (node: HTMLDivElement | null) => void;
 }) {
   return (
@@ -860,12 +882,12 @@ function BoardMonthRow({
                 laneCards.map((card) => (
                   <button
                     key={card.id}
-                    onClick={() => onSelect(card.projectId)}
-                    title={card.name}
+                    onClick={() => onSelect(card)}
+                    title={`${card.name} · ${card.milestone}`}
                     className={clsx(
                       "h-8 truncate rounded-full border px-3 text-sm font-medium shadow-sm transition hover:ring-2 hover:ring-blue-400",
                       cardClass[card.riskLevel],
-                      selectedProjectId === card.projectId && "ring-2 ring-blue-500",
+                      selectedCardId === card.id && "ring-2 ring-blue-500",
                     )}
                   >
                     {card.name}
@@ -2186,15 +2208,18 @@ function ReadonlyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
+function ProjectDetailPanel({ project, selectedCard }: { project: ProjectDetail; selectedCard?: ProjectCard }) {
   const modelingPercent =
     project.modelingProgress.total > 0
       ? Math.round((project.modelingProgress.approved / project.modelingProgress.total) * 100)
       : 0;
   const forecastLabel = isFinishedStatus(project.riskLevel) ? "实际完成" : "预测上线";
+  const selectedRiskLevel = selectedCard?.riskLevel ?? project.riskLevel;
+  const showDelayExplanation =
+    selectedCard && (selectedCard.riskLevel === "risk" || selectedCard.riskLevel === "delay" || selectedCard.riskLevel === "doneLate");
 
   return (
-    <aside className="rounded-lg border border-slate-200 bg-white xl:sticky xl:top-5 xl:max-h-[calc(100vh-2.5rem)] xl:overflow-auto">
+    <aside id="project-detail-panel" className="rounded-lg border border-slate-200 bg-white xl:sticky xl:top-5 xl:max-h-[calc(100vh-2.5rem)] xl:overflow-auto">
       <div className="border-b border-slate-200 p-4">
         <div className="mb-2 text-xs font-semibold text-slate-400">项目详情</div>
         <div className="flex items-start justify-between gap-3">
@@ -2204,8 +2229,8 @@ function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
               {project.projectTeam} · 产品研发：{project.owner} · 产品美术：{project.artOwner}
             </div>
           </div>
-          <span className={clsx("rounded-full px-2.5 py-1 text-xs font-semibold", badgeClass[project.riskLevel])}>
-            {riskLabel[project.riskLevel]}
+          <span className={clsx("rounded-full px-2.5 py-1 text-xs font-semibold", badgeClass[selectedRiskLevel])}>
+            {riskLabel[selectedRiskLevel]}
           </span>
         </div>
       </div>
@@ -2219,6 +2244,64 @@ function ProjectDetailPanel({ project }: { project: ProjectDetail }) {
             ["项目进度", `${project.progressPercent}%`],
           ]}
         />
+
+        {showDelayExplanation ? (
+          <section data-testid="milestone-delay-explanation" className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-950">
+                  <AlertTriangle size={15} />
+                  延期原因
+                </div>
+                <p className="mt-1 text-xs text-amber-800">当前查看：{selectedCard.milestone}</p>
+              </div>
+              <a
+                href={`/product-guide/project-analysis/${encodeURIComponent(project.id)}`}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-amber-900 hover:text-amber-700"
+              >
+                完整分析
+                <ArrowUpRight size={13} />
+              </a>
+            </div>
+
+            {selectedCard.delayReasons && selectedCard.delayReasons.length > 0 ? (
+              <ol data-testid="milestone-delay-reasons" className="mt-3 grid gap-2">
+                {selectedCard.delayReasons.map((reason) => (
+                  <li key={`${selectedCard.id}:${reason.taskNo}`} className="rounded-lg border border-amber-200 bg-white p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-950">
+                        #{reason.taskNo} {reason.taskName}
+                      </span>
+                      {reason.blocksCurrentLaunch ? (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">影响当前上线</span>
+                      ) : reason.isBlockingLaunch ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">影响原计划上线</span>
+                      ) : null}
+                      {reason.impactStatus ? (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                          {reason.impactStatus}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-700">{reason.message}</p>
+                    {reason.calculatedFinishDate || reason.latestFinishDate ? (
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                        {reason.calculatedFinishDate ? <span>当前预测：{reason.calculatedFinishDate}</span> : null}
+                        {reason.latestFinishDate ? <span>{reason.latestFinishLabel ?? "最晚完成"}：{reason.latestFinishDate}</span> : null}
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                {selectedCard.riskLevel === "doneLate"
+                  ? "该里程碑已延期完成，具体完成情况以状态提示和完整项目分析为准。"
+                  : project.riskMessage}
+              </p>
+            )}
+          </section>
+        ) : null}
 
         <section>
           <SectionTitle title="项目进度" value={`${project.progressPercent}%`} />
