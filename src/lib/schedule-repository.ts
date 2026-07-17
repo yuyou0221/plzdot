@@ -3,6 +3,7 @@ import { isDemoDataAllowed } from "@/lib/runtime-flags";
 import {
   getPlanningMilestoneDueDate,
   getPlanningMilestoneStatus,
+  isActiveScheduleMilestoneTask,
   isCompletedScheduleMilestoneTask,
   isDisplayOnlySideTaskNo,
   isKnownMilestone,
@@ -15,6 +16,7 @@ import {
   milestones,
   type Milestone,
   type ProjectCard,
+  type ProjectCardDelayReason,
   type ProjectDetail,
   type RiskLevel,
   type ScheduleWorkbenchData,
@@ -501,8 +503,13 @@ function addMonths(monthPoint: MonthPoint, offset: number): MonthPoint {
 
 function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<string, ProjectRow>) {
   const grouped = new Map<string, { projectId: string; name: string; milestone: Milestone; rows: TaskResultRow[]; project: ProjectRow }>();
+  const taskNamesByProject = new Map<string, Map<number, string>>();
 
   for (const row of taskResults) {
+    const taskNames = taskNamesByProject.get(row.projectId) ?? new Map<number, string>();
+    taskNames.set(row.taskNo, row.taskName);
+    taskNamesByProject.set(row.projectId, taskNames);
+
     const project = projectById.get(row.projectId);
     const milestone = normalizeMilestone(row.milestoneType, row.taskNo);
 
@@ -559,6 +566,10 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
         forecastMonth: forecastMonth ?? month,
         milestone: group.milestone,
         riskLevel,
+        delayReasons:
+          riskLevel === "delay"
+            ? buildMilestoneDelayReasons(milestoneRows, taskNamesByProject.get(group.projectId) ?? new Map())
+            : [],
       };
     })
     .filter(isProjectCard)
@@ -571,6 +582,177 @@ function buildMilestoneCards(taskResults: TaskResultRow[], projectById: Map<stri
 
       return a.name.localeCompare(b.name, "zh-CN");
     });
+}
+
+function buildMilestoneDelayReasons(
+  rows: TaskResultRow[],
+  taskNamesByNo: Map<number, string>,
+): ProjectCardDelayReason[] {
+  const candidates = rows
+    .filter((row) => isActiveScheduleMilestoneTask(row) && !isCompletedScheduleMilestoneTask(row))
+    .map((row) => {
+      const raw = rawTaskResult(row.rawResult);
+      const isBlockingLaunch = rawBoolean(raw.isBlockingLaunch) === true;
+      const originalDeadlineRiskDays = rawNumber(raw.deadlineRiskDays);
+      const currentDeadlineRiskDays = rawNumber(raw.currentDeadlineRiskDays);
+      const deadlineBasis = Number(originalDeadlineRiskDays ?? 0) > 0 ? "original" : Number(currentDeadlineRiskDays ?? 0) > 0 ? "current" : null;
+      const deadlineRiskDays = deadlineBasis === "original" ? originalDeadlineRiskDays : deadlineBasis === "current" ? currentDeadlineRiskDays : null;
+      const planDeltaDays = rawNumber(raw.planDeltaDays) ?? row.delayDays;
+      const structuredPredecessorTaskNos = parseTaskNos(raw.missingActualPredecessorIds, raw.missingPredecessorIds);
+      const predecessorTaskNos = (
+        structuredPredecessorTaskNos.length > 0 ? structuredPredecessorTaskNos : parseHashTaskNos(row.blockingPredecessorNames)
+      ).filter((taskNo) => taskNo !== row.taskNo);
+      const predecessors = predecessorTaskNos.map((taskNo) => ({
+        taskNo,
+        taskName: taskNamesByNo.get(taskNo) ?? `任务 #${taskNo}`,
+      }));
+      const calculatedFinishDate = rawDateText(raw.calculatedFinishDate) ?? formatDate(row.forecastFinishDate, "");
+      const latestFinishDate =
+        deadlineBasis === "current"
+          ? rawDateText(raw.currentLatestFinishDate)
+          : rawDateText(raw.latestFinishDate) ?? rawDateText(raw.originalLatestFinishDate);
+      const impactStatus = rawText(raw.impactStatus) ?? undefined;
+
+      return {
+        row,
+        isBlockingLaunch,
+        deadlineRiskDays,
+        deadlineBasis,
+        blocksCurrentLaunch: Number(currentDeadlineRiskDays ?? 0) > 0,
+        planDeltaDays,
+        predecessors,
+        calculatedFinishDate: calculatedFinishDate || undefined,
+        latestFinishDate: latestFinishDate ?? undefined,
+        impactStatus,
+      };
+    })
+    .filter((candidate) => {
+      return (
+        candidate.isBlockingLaunch ||
+        Number(candidate.deadlineRiskDays ?? 0) > 0 ||
+        Number(candidate.planDeltaDays ?? 0) > 0 ||
+        candidate.predecessors.length > 0 ||
+        toRiskLevel(candidate.row.riskLevel) === "risk" ||
+        toRiskLevel(candidate.row.riskLevel) === "delay"
+      );
+    })
+    .sort((a, b) => {
+      if (a.isBlockingLaunch !== b.isBlockingLaunch) return a.isBlockingLaunch ? -1 : 1;
+      const deadlineDifference = Number(b.deadlineRiskDays ?? 0) - Number(a.deadlineRiskDays ?? 0);
+      if (deadlineDifference !== 0) return deadlineDifference;
+      const planDifference = Number(b.planDeltaDays ?? 0) - Number(a.planDeltaDays ?? 0);
+      if (planDifference !== 0) return planDifference;
+      return String(b.calculatedFinishDate ?? "").localeCompare(String(a.calculatedFinishDate ?? ""));
+    });
+
+  if (candidates.length === 0) {
+    const fallbackRow = rows
+      .filter((row) => isActiveScheduleMilestoneTask(row) && !isCompletedScheduleMilestoneTask(row))
+      .map((row) => ({ row, raw: rawTaskResult(row.rawResult) }))
+      .sort((a, b) => {
+        return String(rawDateText(b.raw.calculatedFinishDate) ?? "").localeCompare(
+          String(rawDateText(a.raw.calculatedFinishDate) ?? ""),
+        );
+      })[0];
+
+    if (fallbackRow) {
+      candidates.push({
+        row: fallbackRow.row,
+        isBlockingLaunch: false,
+        deadlineRiskDays: null,
+        deadlineBasis: null,
+        blocksCurrentLaunch: false,
+        planDeltaDays: fallbackRow.row.delayDays,
+        predecessors: [],
+        calculatedFinishDate: rawDateText(fallbackRow.raw.calculatedFinishDate) ?? undefined,
+        latestFinishDate:
+          rawDateText(fallbackRow.raw.latestFinishDate) ?? rawDateText(fallbackRow.raw.currentLatestFinishDate) ?? undefined,
+        impactStatus: rawText(fallbackRow.raw.impactStatus) ?? undefined,
+      });
+    }
+  }
+
+  return candidates.slice(0, 3).map((candidate) => {
+    const delayDays = positiveDelayDays(candidate.deadlineRiskDays, candidate.planDeltaDays);
+    const messageParts: string[] = [];
+
+    if (candidate.predecessors.length > 0) {
+      messageParts.push(`等待 ${candidate.predecessors.map((item) => `#${item.taskNo} ${item.taskName}`).join("、")}`);
+    }
+
+    if (delayDays) {
+      messageParts.push(
+        candidate.deadlineRiskDays && candidate.deadlineRiskDays > 0
+          ? candidate.deadlineBasis === "current"
+            ? `预计超过当前最晚完成日 ${delayDays} 天`
+            : `预计超过原计划最晚完成日 ${delayDays} 天`
+          : `较原计划任务完成日晚 ${delayDays} 天`,
+      );
+    } else if (candidate.isBlockingLaunch) {
+      messageParts.push("当前正在决定项目最终上线时间");
+    } else {
+      messageParts.push(candidate.row.riskMessage ?? "当前预测完成时间已晚于该里程碑目标");
+    }
+
+    return {
+      taskNo: candidate.row.taskNo,
+      taskName: candidate.row.taskName,
+      message: messageParts.join("；"),
+      calculatedFinishDate: candidate.calculatedFinishDate,
+      latestFinishDate: candidate.latestFinishDate,
+      latestFinishLabel: candidate.deadlineBasis === "current" ? "当前最晚完成" : "原计划最晚完成",
+      delayDays,
+      impactStatus: candidate.impactStatus,
+      isBlockingLaunch: candidate.isBlockingLaunch,
+      blocksCurrentLaunch: candidate.blocksCurrentLaunch,
+      predecessors: candidate.predecessors,
+    };
+  });
+}
+
+function positiveDelayDays(...values: Array<number | null | undefined>): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && value > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function parseTaskNos(...values: unknown[]) {
+  const taskNos = new Set<number>();
+
+  for (const value of values) {
+    const text = jsonText(value);
+    if (!text) continue;
+
+    for (const match of text.matchAll(/#?(\d{1,3})/g)) {
+      const taskNo = Number(match[1]);
+      if (Number.isInteger(taskNo) && taskNo > 0 && taskNo <= 31) {
+        taskNos.add(taskNo);
+      }
+    }
+  }
+
+  return Array.from(taskNos);
+}
+
+function parseHashTaskNos(value: unknown) {
+  const text = jsonText(value);
+  if (!text) {
+    return [];
+  }
+
+  const taskNos = new Set<number>();
+  for (const match of text.matchAll(/#(\d{1,2})/g)) {
+    const taskNo = Number(match[1]);
+    if (taskNo > 0 && taskNo <= 31) {
+      taskNos.add(taskNo);
+    }
+  }
+
+  return Array.from(taskNos);
 }
 
 function normalizeMilestone(value: string, taskNo: number): Milestone | null {
